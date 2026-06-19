@@ -16,6 +16,7 @@ RESOLUCIONES = [(720, 640), (900, 800), (1080, 960), (1280, 1138)]
 config = {
     "brillo": 1.0,      # 0.3 a 1.0
     "volumen": 1.0,     # 0.0 a 1.0
+    "vol_menu": 0.5,    # 0.0 a 1.0 (volumen de la musica del menu)
     "res_idx": 0,       # indice en RESOLUCIONES
 }
 
@@ -1301,6 +1302,36 @@ def detener_musica_menu():
     global musica_menu
     musica_menu = None
 
+# rango de seeds para la musica del menu: de DIFICIL en adelante
+SEED_MENU_MIN = 4901   # primer tramo de DIFICIL en get_dificultad
+
+def _preparar_cancion_menu(seed):
+    """Genera una cancion para el menu, renderizando instrumento y bajo si faltan."""
+    dif = get_dificultad(seed)
+    cancion = generar_cancion(int(seed * 23819), dif)
+    inst = cancion["instrumento"]
+    if inst not in cache_por_instrumento:
+        tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
+        if tipo:
+            renderizar_instrumento(inst, tipo, dibujar_progreso=False)
+    # pre-renderizar bajo
+    estilo_b = cancion["bajo"]["estilo"]
+    cache_bajo = {}
+    for mb in set(e["midi"] for e in cancion["bajo"]["eventos"]):
+        wave_b = synth_bajo(midi_a_freq(mb), 0.5, estilo_b)
+        cache_bajo[mb] = np_to_sound(wave_b, vol=0.3, pan=0.0)
+    cancion["cache_bajo"] = cache_bajo
+    return cancion, dif
+
+def nueva_musica_menu_aleatoria():
+    """Elige una seed al azar (DIFICIL+) y arranca su musica en el menu."""
+    try:
+        seed = random.randint(SEED_MENU_MIN, SEED_MAX)
+        cancion, dif = _preparar_cancion_menu(seed)
+        iniciar_musica_menu(cancion, dif)
+    except Exception as e:
+        print(f"Error generando musica de menu aleatoria: {e}")
+
 def tick_musica_menu():
     """Reproduce melodia + bajo + drums en loop mientras estamos en el menu"""
     global musica_menu
@@ -1308,14 +1339,11 @@ def tick_musica_menu():
         return
     mm = musica_menu
     ahora = pygame.time.get_ticks() - mm["inicio"]
-    # loop: reiniciar al terminar
+    # al terminar: pasar a otra seed aleatoria (DIFICIL+)
     if ahora >= mm["duracion"]:
-        mm["inicio"] = pygame.time.get_ticks()
-        mm["idx_notas"] = 0
-        mm["idx_perc"] = 0
-        mm["idx_bajo"] = 0
+        nueva_musica_menu_aleatoria()
         return
-    vol_base = 0.35 * config["volumen"]
+    vol_base = config["vol_menu"] * config["volumen"]
     # --- melodia ---
     notas = mm["notas"]
     c_notas = cache_por_instrumento.get(mm["inst"])
@@ -2891,11 +2919,12 @@ def dibujar_config():
     opciones = [
         ("BRILLO", config["brillo"], "barra"),
         ("VOLUMEN", config["volumen"], "barra"),
+        ("VOL. MENU", config["vol_menu"], "barra"),
         ("RESOLUCION", config["res_idx"], "res"),
     ]
-    y0 = 190
+    y0 = 180
     for i, (nombre, valor, tipo) in enumerate(opciones):
-        y = y0 + i * 90
+        y = y0 + i * 70
         sel = (i == config_opcion)
         marca = "> " if sel else "  "
         color = BLANCO if sel else GRIS_MED
@@ -2935,6 +2964,10 @@ cargando_seed  = False
 teclas_sostenidas = set()
 nombre_input   = ""
 score_guardado = False
+
+# arrancar la musica del menu con una seed aleatoria (DIFICIL+)
+dibujar_pantalla_carga(1.0, "MUSICA", 1, 1)
+nueva_musica_menu_aleatoria()
 
 corriendo = True
 while corriendo:
@@ -2978,15 +3011,17 @@ while corriendo:
                 if evento.key == pygame.K_ESCAPE:
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
-                    config_opcion = (config_opcion - 1) % 3
+                    config_opcion = (config_opcion - 1) % 4
                 elif evento.key == pygame.K_DOWN:
-                    config_opcion = (config_opcion + 1) % 3
+                    config_opcion = (config_opcion + 1) % 4
                 elif evento.key == pygame.K_LEFT:
                     if config_opcion == 0:
                         config["brillo"] = max(0.3, round(config["brillo"] - 0.1, 1))
                     elif config_opcion == 1:
                         config["volumen"] = max(0.0, round(config["volumen"] - 0.1, 1))
                     elif config_opcion == 2:
+                        config["vol_menu"] = max(0.0, round(config["vol_menu"] - 0.1, 1))
+                    elif config_opcion == 3:
                         config["res_idx"] = max(0, config["res_idx"] - 1)
                         aplicar_resolucion()
                 elif evento.key == pygame.K_RIGHT:
@@ -2995,6 +3030,8 @@ while corriendo:
                     elif config_opcion == 1:
                         config["volumen"] = min(1.0, round(config["volumen"] + 0.1, 1))
                     elif config_opcion == 2:
+                        config["vol_menu"] = min(1.0, round(config["vol_menu"] + 0.1, 1))
+                    elif config_opcion == 3:
                         config["res_idx"] = min(len(RESOLUCIONES) - 1, config["res_idx"] + 1)
                         aplicar_resolucion()
 
@@ -3028,7 +3065,7 @@ while corriendo:
                         ESTADO = "input_nombre"
                     else:
                         ESTADO = "leaderboard"
-                    iniciar_musica_menu(partida["cancion"], partida["dificultad"])
+                    nueva_musica_menu_aleatoria()
                 elif evento.key == pygame.K_d and (partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"])) and not partida.get("export_ruta") and not partida.get("exportando"):
                     partida["exportando"] = True
                     pantalla.fill(NEGRO)
