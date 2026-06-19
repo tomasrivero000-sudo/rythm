@@ -12,6 +12,17 @@ pantalla = pygame.display.set_mode((ANCHO, ALTO))
 pygame.display.set_caption("Rhythm Game")
 clock = pygame.time.Clock()
 
+# splash inmediato para que no se vea negro
+pantalla.fill((0, 0, 0))
+_splash_f = pygame.font.SysFont("courier", 48, bold=True)
+_splash_t = _splash_f.render("* RHYTHM *", True, (255, 255, 255))
+pantalla.blit(_splash_t, (ANCHO // 2 - _splash_t.get_width() // 2, 200))
+_splash_f2 = pygame.font.SysFont("courier", 24, bold=True)
+_splash_t2 = _splash_f2.render("PREPARANDO...", True, (140, 140, 140))
+pantalla.blit(_splash_t2, (ANCHO // 2 - _splash_t2.get_width() // 2, 300))
+pygame.display.flip()
+del _splash_f, _splash_t, _splash_f2, _splash_t2
+
 NEGRO    = (0,   0,   0)
 BLANCO   = (255, 255, 255)
 GRIS     = (80,  80,  80)
@@ -34,8 +45,6 @@ ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
     "menor":       [0, 2, 3, 5, 7, 8, 10, 12],
     "pentatonica": [0, 2, 4, 7, 9, 12, 14, 16],
-    "dorica":      [0, 2, 3, 5, 7, 9, 10, 12],
-    "mixolidia":   [0, 2, 4, 5, 7, 9, 10, 12],
     "arm_menor":   [0, 2, 3, 5, 7, 8, 11, 12],
     "blues":       [0, 3, 5, 6, 7, 10, 12, 15],
 }
@@ -44,8 +53,6 @@ ACORDES_PATRON = {
     "mayor":       [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
     "menor":       [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
     "pentatonica": [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 2, 4]],
-    "dorica":      [[0, 2, 4], [3, 5, 7], [1, 3, 5], [0, 2, 4]],
-    "mixolidia":   [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
     "arm_menor":   [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
     "blues":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 3, 5]],
 }
@@ -319,9 +326,13 @@ def synth_nota(tipo, freq, duracion, rng_params):
     dec = rng_params.get("decay", 5.0)
     sustain = rng_params.get("sustain", 0.6)
     env = np.ones(n)
+    # fade-in mínimo para suavizar el ataque (evita click)
+    atk = max(atk, 0.008)
     atk_samples = min(int(SR * atk), n)
     if atk_samples > 0:
-        env[:atk_samples] = np.linspace(0, 1, atk_samples)
+        # curva suave (ease-in) en vez de lineal
+        ramp = np.linspace(0, 1, atk_samples)
+        env[:atk_samples] = ramp * ramp
     decay_curve = np.exp(-t * dec) * (1 - sustain) + sustain
     env *= decay_curve
     # release al final
@@ -635,22 +646,26 @@ def dibujar_nota_musical(surface, x, y, size, color):
 def spawn_burbuja():
     burbujas_carga.append({
         "x": random.uniform(40, ANCHO - 40),
-        "y": float(ALTO + 10),
-        "dx": random.uniform(-0.4, 0.4),
-        "dy": random.uniform(-2.0, -0.6),
-        "wobble": random.uniform(0.8, 2.5),
+        "y": float(random.uniform(ALTO * 0.3, ALTO + 10)),
+        "dx": random.uniform(-0.5, 0.5),
+        "dy": random.uniform(-3.0, -1.0),
+        "wobble": random.uniform(1.0, 3.0),
         "wobble_speed": random.uniform(1.5, 4.0),
         "size": random.choice([12, 16, 22, 28, 34]),
-        "alpha": random.randint(60, 220),
+        "alpha": random.randint(80, 240),
         "t": random.uniform(0, 6.28),
     })
+
+# pre-poblar burbujas para que no arranque vacío
+for _ in range(25):
+    spawn_burbuja()
 
 def dibujar_pantalla_carga(progreso, texto_inst, total_inst, inst_actual):
     pantalla.fill(NEGRO)
 
     # spawn y actualizar burbujas
-    for _ in range(2):
-        if random.random() < 0.4:
+    for _ in range(3):
+        if random.random() < 0.6:
             spawn_burbuja()
     for b in burbujas_carga:
         b["t"] += 0.04
@@ -697,12 +712,40 @@ def dibujar_pantalla_carga(progreso, texto_inst, total_inst, inst_actual):
             pygame.quit()
             exit()
 
+def dibujar_carga_seed(seed):
+    """Pantalla breve mientras se genera la canción de la seed"""
+    pantalla.fill(NEGRO)
+    for _ in range(8):
+        spawn_burbuja()
+    for b in burbujas_carga:
+        b["t"] += 0.06
+        b["x"] += b["dx"] + math.sin(b["t"] * b["wobble_speed"]) * b["wobble"]
+        b["y"] += b["dy"]
+    burbujas_carga[:] = [b for b in burbujas_carga if b["y"] > -50]
+    for b in burbujas_carga:
+        pct_y = max(0, min(1, b["y"] / ALTO))
+        alpha = int(b["alpha"] * (0.2 + 0.8 * pct_y))
+        color = (min(255, alpha), min(255, alpha), min(255, alpha))
+        dibujar_nota_musical(pantalla, b["x"], b["y"], b["size"], color)
+    titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 120))
+    gen_txt = fuente.render("GENERANDO SEED...", True, GRIS_MED)
+    pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 250))
+    seed_txt = fuente_grande.render(str(int(seed)).zfill(6), True, BLANCO)
+    pantalla.blit(seed_txt, (ANCHO // 2 - seed_txt.get_width() // 2, 300))
+    pygame.display.flip()
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
+            pygame.quit()
+            exit()
+
 total_instrumentos = len(INSTRUMENTOS_JUGADOR)
 inst_idx = 0
+total_notas = total_instrumentos * 60  # 60 notas midi por instrumento
+nota_global = 0
 
 for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
     inst_idx += 1
-    dibujar_pantalla_carga(inst_idx / total_instrumentos, nombre, total_instrumentos, inst_idx)
     print(f"  {nombre}...")
     inst_rng = random.Random(hash(nombre))
     params = generar_params_instrumento(inst_rng, tipo)
@@ -711,6 +754,9 @@ for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
     c_cortas = {}
     c_largas = {}
     for midi in range(36, 96):
+        nota_global += 1
+        if midi % 5 == 0:
+            dibujar_pantalla_carga(nota_global / total_notas, nombre, total_instrumentos, inst_idx)
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
@@ -1181,16 +1227,51 @@ def generar_cancion(seed, dif):
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
                 })
 
-    pat_des = [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0]
+    # elegir un estilo de desenlace al azar
+    estilo_des = rng.choice(["ascenso", "descenso", "acorde_final", "eco", "cascada"])
+    pat_des_opciones = [
+        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
+        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
+        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
+    ]
+    pat_des = rng.choice(pat_des_opciones)
+
     for c in range(C_DESENLACE):
         for s in range(16):
             if pat_des[s] == 0:
                 continue
-            t        = t_nudo_fin + c * 4 * beat + (s // 4) * beat
+            t        = t_nudo_fin + c * 4 * beat + s * paso16
             progreso = (c * 16 + s) / (C_DESENLACE * 16)
-            col      = min(int(progreso * num_columnas), num_columnas - 1)
-            midi     = notas_columnas[col] + 12
-            es_hold  = rng.random() < 0.7
+
+            if estilo_des == "ascenso":
+                col = min(int(progreso * num_columnas), num_columnas - 1)
+                midi = notas_columnas[col] + 12
+            elif estilo_des == "descenso":
+                col = max(0, num_columnas - 1 - int(progreso * num_columnas))
+                midi = notas_columnas[col] + 12
+            elif estilo_des == "acorde_final":
+                # ultima nota es un acorde grande, resto bajan
+                if c == C_DESENLACE - 1 and s == 0:
+                    cols_ac = [0, num_columnas // 2, num_columnas - 1]
+                    notas_jugador.append({
+                        "cols": cols_ac,
+                        "midis": [notas_columnas[cx] + 12 for cx in cols_ac],
+                        "tiempo": t, "es_acorde": True, "parte": "desenlace",
+                        "hold": 4 * beat,
+                    })
+                    continue
+                col = max(0, num_columnas - 1 - int(progreso * num_columnas))
+                midi = notas_columnas[col] + 12
+            elif estilo_des == "eco":
+                # alterna entre tonica y notas altas
+                col = 0 if (c * 16 + s) % 8 < 4 else num_columnas - 1
+                midi = notas_columnas[col] + 12
+            else:  # cascada
+                col = (c * 4 + s // 4) % num_columnas
+                midi = notas_columnas[col] + 12
+
+            es_hold  = rng.random() < 0.6
             hold_dur = rng.choice([2, 3, 4]) * beat if es_hold else 0
             notas_jugador.append({
                 "cols": [col], "midis": [midi],
@@ -1259,7 +1340,7 @@ def tick_background(partida, ahora):
         p = c["percusion"][partida["indice_perc"]]
         sample = kit.get(p["sample"])
         if sample:
-            sample.set_volume(p["vol"])
+            sample.set_volume(min(1.0, p["vol"] * 1.2))
             sample.play()
         partida["indice_perc"] += 1
 
@@ -1503,6 +1584,7 @@ while corriendo:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = True
                 if evento.key == pygame.K_RETURN and seed_acumulada > 0:
+                    dibujar_carga_seed(seed_acumulada)
                     partida = iniciar_partida(int(seed_acumulada))
                     score_guardado = False
                     ESTADO  = "jugando"
