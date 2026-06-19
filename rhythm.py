@@ -5,6 +5,7 @@ import pygame
 import random
 import glob
 import numpy as np
+import json
 
 pygame.init()
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -25,13 +26,14 @@ COLUMNAS = {
     pygame.K_s: 1,
     pygame.K_d: 2,
     pygame.K_f: 3,
-    pygame.K_g: 4,
-    pygame.K_h: 5,
-    pygame.K_j: 6,
-    pygame.K_k: 7,
+    pygame.K_j: 4,
+    pygame.K_k: 5,
+    pygame.K_l: 6,
+    pygame.K_SEMICOLON: 7,
+    pygame.K_PERIOD: 7,
 }
 
-LABELS = ["A", "S", "D", "F", "G", "H", "J", "K"]
+LABELS = ["A", "S", "D", "F", "J", "K", "L", "N"]
 
 ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
@@ -145,31 +147,127 @@ print("Notas OK")
 
 canal_hold = {}
 particulas = []
+textos_flotantes = []
 
 def crear_explosion(x, y, cantidad, color=BLANCO):
     for _ in range(cantidad):
-        dx = random.uniform(-8, 8)
-        dy = random.uniform(-10, -2)
+        angulo = random.uniform(0, 6.28)
+        fuerza = random.uniform(1, 7)
+        import math
+        dx = math.cos(angulo) * fuerza
+        dy = math.sin(angulo) * fuerza - 3
         vida = random.randint(20, 50)
         tam = random.randint(2, 7)
-        particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida, "tam": tam, "color": color})
+        particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida, "vida_max": vida, "tam": tam, "color": color})
+
+def crear_texto_flotante(x, y, texto, color=BLANCO, grande=False):
+    textos_flotantes.append({
+        "x": x, "y": y, "texto": texto, "color": color,
+        "vida": 60, "vida_max": 60, "grande": grande,
+    })
 
 def actualizar_particulas():
     for p in particulas:
         p["x"] += p["dx"]
         p["y"] += p["dy"]
         p["dy"] += 0.15
+        p["dx"] *= 0.98
         p["vida"] -= 1
     particulas[:] = [p for p in particulas if p["vida"] > 0]
+    for t in textos_flotantes:
+        t["y"] -= 1.5
+        t["vida"] -= 1
+    textos_flotantes[:] = [t for t in textos_flotantes if t["vida"] > 0]
 
 def dibujar_particulas():
     for p in particulas:
-        alpha = min(255, p["vida"] * 8)
+        pct = p["vida"] / p["vida_max"]
+        alpha = int(255 * pct)
         color = (min(p["color"][0], alpha), min(p["color"][1], alpha), min(p["color"][2], alpha))
-        pygame.draw.rect(pantalla, color, (int(p["x"]), int(p["y"]), p["tam"], p["tam"]))
-
+        tam = max(1, int(p["tam"] * pct))
+        pygame.draw.rect(pantalla, color, (int(p["x"]), int(p["y"]), tam, tam))
+    for t in textos_flotantes:
+        pct = t["vida"] / t["vida_max"]
+        alpha = int(255 * pct)
+        color = (min(t["color"][0], alpha), min(t["color"][1], alpha), min(t["color"][2], alpha))
+        f = fuente if t["grande"] else fuente_chica
+        txt = f.render(t["texto"], True, color)
+        pantalla.blit(txt, (int(t["x"]) - txt.get_width() // 2, int(t["y"])))
 def nota_midi(tonica, escala, grado):
     return tonica + escala[grado % len(escala)]
+
+# --- leaderboard ---
+LEADERBOARD_FILE = "F:\\VIDEOGAMEEE\\leaderboard.json"
+TOP_SCORES = 10
+
+def cargar_leaderboard():
+    try:
+        with open(LEADERBOARD_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def guardar_leaderboard(lb):
+    with open(LEADERBOARD_FILE, "w") as f:
+        json.dump(lb, f, indent=2)
+
+def es_highscore(puntos):
+    lb = cargar_leaderboard()
+    if len(lb) < TOP_SCORES:
+        return True
+    return puntos > lb[-1]["puntos"]
+
+def agregar_score(nombre, puntos, seed, dificultad, max_combo):
+    lb = cargar_leaderboard()
+    lb.append({
+        "nombre": nombre,
+        "puntos": puntos,
+        "seed": seed,
+        "dificultad": dificultad,
+        "max_combo": max_combo,
+    })
+    lb.sort(key=lambda x: x["puntos"], reverse=True)
+    lb = lb[:TOP_SCORES]
+    guardar_leaderboard(lb)
+    return lb
+
+def dibujar_leaderboard():
+    pantalla.fill(NEGRO)
+    titulo = fuente_grande.render("LEADERBOARD", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 30))
+    pygame.draw.line(pantalla, BLANCO, (60, 90), (ANCHO - 60, 90), 2)
+
+    lb = cargar_leaderboard()
+    if not lb:
+        vacio = fuente_chica.render("NO HAY SCORES TODAVIA", True, GRIS_MED)
+        pantalla.blit(vacio, (ANCHO // 2 - vacio.get_width() // 2, 200))
+    else:
+        header = fuente_chica.render("  #   NOMBRE         PUNTOS   COMBO  SEED    DIF", True, GRIS_MED)
+        pantalla.blit(header, (40, 110))
+        pygame.draw.line(pantalla, GRIS, (40, 128), (ANCHO - 40, 128), 1)
+        for i, sc in enumerate(lb):
+            color = BLANCO if i < 3 else GRIS_MED
+            nom = sc["nombre"][:12].ljust(12)
+            linea = f"  {i+1:>2}   {nom}   {sc['puntos']:>6}   {sc['max_combo']:>4}x  {sc['seed']:>5}   {sc['dificultad']}"
+            txt = fuente_chica.render(linea, True, color)
+            pantalla.blit(txt, (40, 140 + i * 28))
+
+    volver = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+    pantalla.blit(volver, (ANCHO // 2 - volver.get_width() // 2, ALTO - 30))
+
+def dibujar_input_nombre(nombre_actual):
+    pantalla.fill(NEGRO)
+    titulo = fuente_grande.render("HIGH SCORE!", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
+
+    inst = fuente.render("INGRESA TU NOMBRE:", True, GRIS_MED)
+    pantalla.blit(inst, (ANCHO // 2 - inst.get_width() // 2, 250))
+
+    nombre_txt = fuente_grande.render(nombre_actual + "_", True, BLANCO)
+    pantalla.blit(nombre_txt, (ANCHO // 2 - nombre_txt.get_width() // 2, 310))
+
+    enter = fuente_chica.render("ENTER PARA CONFIRMAR", True, GRIS)
+    pantalla.blit(enter, (ANCHO // 2 - enter.get_width() // 2, 400))
 
 def get_dificultad(seed):
     if seed <= 0:
@@ -388,7 +486,7 @@ def generar_cancion(seed, dif):
         if c % 2 == 0:
             notas_jugador.append({
                 "cols": [nota_intro], "midis": [notas_columnas[nota_intro]],
-                "tiempo": c * 4 * beat,
+                "tiempo": (c + 1) * 4 * beat,
                 "es_acorde": False, "parte": "intro", "hold": beat * 3,
             })
 
@@ -577,11 +675,14 @@ def dibujar_juego(partida, ahora):
             if hold_h > 0:
                 bar_x = x + ancho_col // 2 - 6
                 bar_y = grupo["y"] - hold_h
+                bar_h = hold_h
                 if col in partida["holds_activos"]:
-                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, hold_h))
+                    # hold activo: barra ancha brillante
+                    pygame.draw.rect(pantalla, GRIS_MED, (bar_x - 4, bar_y, 20, bar_h))
+                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h))
                 else:
-                    pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, hold_h))
-                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, hold_h), 1)
+                    pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
+                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
             if grupo.get("es_acorde"):
                 pygame.draw.rect(pantalla, BLANCO, (x + 6,  grupo["y"],     ancho_col - 12, 28))
                 pygame.draw.rect(pantalla, NEGRO,  (x + 9,  grupo["y"] + 3, ancho_col - 18, 22))
@@ -683,11 +784,16 @@ def dibujar_menu(seed_actual, cargando):
             coin = fuente.render("INSERT COIN", True, BLANCO)
             pantalla.blit(coin, (ANCHO // 2 - coin.get_width() // 2, 460))
 
+    lb_txt = fuente_chica.render("L = LEADERBOARD", True, GRIS)
+    pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 510))
+
 ESTADO         = "menu"
 partida        = None
 seed_acumulada = 0.0
 cargando_seed  = False
 teclas_sostenidas = set()
+nombre_input   = ""
+score_guardado = False
 
 corriendo = True
 while corriendo:
@@ -704,20 +810,52 @@ while corriendo:
                     cargando_seed = True
                 if evento.key == pygame.K_RETURN and seed_acumulada > 0:
                     partida = iniciar_partida(int(seed_acumulada))
+                    score_guardado = False
                     ESTADO  = "jugando"
                 if evento.key == pygame.K_r:
                     seed_acumulada = 0.0
                     cargando_seed  = False
+                if evento.key == pygame.K_l:
+                    ESTADO = "leaderboard"
             if evento.type == pygame.KEYUP:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = False
+
+        elif ESTADO == "leaderboard":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "menu"
+
+        elif ESTADO == "input_nombre":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_RETURN and len(nombre_input) > 0:
+                    agregar_score(
+                        nombre_input,
+                        partida["puntos"],
+                        int(partida["seed"]),
+                        partida["dificultad"]["nombre"],
+                        partida["max_combo"],
+                    )
+                    score_guardado = True
+                    ESTADO = "leaderboard"
+                elif evento.key == pygame.K_BACKSPACE:
+                    nombre_input = nombre_input[:-1]
+                elif evento.key == pygame.K_ESCAPE:
+                    ESTADO = "menu"
+                else:
+                    if len(nombre_input) < 10 and evento.unicode.isprintable() and evento.unicode.strip():
+                        nombre_input += evento.unicode.upper()
 
         elif ESTADO == "jugando":
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
                     pygame.mixer.stop()
                     teclas_sostenidas.clear()
-                    ESTADO = "menu"
+                    if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
+                        nombre_input = ""
+                        ESTADO = "input_nombre"
+                    else:
+                        ESTADO = "menu"
                 elif evento.key in COLUMNAS:
                     col = COLUMNAS[evento.key]
                     if col < partida["dificultad"]["columnas"]:
@@ -760,9 +898,18 @@ while corriendo:
                                             crear_explosion(cx, ZONA_Y, 5, GRIS_MED)
                                             partida["puntos"] = max(0, partida["puntos"] - 2)
                                             partida["vida"] = max(0, partida["vida"] - 1)
+                                            crear_texto_flotante(cx, ZONA_Y - 20, "-2", GRIS_MED)
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
                                         combo_mult = 1 + partida["combo"] // 10
+                                        if pts > 0:
+                                            total_pts = pts * len(grupo["cols"]) * combo_mult
+                                            txt_pts = f"+{total_pts}"
+                                            if combo_mult > 1:
+                                                txt_pts += f" x{combo_mult}"
+                                            crear_texto_flotante(cx, ZONA_Y - 20, txt_pts, BLANCO, combo_mult > 1)
+                                            if partida["combo"] > 0 and partida["combo"] % 10 == 0:
+                                                crear_texto_flotante(ANCHO // 2, ZONA_Y - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
                                                 ch = cache_notas_largas[midi_fijo].play()
@@ -788,16 +935,23 @@ while corriendo:
                             del canal_hold[col]
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
+                        # siempre dar puntos y remover al soltar
                         if grupo["y"] > ZONA_Y + 20:
                             partida["puntos"] += 3
-                            if grupo in partida["notas_cayendo"]:
-                                partida["notas_cayendo"].remove(grupo)
+                        if grupo in partida["notas_cayendo"]:
+                            partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
 
     if ESTADO == "menu":
         if cargando_seed:
             seed_acumulada = min(seed_acumulada + SEED_VELOCIDAD, SEED_MAX)
         dibujar_menu(seed_acumulada, cargando_seed)
+
+    elif ESTADO == "leaderboard":
+        dibujar_leaderboard()
+
+    elif ESTADO == "input_nombre":
+        dibujar_input_nombre(nombre_input)
 
     elif ESTADO == "jugando":
         ahora = ahora_ms - partida["inicio"]
@@ -841,13 +995,26 @@ while corriendo:
             notas_vivas = []
             for n in partida["notas_cayendo"]:
                 if n["y"] >= ALTO + 50:
-                    partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
-                    partida["combo"] = 0
-                    partida["puntos"] = max(0, partida["puntos"] - 5)
-                    partida["vida"] = max(0, partida["vida"] - 2)
-                    if partida["vida"] <= 0:
-                        partida["game_over"] = True
-                        pygame.mixer.stop()
+                    # no contar MISS si es un hold activo
+                    es_hold_activo = False
+                    for col_h, hold_h in partida["holds_activos"].items():
+                        if hold_h["grupo"] is n:
+                            es_hold_activo = True
+                            break
+                    if not es_hold_activo:
+                        partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
+                        partida["combo"] = 0
+                        partida["puntos"] = max(0, partida["puntos"] - 5)
+                        partida["vida"] = max(0, partida["vida"] - 2)
+                        num_cols = partida["dificultad"]["columnas"]
+                        ancho_col = ANCHO // num_cols
+                        miss_x = n["cols"][0] * ancho_col + ancho_col // 2
+                        crear_texto_flotante(miss_x, ALTO - 30, "-5", GRIS_MED)
+                        if partida["vida"] <= 0:
+                            partida["game_over"] = True
+                            pygame.mixer.stop()
+                    else:
+                        notas_vivas.append(n)
                 else:
                     notas_vivas.append(n)
             partida["notas_cayendo"] = notas_vivas
