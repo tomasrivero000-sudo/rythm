@@ -325,6 +325,12 @@ INSTRUMENTOS_JUGADOR = {
     "SYNTHBASS":  "synthbass",
     "BELLPAD":    "bellpad",
     "DETUNE":     "detune",
+    "PWM LEAD":   "pwm_lead",
+    "FM EP":      "fm_ep",
+    "FORMANT":    "formant",
+    "HOOVER":     "hoover",
+    "BELL FM":    "bell_fm",
+    "GROWL":      "growl",
 }
 
 def midi_a_freq(midi):
@@ -545,6 +551,7 @@ def synth_nota(tipo, freq, duracion, rng_params):
         "trumpet": 0.55, "harp": 0.65, "synthbass": 0.5,
         "bellpad": 0.55, "detune": 0.5,
     }
+    
     return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
 
 def generar_params_instrumento(rng, tipo):
@@ -1152,6 +1159,29 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
     pats3 = generar_patrones_drums(rng)
     tercio1 = t_intro_fin + 8 * 4 * beat
     tercio2 = t_intro_fin + 16 * 4 * beat
+
+    # decidir modo de tempo: 30% half-time, 20% double-time, 50% normal
+    roll = rng.random()
+    if roll < 0.30:
+        modo_tempo = "half"
+        tempo_tercio = rng.choice([1, 2])   # half-time en un tercio posterior
+    elif roll < 0.50:
+        modo_tempo = "double"
+        tempo_tercio = 0                    # empieza lento, luego acelera
+    else:
+        modo_tempo = "normal"
+        tempo_tercio = -1
+
+    # patron half-time: kick en el 1, snare/clap en el 3 (medio compas)
+    ht_kick  = [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0]
+    ht_snare = [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0]
+    ht_hihat = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0]
+
+    # patron double-time: todo al doble de densidad
+    dt_kick  = [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]
+    dt_snare = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0]
+    dt_hihat = [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]
+
     percusion = []
     total = c_intro + c_nudo + c_desenlace
     for c in range(total):
@@ -1161,10 +1191,18 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
         es_fill = (c > 0) and (c % 4 == 3)
         if tc < tercio1:
             p = pats
+            tercio_actual = 0
         elif tc < tercio2:
             p = pats2
+            tercio_actual = 1
         else:
             p = pats3
+            tercio_actual = 2
+
+        en_tempo_mod = (tercio_actual == tempo_tercio) and (t_intro_fin <= tc < t_nudo_fin)
+        en_half_time = en_tempo_mod and modo_tempo == "half"
+        en_double_time = en_tempo_mod and modo_tempo == "double"
+
         for i in range(16):
             t = tc + i * paso
             if t < t_intro_fin:
@@ -1177,6 +1215,32 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
                 if p["clap"][i] and kit["clap"]:
                     percusion.append({"tiempo": t, "sample": "clap", "vol": 0.09})
                 continue
+
+            if en_half_time:
+                # bateria a mitad de tempo: patron fijo espaciado, mas peso
+                if ht_kick[i] and kit["kick"]:
+                    percusion.append({"tiempo": t, "sample": "kick", "vol": 0.22})
+                if ht_snare[i] and kit["snare"]:
+                    percusion.append({"tiempo": t, "sample": "snare", "vol": 0.14})
+                if ht_snare[i] and kit["clap"]:
+                    percusion.append({"tiempo": t, "sample": "clap", "vol": 0.11})
+                if ht_hihat[i] and kit["hihat"]:
+                    percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.05})
+                if i == 0 and kit["crash"]:
+                    percusion.append({"tiempo": t, "sample": "crash", "vol": 0.05})
+                continue
+            if en_double_time:
+                # bateria al doble de tempo: todo mas denso y rapido
+                if dt_kick[i] and kit["kick"]:
+                    percusion.append({"tiempo": t, "sample": "kick", "vol": 0.16})
+                if dt_snare[i] and kit["snare"]:
+                    percusion.append({"tiempo": t, "sample": "snare", "vol": 0.10})
+                if dt_hihat[i] and kit["hihat"]:
+                    percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.04})
+                if i == 0 and kit["crash"]:
+                    percusion.append({"tiempo": t, "sample": "crash", "vol": 0.05})
+                continue
+
             if p["kick"][i] and kit["kick"]:
                 percusion.append({"tiempo": t, "sample": "kick", "vol": 0.18})
             if p["snare"][i] and kit["snare"]:
