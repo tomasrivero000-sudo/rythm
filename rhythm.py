@@ -8,9 +8,40 @@ pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
 pygame.mixer.set_num_channels(32)
 
 ANCHO, ALTO = 720, 640
-pantalla = pygame.display.set_mode((ANCHO, ALTO))
+
+# --- configuracion ajustable ---
+RESOLUCIONES = [(720, 640), (900, 800), (1080, 960), (1280, 1138)]
+config = {
+    "brillo": 1.0,      # 0.3 a 1.0
+    "volumen": 1.0,     # 0.0 a 1.0
+    "res_idx": 0,       # indice en RESOLUCIONES
+}
+
+# la ventana real puede cambiar de tamaño; el juego siempre dibuja en 720x640 y se escala
+_w, _h = RESOLUCIONES[config["res_idx"]]
+ventana = pygame.display.set_mode((_w, _h))
 pygame.display.set_caption("Rhythm Game")
+pantalla = pygame.Surface((ANCHO, ALTO))
 clock = pygame.time.Clock()
+
+def aplicar_volumen():
+    pygame.mixer.set_num_channels(32)
+
+def presentar():
+    """Escala la superficie interna a la ventana, aplica brillo y muestra"""
+    w, h = ventana.get_size()
+    if (w, h) != (ANCHO, ALTO):
+        escalada = pygame.transform.scale(pantalla, (w, h))
+    else:
+        escalada = pantalla
+    ventana.blit(escalada, (0, 0))
+    # overlay de brillo (oscurece si brillo < 1)
+    if config["brillo"] < 1.0:
+        oscuro = pygame.Surface((w, h))
+        oscuro.fill((0, 0, 0))
+        oscuro.set_alpha(int((1.0 - config["brillo"]) * 255))
+        ventana.blit(oscuro, (0, 0))
+    pygame.display.flip()
 
 # splash inmediato para que no se vea negro
 pantalla.fill((0, 0, 0))
@@ -20,7 +51,7 @@ pantalla.blit(_splash_t, (ANCHO // 2 - _splash_t.get_width() // 2, 200))
 _splash_f2 = pygame.font.SysFont("courier", 24, bold=True)
 _splash_t2 = _splash_f2.render("PREPARANDO...", True, (140, 140, 140))
 pantalla.blit(_splash_t2, (ANCHO // 2 - _splash_t2.get_width() // 2, 300))
-pygame.display.flip()
+presentar()
 del _splash_f, _splash_t, _splash_f2, _splash_t2
 
 NEGRO    = (0,   0,   0)
@@ -1091,7 +1122,7 @@ def dibujar_pantalla_carga(progreso, texto_inst, total_inst, inst_actual):
         pygame.draw.rect(pantalla, BLANCO, (barra_x + bl * 8 + 1, barra_y + 2, 6, 12))
     pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 16), 2)
 
-    pygame.display.flip()
+    presentar()
     for ev in pygame.event.get():
         if ev.type == pygame.QUIT:
             pygame.quit()
@@ -1118,7 +1149,7 @@ def dibujar_carga_seed(seed):
     pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 250))
     seed_txt = fuente_grande.render(str(int(seed)).zfill(6), True, BLANCO)
     pantalla.blit(seed_txt, (ANCHO // 2 - seed_txt.get_width() // 2, 300))
-    pygame.display.flip()
+    presentar()
     for ev in pygame.event.get():
         if ev.type == pygame.QUIT:
             pygame.quit()
@@ -1181,7 +1212,7 @@ def dibujar_carga_seed_inst(progreso, nombre):
     for bl in range(bloques):
         pygame.draw.rect(pantalla, BLANCO, (barra_x + bl * 8 + 1, barra_y + 2, 6, 12))
     pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 16), 2)
-    pygame.display.flip()
+    presentar()
     for ev in pygame.event.get():
         if ev.type == pygame.QUIT:
             pygame.quit()
@@ -1924,7 +1955,7 @@ def tick_background(partida, ahora):
         p = c["percusion"][partida["indice_perc"]]
         sample = kit.get(p["sample"])
         if sample:
-            vol = min(1.0, p["vol"] * 1.2)
+            vol = min(1.0, p["vol"] * 1.2) * config["volumen"]
             gl, gr = pan_perc.get(p["sample"], (1.0, 1.0))
             ch = sample.play()
             if ch:
@@ -1938,7 +1969,9 @@ def tick_background(partida, ahora):
         ev = bajo[partida["indice_bajo"]]
         snd_b = cache_bajo.get(ev["midi"])
         if snd_b:
-            snd_b.play()
+            ch_b = snd_b.play()
+            if ch_b:
+                ch_b.set_volume(config["volumen"])
         partida["indice_bajo"] += 1
 
 def get_parte(partida, ahora):
@@ -1970,6 +2003,14 @@ def dibujar_juego(partida, ahora):
     pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + sy), (ANCHO + sx, ZONA_Y + sy), 2)
     pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + 54 + sy), (ANCHO + sx, ZONA_Y + 54 + sy), 1)
 
+    # nota actual de cada columna (puede cambiar de octava en el desenlace)
+    notas_label = list(partida["cancion"]["notas_columnas"])
+    for grupo in partida["notas_cayendo"]:
+        if abs(grupo["y"] - ZONA_Y) < 200:
+            for idx_c, c in enumerate(grupo["cols"]):
+                if idx_c < len(grupo.get("midis", [])) and c < len(notas_label):
+                    notas_label[c] = grupo["midis"][idx_c]
+
     for i in range(num_cols):
         x = i * ancho_col + sx
         if i in teclas_sostenidas:
@@ -1977,10 +2018,15 @@ def dibujar_juego(partida, ahora):
         col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
         label = fuente_chica.render(LABELS[i], True, col_activa)
         pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 10 + sy))
-        if i < len(partida["cancion"]["notas_columnas"]):
-            nota_name = midi_a_nombre(partida["cancion"]["notas_columnas"][i])
+        if i < len(notas_label):
+            nota_name = midi_a_nombre(notas_label[i])
             nota_txt = fuente_chica.render(nota_name, True, col_activa)
             pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, ZONA_Y + 28 + sy))
+
+    # limite inferior donde se cortan las notas (justo encima del teclado)
+    limite_notas = ZONA_Y + 54
+    clip_anterior = pantalla.get_clip()
+    pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
 
     for grupo in partida["notas_cayendo"]:
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
@@ -2012,6 +2058,8 @@ def dibujar_juego(partida, ahora):
         if len(xs) > 1:
             pygame.draw.line(pantalla, BLANCO, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
 
+    pantalla.set_clip(clip_anterior)
+
     pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
 
@@ -2040,26 +2088,30 @@ def dibujar_juego(partida, ahora):
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
 
-    # --- mini teclado de piano ---
-    notas_cols = partida["cancion"]["notas_columnas"]
+    # --- mini teclado de piano (refleja las notas actuales) ---
+    notas_base = partida["cancion"]["notas_columnas"]
+    # determinar la nota actual de cada columna segun las notas que estan sonando
+    notas_actuales = list(notas_base)
+    for grupo in partida["notas_cayendo"]:
+        # notas cerca de la zona de golpe definen la tonalidad actual
+        if abs(grupo["y"] - ZONA_Y) < 200:
+            for idx_c, c in enumerate(grupo["cols"]):
+                if idx_c < len(grupo.get("midis", [])) and c < len(notas_actuales):
+                    notas_actuales[c] = grupo["midis"][idx_c]
+    notas_cols = notas_actuales
     tecl_y = ZONA_Y + 56 + sy
     tecl_h = ALTO - tecl_y - 4
     if tecl_h > 8:
         tecl_h = min(tecl_h, 28)
-        # determinar rango de notas
         midi_min = min(notas_cols) - 2
         midi_max = max(notas_cols) + 2
-        # alinear a octava
         midi_min = (midi_min // 12) * 12
         midi_max = ((midi_max // 12) + 1) * 12
-        total_notas = midi_max - midi_min
-        # teclas blancas en el rango
-        es_negra = [1, 3, 6, 8, 10]  # C#, D#, F#, G#, A#
+        es_negra = [1, 3, 6, 8, 10]
         blancas = [m for m in range(midi_min, midi_max) if (m % 12) not in es_negra]
         n_blancas = len(blancas)
         if n_blancas > 0:
             tw = ANCHO // n_blancas
-            # dibujar teclas blancas
             for idx, m in enumerate(blancas):
                 kx = idx * tw + sx
                 activa = m in notas_cols
@@ -2073,7 +2125,6 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, GRIS_MED, (kx + 1, tecl_y, tw - 2, tecl_h))
                 else:
                     pygame.draw.rect(pantalla, GRIS, (kx + 1, tecl_y, tw - 2, tecl_h), 1)
-            # dibujar teclas negras encima
             for idx, m in enumerate(blancas):
                 if m + 1 < midi_max and (m + 1) % 12 in es_negra:
                     mn = m + 1
@@ -2156,8 +2207,56 @@ def dibujar_menu(seed_actual, cargando):
             coin = fuente.render("INSERT COIN", True, BLANCO)
             pantalla.blit(coin, (ANCHO // 2 - coin.get_width() // 2, 460))
 
-    lb_txt = fuente_chica.render("L = LEADERBOARD", True, GRIS)
+    lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG", True, GRIS)
     pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 510))
+
+config_opcion = 0  # 0=brillo, 1=volumen, 2=resolucion
+
+def dibujar_config():
+    pantalla.fill(NEGRO)
+    titulo = fuente_grande.render("CONFIG", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 60))
+    pygame.draw.line(pantalla, BLANCO, (60, 120), (ANCHO - 60, 120), 2)
+
+    opciones = [
+        ("BRILLO", config["brillo"], "barra"),
+        ("VOLUMEN", config["volumen"], "barra"),
+        ("RESOLUCION", config["res_idx"], "res"),
+    ]
+    y0 = 190
+    for i, (nombre, valor, tipo) in enumerate(opciones):
+        y = y0 + i * 90
+        sel = (i == config_opcion)
+        marca = "> " if sel else "  "
+        color = BLANCO if sel else GRIS_MED
+        etq = fuente.render(f"{marca}{nombre}", True, color)
+        pantalla.blit(etq, (100, y))
+
+        if tipo == "barra":
+            barra_w = 300
+            barra_x = ANCHO - barra_w - 100
+            pygame.draw.rect(pantalla, GRIS, (barra_x, y + 4, barra_w, 16))
+            relleno = int(barra_w * valor)
+            pygame.draw.rect(pantalla, color, (barra_x, y + 4, relleno, 16))
+            pygame.draw.rect(pantalla, BLANCO, (barra_x, y + 4, barra_w, 16), 1)
+            pct = fuente_chica.render(f"{int(valor * 100)}%", True, color)
+            pantalla.blit(pct, (barra_x + barra_w + 12, y + 4))
+        else:
+            w, h = RESOLUCIONES[valor]
+            res_txt = fuente.render(f"{w}x{h}", True, color)
+            pantalla.blit(res_txt, (ANCHO - 300, y))
+
+    ayuda1 = fuente_chica.render("FLECHAS ARRIBA/ABAJO = ELEGIR", True, GRIS)
+    pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 480))
+    ayuda2 = fuente_chica.render("FLECHAS IZQ/DER = AJUSTAR", True, GRIS)
+    pantalla.blit(ayuda2, (ANCHO // 2 - ayuda2.get_width() // 2, 505))
+    ayuda3 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+    pantalla.blit(ayuda3, (ANCHO // 2 - ayuda3.get_width() // 2, 540))
+
+def aplicar_resolucion():
+    global ventana
+    w, h = RESOLUCIONES[config["res_idx"]]
+    ventana = pygame.display.set_mode((w, h))
 
 ESTADO         = "menu"
 partida        = None
@@ -2190,6 +2289,9 @@ while corriendo:
                     cargando_seed  = False
                 if evento.key == pygame.K_l:
                     ESTADO = "leaderboard"
+                if evento.key == pygame.K_c:
+                    config_opcion = 0
+                    ESTADO = "config"
             if evento.type == pygame.KEYUP:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = False
@@ -2198,6 +2300,31 @@ while corriendo:
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
                     ESTADO = "menu"
+
+        elif ESTADO == "config":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "menu"
+                elif evento.key == pygame.K_UP:
+                    config_opcion = (config_opcion - 1) % 3
+                elif evento.key == pygame.K_DOWN:
+                    config_opcion = (config_opcion + 1) % 3
+                elif evento.key == pygame.K_LEFT:
+                    if config_opcion == 0:
+                        config["brillo"] = max(0.3, round(config["brillo"] - 0.1, 1))
+                    elif config_opcion == 1:
+                        config["volumen"] = max(0.0, round(config["volumen"] - 0.1, 1))
+                    elif config_opcion == 2:
+                        config["res_idx"] = max(0, config["res_idx"] - 1)
+                        aplicar_resolucion()
+                elif evento.key == pygame.K_RIGHT:
+                    if config_opcion == 0:
+                        config["brillo"] = min(1.0, round(config["brillo"] + 0.1, 1))
+                    elif config_opcion == 1:
+                        config["volumen"] = min(1.0, round(config["volumen"] + 0.1, 1))
+                    elif config_opcion == 2:
+                        config["res_idx"] = min(len(RESOLUCIONES) - 1, config["res_idx"] + 1)
+                        aplicar_resolucion()
 
         elif ESTADO == "input_nombre":
             if evento.type == pygame.KEYDOWN:
@@ -2264,8 +2391,8 @@ while corriendo:
                                 pan = col / (num_cols_t - 1)  # 0..1
                             else:
                                 pan = 0.5
-                            volL = vol_nota * (1.0 - pan * 0.6)
-                            volR = vol_nota * (0.4 + pan * 0.6)
+                            volL = vol_nota * (1.0 - pan * 0.6) * config["volumen"]
+                            volR = vol_nota * (0.4 + pan * 0.6) * config["volumen"]
                             ch = snd_tocar.play()
                             if ch:
                                 ch.set_volume(volL, volR)
@@ -2319,6 +2446,7 @@ while corriendo:
                                             if midi_fijo in cache_notas_largas:
                                                 ch = cache_notas_largas[midi_fijo].play()
                                                 if ch:
+                                                    ch.set_volume(config["volumen"])
                                                     canal_hold[col] = ch
                                             partida["holds_activos"][col] = {
                                                 "grupo": grupo,
@@ -2377,6 +2505,9 @@ while corriendo:
 
     elif ESTADO == "leaderboard":
         dibujar_leaderboard()
+
+    elif ESTADO == "config":
+        dibujar_config()
 
     elif ESTADO == "input_nombre":
         dibujar_input_nombre(nombre_input)
@@ -2448,7 +2579,7 @@ while corriendo:
         dibujar_juego(partida, ahora)
         dibujar_particulas()
 
-    pygame.display.flip()
+    presentar()
     clock.tick(60)
 
 pygame.quit()
