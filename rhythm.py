@@ -75,6 +75,56 @@ def np_to_sound(samples_mono, vol=0.8):
     stereo = np.column_stack((samples_mono, samples_mono))
     return pygame.sndarray.make_sound(stereo)
 
+EQ_TIPOS = ["bright", "warm", "dark", "crisp", "hollow", "nasal"]
+def aplicar_eq(wave, eq_type, intensity=0.5):
+    """Aplica EQ sutil al array de audio"""
+    if eq_type == "bright":
+        lp = np.zeros(len(wave))
+        coef = 0.6
+        lp[0] = wave[0]
+        for i in range(1, len(wave)):
+            lp[i] = coef * lp[i-1] + (1 - coef) * wave[i]
+        wave = wave + (wave - lp) * intensity * 0.3
+    elif eq_type == "warm":
+        coef = 0.5 + intensity * 0.15
+        out = np.zeros(len(wave))
+        out[0] = wave[0]
+        for i in range(1, len(wave)):
+            out[i] = coef * out[i-1] + (1 - coef) * wave[i]
+        wave = wave * (1 - intensity * 0.4) + out * intensity * 0.4
+    elif eq_type == "dark":
+        coef = 0.5 + intensity * 0.2
+        out = np.zeros(len(wave))
+        out[0] = wave[0]
+        for i in range(1, len(wave)):
+            out[i] = coef * out[i-1] + (1 - coef) * wave[i]
+        wave = wave * (1 - intensity * 0.5) + out * intensity * 0.5
+    elif eq_type == "crisp":
+        diff = np.zeros(len(wave))
+        diff[1:] = wave[1:] - wave[:-1]
+        wave = wave + diff * intensity * 1.5
+    elif eq_type == "hollow":
+        lp = np.zeros(len(wave))
+        coef = 0.75
+        lp[0] = wave[0]
+        for i in range(1, len(wave)):
+            lp[i] = coef * lp[i-1] + (1 - coef) * wave[i]
+        hp = wave - lp
+        wave = lp * 0.7 + hp * 0.9
+    elif eq_type == "nasal":
+        freq_res = 1000 + intensity * 1500
+        coef = freq_res / SR
+        bp = 0.0
+        lp = 0.0
+        out = np.zeros(len(wave))
+        for i in range(len(wave)):
+            hp = wave[i] - lp - 0.4 * bp
+            bp += coef * hp
+            lp += coef * bp
+            out[i] = wave[i] + bp * intensity * 0.5
+        wave = out
+    return np.clip(wave, -1, 1)
+
 def synth_kick(rng):
     dur = rng.uniform(0.15, 0.4)
     freq_start = rng.uniform(120, 300)
@@ -181,6 +231,8 @@ def synth_tom(rng):
 def sintetizar_kit(rng):
     """Genera un kit de batería completo proceduralmente"""
     print("  Sintetizando kit...")
+    kit_eq = rng.choice(EQ_TIPOS)
+    kit_intensity = rng.uniform(0.15, 0.4)
     kit = {}
     kit["kick"]    = synth_kick(rng)
     kit["snare"]   = synth_snare(rng)
@@ -192,6 +244,13 @@ def sintetizar_kit(rng):
     kit["agogo"]   = synth_agogo(rng)
     kit["tom1"]    = synth_tom(rng)
     kit["tom2"]    = synth_tom(rng)
+    for key in kit:
+        if kit[key]:
+            arr = pygame.sndarray.array(kit[key]).astype(np.float64) / 32767
+            mono = arr[:, 0]
+            mono = aplicar_eq(mono, kit_eq, kit_intensity)
+            kit[key] = np_to_sound(mono)
+    print(f"    EQ: {kit_eq} ({kit_intensity:.1f})")
     return kit
 
 print("Renderizando notas...")
@@ -533,28 +592,115 @@ def generar_params_instrumento(rng, tipo):
 cache_por_instrumento = {}
 cache_largas_por_instrumento = {}
 
+import math
+
+# --- pantalla de carga con burbujas musicales ---
+NOTAS_SIMBOLOS = ["♩", "♪", "♫", "♬", "♯", "♭"]
+burbujas_carga = []
+
+def spawn_burbuja():
+    burbujas_carga.append({
+        "x": random.uniform(30, ANCHO - 30),
+        "y": ALTO + 10,
+        "dx": random.uniform(-0.3, 0.3),
+        "dy": random.uniform(-1.5, -0.5),
+        "wobble": random.uniform(0.5, 2.0),
+        "wobble_speed": random.uniform(1.5, 4.0),
+        "sym": random.choice(NOTAS_SIMBOLOS),
+        "size": random.choice([14, 18, 24, 30]),
+        "alpha": random.randint(80, 200),
+        "t": random.uniform(0, 6.28),
+    })
+
+def dibujar_pantalla_carga(progreso, texto_inst, total_inst, inst_actual):
+    pantalla.fill(NEGRO)
+
+    # actualizar burbujas
+    for b in burbujas_carga:
+        b["t"] += 0.05
+        b["x"] += b["dx"] + math.sin(b["t"] * b["wobble_speed"]) * b["wobble"]
+        b["y"] += b["dy"]
+        if b["y"] < -40:
+            b["y"] = ALTO + 10
+            b["x"] = random.uniform(30, ANCHO - 30)
+    if random.random() < 0.3:
+        spawn_burbuja()
+    burbujas_carga[:] = [b for b in burbujas_carga if b["y"] > -50]
+
+    # dibujar burbujas
+    for b in burbujas_carga:
+        pct_y = 1.0 - max(0, min(1, (ALTO - b["y"]) / ALTO))
+        alpha = int(b["alpha"] * (0.3 + 0.7 * pct_y))
+        color = (alpha, alpha, alpha)
+        f = pygame.font.SysFont("courier", b["size"], bold=True)
+        txt = f.render(b["sym"], True, color)
+        pantalla.blit(txt, (int(b["x"]) - txt.get_width() // 2, int(b["y"])))
+
+    # titulo
+    titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 120))
+
+    # texto cargando
+    carg = fuente.render("CARGANDO...", True, GRIS_MED)
+    pantalla.blit(carg, (ANCHO // 2 - carg.get_width() // 2, 220))
+
+    # instrumento actual
+    inst_txt = fuente.render(texto_inst, True, BLANCO)
+    pantalla.blit(inst_txt, (ANCHO // 2 - inst_txt.get_width() // 2, 270))
+
+    # progreso texto
+    prog_txt = fuente_chica.render(f"{inst_actual}/{total_inst}", True, GRIS)
+    pantalla.blit(prog_txt, (ANCHO // 2 - prog_txt.get_width() // 2, 310))
+
+    # barra de progreso
+    barra_w = 300
+    barra_x = ANCHO // 2 - barra_w // 2
+    barra_y = 340
+    pygame.draw.rect(pantalla, GRIS, (barra_x, barra_y, barra_w, 16))
+    bloques = int(barra_w * progreso) // 8
+    for b in range(bloques):
+        pygame.draw.rect(pantalla, BLANCO, (barra_x + b * 8 + 1, barra_y + 2, 6, 12))
+    pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 16), 2)
+
+    pygame.display.flip()
+    # procesar eventos para que no se congele
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
+            pygame.quit()
+            exit()
+
+total_instrumentos = len(INSTRUMENTOS_JUGADOR)
+inst_idx = 0
+
 for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
+    inst_idx += 1
+    dibujar_pantalla_carga(inst_idx / total_instrumentos, nombre, total_instrumentos, inst_idx)
     print(f"  {nombre}...")
     inst_rng = random.Random(hash(nombre))
     params = generar_params_instrumento(inst_rng, tipo)
+    inst_eq = inst_rng.choice(EQ_TIPOS)
+    inst_eq_int = inst_rng.uniform(0.1, 0.35)
     c_cortas = {}
     c_largas = {}
     for midi in range(36, 96):
         freq = midi_a_freq(midi)
-        c_cortas[midi] = synth_nota(tipo, freq, 0.3, params)
+        snd = synth_nota(tipo, freq, 0.3, params)
+        arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
+        c_cortas[midi] = np_to_sound(aplicar_eq(arr[:, 0], inst_eq, inst_eq_int))
         params_hold = dict(params)
         params_hold["vibrato"] = params.get("vibrato", 0) + 0.4
         params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
-        c_largas[midi] = synth_nota(tipo, freq, 2.0, params_hold)
+        snd_l = synth_nota(tipo, freq, 2.0, params_hold)
+        arr_l = pygame.sndarray.array(snd_l).astype(np.float64) / 32767
+        c_largas[midi] = np_to_sound(aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int))
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
+    print(f"    EQ: {inst_eq} ({inst_eq_int:.1f})")
 
 cache_notas = cache_por_instrumento["SQUARE"]
 cache_notas_largas = cache_largas_por_instrumento["SQUARE"]
 
 print("Notas OK")
-
-import math
 
 canal_hold = {}
 particulas = []
@@ -631,6 +777,11 @@ def dibujar_particulas():
         pantalla.blit(txt, (int(t["x"]) - txt.get_width() // 2 + shake_dx, int(t["y"]) + shake_dy))
 def nota_midi(tonica, escala, grado):
     return tonica + escala[grado % len(escala)]
+
+NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+def midi_a_nombre(midi):
+    return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
 
 # --- leaderboard ---
 LEADERBOARD_FILE = "F:\\VIDEOGAMEEE\\leaderboard.json"
@@ -1103,8 +1254,13 @@ def dibujar_juego(partida, ahora):
         x = i * ancho_col + sx
         if i in teclas_sostenidas:
             pygame.draw.rect(pantalla, GRIS, (x + 2, ZONA_Y + 2 + sy, ancho_col - 4, 50))
-        label = fuente_chica.render(LABELS[i], True, BLANCO if i in teclas_sostenidas else GRIS_MED)
-        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 18 + sy))
+        col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
+        label = fuente_chica.render(LABELS[i], True, col_activa)
+        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 10 + sy))
+        if i < len(partida["cancion"]["notas_columnas"]):
+            nota_name = midi_a_nombre(partida["cancion"]["notas_columnas"][i])
+            nota_txt = fuente_chica.render(nota_name, True, col_activa)
+            pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, ZONA_Y + 28 + sy))
 
     for grupo in partida["notas_cayendo"]:
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
