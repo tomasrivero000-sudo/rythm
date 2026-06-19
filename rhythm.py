@@ -739,24 +739,19 @@ def dibujar_carga_seed(seed):
             pygame.quit()
             exit()
 
-total_instrumentos = len(INSTRUMENTOS_JUGADOR)
-inst_idx = 0
-total_notas = total_instrumentos * 60  # 60 notas midi por instrumento
-nota_global = 0
-
-for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
-    inst_idx += 1
-    print(f"  {nombre}...")
+def renderizar_instrumento(nombre, tipo, dibujar_progreso=False):
+    """Renderiza un instrumento completo (60 notas x 2 duraciones)"""
     inst_rng = random.Random(hash(nombre))
     params = generar_params_instrumento(inst_rng, tipo)
     inst_eq = inst_rng.choice(EQ_TIPOS)
     inst_eq_int = inst_rng.uniform(0.1, 0.35)
     c_cortas = {}
     c_largas = {}
+    idx = 0
     for midi in range(36, 96):
-        nota_global += 1
-        if midi % 5 == 0:
-            dibujar_pantalla_carga(nota_global / total_notas, nombre, total_instrumentos, inst_idx)
+        idx += 1
+        if dibujar_progreso and midi % 4 == 0:
+            dibujar_carga_seed_inst(idx / 60, nombre)
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
@@ -769,7 +764,49 @@ for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
         c_largas[midi] = np_to_sound(aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int))
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
-    print(f"    EQ: {inst_eq} ({inst_eq_int:.1f})")
+    print(f"  {nombre} OK (EQ: {inst_eq} {inst_eq_int:.1f})")
+
+def dibujar_carga_seed_inst(progreso, nombre):
+    """Pantalla de carga mientras se renderiza el instrumento de la seed"""
+    pantalla.fill(NEGRO)
+    for _ in range(3):
+        if random.random() < 0.6:
+            spawn_burbuja()
+    for b in burbujas_carga:
+        b["t"] += 0.06
+        b["x"] += b["dx"] + math.sin(b["t"] * b["wobble_speed"]) * b["wobble"]
+        b["y"] += b["dy"]
+    burbujas_carga[:] = [b for b in burbujas_carga if b["y"] > -50]
+    for b in burbujas_carga:
+        pct_y = max(0, min(1, b["y"] / ALTO))
+        alpha = int(b["alpha"] * (0.2 + 0.8 * pct_y))
+        color = (min(255, alpha), min(255, alpha), min(255, alpha))
+        dibujar_nota_musical(pantalla, b["x"], b["y"], b["size"], color)
+    titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 120))
+    gen_txt = fuente.render("GENERANDO SEED...", True, GRIS_MED)
+    pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 230))
+    inst_txt = fuente.render(nombre, True, BLANCO)
+    pantalla.blit(inst_txt, (ANCHO // 2 - inst_txt.get_width() // 2, 270))
+    barra_w = 300
+    barra_x = ANCHO // 2 - barra_w // 2
+    barra_y = 330
+    pygame.draw.rect(pantalla, GRIS, (barra_x, barra_y, barra_w, 16))
+    bloques = int(barra_w * progreso) // 8
+    for bl in range(bloques):
+        pygame.draw.rect(pantalla, BLANCO, (barra_x + bl * 8 + 1, barra_y + 2, 6, 12))
+    pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 16), 2)
+    pygame.display.flip()
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
+            pygame.quit()
+            exit()
+
+# carga inicial: solo SQUARE para arrancar rápido
+print("Carga inicial...")
+dibujar_pantalla_carga(0.5, "SQUARE", 1, 1)
+renderizar_instrumento("SQUARE", "square")
+dibujar_pantalla_carga(1.0, "SQUARE", 1, 1)
 
 cache_notas = cache_por_instrumento["SQUARE"]
 cache_notas_largas = cache_largas_por_instrumento["SQUARE"]
@@ -1227,51 +1264,16 @@ def generar_cancion(seed, dif):
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
                 })
 
-    # elegir un estilo de desenlace al azar
-    estilo_des = rng.choice(["ascenso", "descenso", "acorde_final", "eco", "cascada"])
-    pat_des_opciones = [
-        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
-    ]
-    pat_des = rng.choice(pat_des_opciones)
-
+    pat_des = [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0]
     for c in range(C_DESENLACE):
         for s in range(16):
             if pat_des[s] == 0:
                 continue
-            t        = t_nudo_fin + c * 4 * beat + s * paso16
+            t        = t_nudo_fin + c * 4 * beat + (s // 4) * beat
             progreso = (c * 16 + s) / (C_DESENLACE * 16)
-
-            if estilo_des == "ascenso":
-                col = min(int(progreso * num_columnas), num_columnas - 1)
-                midi = notas_columnas[col] + 12
-            elif estilo_des == "descenso":
-                col = max(0, num_columnas - 1 - int(progreso * num_columnas))
-                midi = notas_columnas[col] + 12
-            elif estilo_des == "acorde_final":
-                # ultima nota es un acorde grande, resto bajan
-                if c == C_DESENLACE - 1 and s == 0:
-                    cols_ac = [0, num_columnas // 2, num_columnas - 1]
-                    notas_jugador.append({
-                        "cols": cols_ac,
-                        "midis": [notas_columnas[cx] + 12 for cx in cols_ac],
-                        "tiempo": t, "es_acorde": True, "parte": "desenlace",
-                        "hold": 4 * beat,
-                    })
-                    continue
-                col = max(0, num_columnas - 1 - int(progreso * num_columnas))
-                midi = notas_columnas[col] + 12
-            elif estilo_des == "eco":
-                # alterna entre tonica y notas altas
-                col = 0 if (c * 16 + s) % 8 < 4 else num_columnas - 1
-                midi = notas_columnas[col] + 12
-            else:  # cascada
-                col = (c * 4 + s // 4) % num_columnas
-                midi = notas_columnas[col] + 12
-
-            es_hold  = rng.random() < 0.6
+            col      = min(int(progreso * num_columnas), num_columnas - 1)
+            midi     = notas_columnas[col] + 12
+            es_hold  = rng.random() < 0.7
             hold_dur = rng.choice([2, 3, 4]) * beat if es_hold else 0
             notas_jugador.append({
                 "cols": [col], "midis": [midi],
@@ -1308,8 +1310,13 @@ def iniciar_partida(seed):
     global cache_notas, cache_notas_largas
     dif     = get_dificultad(seed)
     cancion = generar_cancion(int(seed * 23819), dif)
-    cache_notas = cache_por_instrumento[cancion["instrumento"]]
-    cache_notas_largas = cache_largas_por_instrumento[cancion["instrumento"]]
+    inst = cancion["instrumento"]
+    # renderizar el instrumento si no está en cache
+    if inst not in cache_por_instrumento:
+        tipo = INSTRUMENTOS_JUGADOR[inst]
+        renderizar_instrumento(inst, tipo, dibujar_progreso=True)
+    cache_notas = cache_por_instrumento[inst]
+    cache_notas_largas = cache_largas_por_instrumento[inst]
     return {
         "seed":           seed,
         "dificultad":     dif,
@@ -1638,8 +1645,31 @@ while corriendo:
                         teclas_sostenidas.add(col)
                         midi_fijo = partida["cancion"]["notas_columnas"][col]
 
-                        if midi_fijo in cache_notas:
-                            cache_notas[midi_fijo].play()
+                        # buscar la nota objetivo más cercana en esta columna
+                        ahora_rel = ahora_ms - partida["inicio"]
+                        midi_a_tocar = midi_fijo
+                        mejor_dist = 99999
+                        for g in partida["notas_cayendo"]:
+                            if col in g["cols"]:
+                                d = abs(g["tiempo_ms"] - ahora_rel)
+                                if d < mejor_dist:
+                                    mejor_dist = d
+                                    idx_col = g["cols"].index(col)
+                                    if idx_col < len(g.get("midis", [])):
+                                        midi_a_tocar = g["midis"][idx_col]
+
+                        # volumen segun cercania: cerca del beat suena pleno, lejos mas suave
+                        if mejor_dist < 80:
+                            vol_nota = 1.0
+                        elif mejor_dist < 200:
+                            vol_nota = 0.85
+                        else:
+                            vol_nota = 0.6
+
+                        snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
+                        if snd_tocar:
+                            snd_tocar.set_volume(vol_nota)
+                            snd_tocar.play()
 
                         for grupo in partida["notas_cayendo"]:
                             if col in grupo["cols"]:
