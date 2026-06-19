@@ -1622,9 +1622,11 @@ def generar_cancion(seed, dif):
     else:
         instrumento = rng.choice(list(INSTRUMENTOS_JUGADOR.keys()))
 
-    C_INTRO     = 4
-    C_NUDO      = 24
-    C_DESENLACE = 4
+    # --- CAPA 1: estructura variable por seed ---
+    C_INTRO     = rng.choice([2, 4, 4, 6])
+    num_reps    = rng.choice([4, 5, 6, 6, 7, 8])   # repeticiones de 4 compases en el nudo
+    C_NUDO      = num_reps * 4
+    C_DESENLACE = rng.choice([2, 4, 4, 6])
     t_intro_fin     = C_INTRO * 4 * beat
     t_nudo_fin      = t_intro_fin + C_NUDO * 4 * beat
     t_desenlace_fin = t_nudo_fin + C_DESENLACE * 4 * beat
@@ -1746,23 +1748,43 @@ def generar_cancion(seed, dif):
     motivos_c = [escalar_frase(rng.choice(frases_medio))]
     bloque_c = crear_bloque(motivos_c, complejo=True)
 
-    for rep in range(6):
-        if rep < 2:
-            bloque = bloque_a
-        elif rep < 4:
-            bloque = bloque_b
+    # bloques adicionales para mas variedad estructural
+    bloques_disponibles = [bloque_a, bloque_b, bloque_c]
+    # plan de bloques: que seccion usa cada repeticion (varia por seed)
+    plan_bloques = []
+    for rep in range(num_reps):
+        if rep < num_reps // 3:
+            plan_bloques.append(0)   # A
+        elif rep < 2 * num_reps // 3:
+            plan_bloques.append(1)   # B
         else:
-            bloque = bloque_c
+            plan_bloques.append(2)   # C
+    # a veces intercambia algun bloque para romper la simetria
+    if num_reps >= 5 and rng.random() < 0.5:
+        idx_swap = rng.randint(1, num_reps - 2)
+        plan_bloques[idx_swap] = rng.randint(0, 2)
+
+    # CAPA 2: preparar mutacion de timbre (se decide antes del loop)
+    mut_activa = rng.random() < 0.6
+    mut_octava = rng.choice([-12, 0, 12])
+    mut_desde = rng.randint(num_reps // 2, max(num_reps // 2, num_reps - 1))
+
+    for rep in range(num_reps):
+        bloque = bloques_disponibles[plan_bloques[rep]]
+        # CAPA 2: offset de octava si la mutacion esta activa en esta rep
+        oct_off = mut_octava if (mut_activa and rep >= mut_desde) else 0
+        # CAPA 4: intensidad de adornos crece con la repeticion
+        prob_adorno = 0.1 + (rep / max(1, num_reps)) * 0.35
         for c in range(4):
             compas_real = rep * 4 + c
             compas = bloque[c]
             for s in range(16):
                 if compas[s] is None:
                     continue
-                t   = t_intro_fin + compas_real * 4 * beat + (s // 4) * beat
+                t   = t_intro_fin + compas_real * 4 * beat + s * paso16
                 col = compas[s]["col"]
                 hd  = compas[s]["hold"]
-                segunda_mitad = rep >= 3
+                segunda_mitad = rep >= num_reps // 2
                 if (usar_acordes or segunda_mitad) and s == 0 and rng.random() < prob_acorde:
                     grado   = progresion[compas_real % len(progresion)]
                     cols_ac = []
@@ -1773,14 +1795,22 @@ def generar_cancion(seed, dif):
                     if len(cols_ac) >= 2:
                         notas_jugador.append({
                             "cols": cols_ac,
-                            "midis": [notas_columnas[cx] for cx in cols_ac],
+                            "midis": [notas_columnas[cx] + oct_off for cx in cols_ac],
                             "tiempo": t, "es_acorde": True, "parte": "nudo", "hold": 0,
                         })
                         continue
                 notas_jugador.append({
-                    "cols": [col], "midis": [notas_columnas[col]],
+                    "cols": [col], "midis": [notas_columnas[col] + oct_off],
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
                 })
+                # CAPA 4: adorno (nota de paso) entre esta nota y la siguiente
+                if hd == 0 and s % 4 == 0 and rng.random() < prob_adorno:
+                    col_adorno = (col + rng.choice([-1, 1, 2])) % num_columnas
+                    t_adorno = t + paso16 * 2
+                    notas_jugador.append({
+                        "cols": [col_adorno], "midis": [notas_columnas[col_adorno] + oct_off],
+                        "tiempo": t_adorno, "es_acorde": False, "parte": "nudo", "hold": 0,
+                    })
 
     # --- desenlace con estilos variados ---
     estilo_des = rng.choice([
@@ -1901,6 +1931,25 @@ def generar_cancion(seed, dif):
         "ratio": rng.uniform(0.3, 0.8), # parametro para espiro
     }
 
+    # --- CAPA 3: eventos sorpresa en vivo ---
+    # se disparan en momentos del nudo, elegidos por la seed
+    eventos = []
+    tipos_evento = ["silencio_drums", "solo_drums", "stutter", "boost_bajo", "freeze_mel"]
+    n_eventos = rng.choice([0, 1, 1, 2, 2, 3])
+    momentos_posibles = list(range(2, num_reps - 1))
+    rng.shuffle(momentos_posibles)
+    for k in range(min(n_eventos, len(momentos_posibles))):
+        rep_ev = momentos_posibles[k]
+        t_ev = t_intro_fin + rep_ev * 4 * 4 * beat
+        eventos.append({
+            "tiempo": t_ev,
+            "tipo": rng.choice(tipos_evento),
+            "dur": 4 * beat,  # dura un compas
+        })
+    eventos.sort(key=lambda e: e["tiempo"])
+
+    # --- CAPA 2: mutacion de timbre ya aplicada a las notas del nudo ---
+
     return {
         "bpm":            BPM,
         "beat":           beat,
@@ -1914,6 +1963,7 @@ def generar_cancion(seed, dif):
         "instrumento":    instrumento,
         "notas_columnas": notas_columnas,
         "lissajous":      lissajous,
+        "eventos":        eventos,
         "estructura": {
             "intro_fin":     t_intro_fin,
             "nudo_fin":      t_nudo_fin,
@@ -1983,27 +2033,40 @@ def tick_background(partida, ahora):
         "clave": (1.0, 0.7), "agogo": (1.0, 0.65),
         "crash": (0.9, 0.9), "tom1": (1.0, 0.8), "tom2": (0.8, 1.0),
     }
+    # CAPA 3: determinar si hay un evento activo ahora
+    evento_activo = None
+    for ev in c.get("eventos", []):
+        if ev["tiempo"] <= ahora < ev["tiempo"] + ev["dur"]:
+            evento_activo = ev["tipo"]
+            break
+    partida["evento_activo"] = evento_activo
+
     while partida["indice_perc"] < len(c["percusion"]) and ahora >= c["percusion"][partida["indice_perc"]]["tiempo"]:
         p = c["percusion"][partida["indice_perc"]]
         sample = kit.get(p["sample"])
-        if sample:
-            vol = min(1.0, p["vol"] * 1.2) * config["volumen"]
+        # silencio_drums: saltear toda la percusion en ese tramo
+        saltar = (evento_activo == "silencio_drums")
+        # solo_drums: la percusion suena mas fuerte
+        boost = 1.6 if evento_activo == "solo_drums" else 1.2
+        if sample and not saltar:
+            vol = min(1.0, p["vol"] * boost) * config["volumen"]
             gl, gr = pan_perc.get(p["sample"], (1.0, 1.0))
             ch = sample.play()
             if ch:
                 ch.set_volume(vol * gl, vol * gr)
         partida["indice_perc"] += 1
 
-    # reproducir linea de bajo
+    # reproducir linea de bajo (boost_bajo lo sube)
     bajo = c["bajo"]["eventos"]
     cache_bajo = c.get("cache_bajo", {})
+    vol_bajo = 1.5 if evento_activo == "boost_bajo" else 1.0
     while partida["indice_bajo"] < len(bajo) and ahora >= bajo[partida["indice_bajo"]]["tiempo"]:
         ev = bajo[partida["indice_bajo"]]
         snd_b = cache_bajo.get(ev["midi"])
         if snd_b:
             ch_b = snd_b.play()
             if ch_b:
-                ch_b.set_volume(config["volumen"])
+                ch_b.set_volume(min(1.0, config["volumen"] * vol_bajo))
         partida["indice_bajo"] += 1
 
 def get_parte(partida, ahora):
@@ -2206,6 +2269,18 @@ def dibujar_juego(partida, ahora):
     pantalla.blit(dif_txt, (10, 10))
     parte_txt = fuente_chica.render(parte, True, GRIS)
     pantalla.blit(parte_txt, (10, 28))
+    # CAPA 3: mostrar evento activo
+    ev_act = partida.get("evento_activo")
+    if ev_act:
+        nombres_ev = {
+            "silencio_drums": "! SILENCIO !",
+            "solo_drums": "! SOLO DRUMS !",
+            "stutter": "! STUTTER !",
+            "boost_bajo": "! BASS DROP !",
+            "freeze_mel": "! FREEZE !",
+        }
+        ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
+        pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
     info = fuente_chica.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
     pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
