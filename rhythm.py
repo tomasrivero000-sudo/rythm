@@ -331,6 +331,26 @@ INSTRUMENTOS_JUGADOR = {
     "HOOVER":     "hoover",
     "BELL FM":    "bell_fm",
     "GROWL":      "growl",
+    "SAW STACK":  "saw_stack",
+    "FM 3OP":     "fm_3op",
+    "RING MOD":   "ring_mod",
+    "SYNC LEAD":  "sync_lead",
+    "PLUCK SOFT": "pluck_soft",
+    "VOX PAD":    "vox_pad",
+    "DIST GTR":   "dist_gtr",
+    "WAVEFOLD":   "wavefold",
+    "PHASE PAD":  "phase_pad",
+    "FM BRASS":   "fm_brass",
+    "GLASS HARM": "glass_harm",
+    "SUB PLUCK":  "sub_pluck",
+    "NOISE PITCH":"noise_pitch",
+    "ORGAN FULL": "organ_full",
+}
+
+# instrumentos raros: baja probabilidad de aparecer
+INSTRUMENTOS_RAROS = {
+    "ALIEN":      "alien",
+    "BROKEN":     "broken",
 }
 
 def midi_a_freq(midi):
@@ -535,6 +555,187 @@ def synth_nota(tipo, freq, duracion, rng_params):
             detune = 1 + (v - 2) * 0.004
             p = 2 * np.pi * freq * detune * t + vib * np.sin(2 * np.pi * spd * t)
             wave += np.sin(p) * 0.25
+    elif tipo == "pwm_lead":
+        lfo = 0.5 + 0.35 * np.sin(2 * np.pi * rng_params.get("pwm_rate", 2) * t)
+        fase_norm = (t * freq) % 1.0
+        wave = np.where(fase_norm < lfo, 1.0, -1.0)
+        wave = wave * 0.7 + np.sin(phase) * 0.3
+    elif tipo == "fm_ep":
+        mod_env = np.exp(-t * rng_params.get("fm_decay", 4))
+        ratio = rng_params.get("fm_ratio", 2.0)
+        idx = rng_params.get("fm_index", 3.0)
+        op2 = np.sin(2 * np.pi * freq * ratio * t) * idx * mod_env
+        wave = np.sin(phase + op2)
+        wave = wave * 0.8 + np.sin(phase) * 0.2
+    elif tipo == "formant":
+        # vocal con formantes vectorizado (filtros pasa-banda de un polo)
+        carrier = 2.0 * (t * freq % 1) - 1.0
+        vocal = rng_params.get("vocal", "ah")
+        formantes = {
+            "ah": [(700, 1.0), (1220, 0.5), (2600, 0.25)],
+            "ee": [(300, 1.0), (2300, 0.6), (3000, 0.25)],
+            "oh": [(500, 1.0), (1000, 0.4), (2400, 0.2)],
+        }.get(vocal, [(700, 1.0), (1220, 0.5), (2600, 0.25)])
+        out = np.zeros(n)
+        for fc, amp in formantes:
+            coef = math.exp(-2 * math.pi * (fc * 0.15) / SR)
+            sin_w = math.sin(2 * math.pi * fc / SR)
+            cos_w = math.cos(2 * math.pi * fc / SR)
+            # resonador de 2 polos vectorizado via lfilter manual ligero
+            b0 = (1 - coef)
+            y = np.zeros(n)
+            y1 = 0.0; y2 = 0.0
+            a1 = -2 * coef * cos_w
+            a2 = coef * coef
+            for k in range(n):
+                yk = b0 * carrier[k] - a1 * y1 - a2 * y2
+                y[k] = yk
+                y2 = y1; y1 = yk
+            out += y * amp
+        wave = out * 0.4
+    elif tipo == "hoover":
+        sweep = 1 + 0.06 * np.exp(-t * 8)
+        wave = np.zeros(n)
+        for d in [-0.4, -0.1, 0, 0.1, 0.4]:
+            f = freq * sweep * (1 + d * 0.012)
+            wave += (2.0 * (t * f % 1) - 1.0) * 0.2
+    elif tipo == "bell_fm":
+        ratio = rng_params.get("bell_ratio", 1.414)
+        idx = rng_params.get("bell_index", 5.0)
+        mod_env = np.exp(-t * 3)
+        wave = np.sin(phase + idx * mod_env * np.sin(2 * np.pi * freq * ratio * t))
+    elif tipo == "growl":
+        lfo = 0.5 + 0.5 * np.sin(2 * np.pi * rng_params.get("growl_rate", 7) * t)
+        idx = rng_params.get("growl_index", 4) * lfo
+        wave = np.sin(phase + idx * np.sin(2 * np.pi * freq * 1.0 * t))
+        wave = np.tanh(wave * 1.5)
+    elif tipo == "saw_stack":
+        # 7 saws apilados con detune variable: muro de sonido
+        wave = np.zeros(n)
+        spread = rng_params.get("spread", 0.015)
+        for k in range(7):
+            d = (k - 3) / 3.0
+            f = freq * (1 + d * spread)
+            wave += (2.0 * (t * f % 1) - 1.0) * (0.16 - abs(d) * 0.03)
+    elif tipo == "fm_3op":
+        # FM de 3 operadores en cascada
+        r2 = rng_params.get("r2", 2.0); r3 = rng_params.get("r3", 3.0)
+        i2 = rng_params.get("i2", 2.0); i3 = rng_params.get("i3", 1.5)
+        e2 = np.exp(-t * rng_params.get("d2", 3))
+        e3 = np.exp(-t * rng_params.get("d3", 5))
+        op3 = np.sin(2 * np.pi * freq * r3 * t) * i3 * e3
+        op2 = np.sin(2 * np.pi * freq * r2 * t + op3) * i2 * e2
+        wave = np.sin(phase + op2)
+    elif tipo == "ring_mod":
+        # modulacion en anillo: dos tonos multiplicados
+        rm = rng_params.get("rm_ratio", 1.5)
+        wave = np.sin(phase) * np.sin(2 * np.pi * freq * rm * t)
+        wave = wave * 0.7 + np.sin(phase) * 0.3
+    elif tipo == "sync_lead":
+        # oscilador sincronizado (hard sync): timbre brillante y agresivo
+        slave_ratio = rng_params.get("sync_ratio", 1.5)
+        master_phase = (t * freq) % 1.0
+        slave = (t * freq * slave_ratio) % 1.0
+        # reset del slave cuando el master cicla
+        ciclo = np.floor(t * freq)
+        slave_sync = (t * freq * slave_ratio - ciclo * slave_ratio) % 1.0
+        wave = 2.0 * slave_sync - 1.0
+    elif tipo == "pluck_soft":
+        # cuerda pulsada con cuerpo y armonicos pares
+        np_rng = np.random.RandomState(int(freq * 100) % 999999)
+        wl = max(int(SR / freq), 2)
+        buf = np_rng.uniform(-1, 1, wl).astype(np.float64)
+        ks = np.zeros(n)
+        for k in range(n):
+            idx = k % wl
+            ks[k] = buf[idx]
+            nx = (idx + 1) % wl
+            buf[idx] = (buf[idx] + buf[nx]) * 0.4975
+        wave = ks * 0.7 + np.sin(phase) * 0.3
+    elif tipo == "vox_pad":
+        # pad coral con formantes suaves y muchas voces
+        wave = np.zeros(n)
+        for v in range(6):
+            det = 1 + (v - 2.5) * 0.005
+            vib = 0.15 * np.sin(2 * np.pi * (3 + v * 0.5) * t)
+            wave += np.sin(2 * np.pi * freq * det * t + vib) * 0.16
+        # leve enfasis de formante
+        lp = np.zeros(n); coef = 0.5
+        for k in range(1, n):
+            lp[k] = coef * lp[k-1] + (1 - coef) * wave[k]
+        wave = wave * 0.6 + lp * 0.4
+    elif tipo == "dist_gtr":
+        # "guitarra" distorsionada: saw saturado con armonicos
+        raw = 2.0 * (t * freq % 1) - 1.0
+        raw += np.sin(phase * 2) * 0.3
+        wave = np.tanh(raw * rng_params.get("drive", 3))
+    elif tipo == "wavefold":
+        # wavefolding: sine doblada sobre si misma, timbre rico
+        amt = rng_params.get("fold", 2.5)
+        x = np.sin(phase) * amt
+        wave = np.sin(x * np.pi / 2)
+    elif tipo == "phase_pad":
+        # pad con phasing: dos capas con corrimiento de fase lento
+        ph2 = phase + 2 * np.sin(2 * np.pi * 0.3 * t)
+        wave = (np.sin(phase) + np.sin(ph2)) * 0.5
+        wave += np.sin(phase * 2) * 0.15
+    elif tipo == "fm_brass":
+        # metales FM: ataque con barrido de indice
+        idx_env = (1 - np.exp(-t * 20)) * np.exp(-t * 1.5)
+        idx = rng_params.get("brass_index", 4) * idx_env
+        wave = np.sin(phase + idx * np.sin(phase))
+    elif tipo == "glass_harm":
+        # armonica de cristal: armonicos impares altos
+        wave = np.zeros(n)
+        for h in [1, 3, 5, 7, 9]:
+            wave += np.sin(phase * h) * (1.0 / h) * np.exp(-t * h * 0.5)
+        wave *= 0.6
+    elif tipo == "sub_pluck":
+        # pluck sub-grave con click: bajo percusivo moderno
+        click = np.exp(-t * 60) * np.sin(2 * np.pi * freq * 4 * t) * 0.4
+        body = np.sin(phase) + np.sin(2 * np.pi * freq * 0.5 * t) * 0.5
+        wave = body * np.exp(-t * 2) + click
+    elif tipo == "noise_pitch":
+        # tono de ruido filtrado con pitch: a medio camino entre tono y percusion
+        np_rng = np.random.RandomState(int(freq) % 999999)
+        raw = np_rng.uniform(-1, 1, n)
+        res = 0.96
+        center = freq / SR
+        wave = np.zeros(n)
+        bp = 0.0; lp = 0.0
+        for k in range(n):
+            hp = raw[k] - lp - res * bp
+            bp += center * hp
+            lp += center * bp
+            wave[k] = bp
+        wave = wave * 0.6 + np.sin(phase) * 0.2
+    elif tipo == "organ_full":
+        # organo completo estilo drawbars: muchos armonicos + click de tecla
+        wave = np.zeros(n)
+        for h, a in [(1, 0.8), (2, 0.6), (3, 0.4), (4, 0.3), (6, 0.2), (8, 0.15)]:
+            wave += np.sin(phase * h) * a
+        wave /= 2.5
+        click = np.exp(-t * 100) * 0.3
+        wave += click
+    # --- instrumentos raros (baja probabilidad) ---
+    elif tipo == "alien":
+        # barrido inarmonico con modulacion caotica
+        m1 = np.sin(2 * np.pi * freq * 1.37 * t) * 3 * np.exp(-t * 2)
+        m2 = np.sin(2 * np.pi * freq * 0.51 * t + m1) * 4
+        wave = np.sin(phase + m2)
+        # tremolo irregular
+        wave *= 0.6 + 0.4 * np.sin(2 * np.pi * 11 * t) * np.sin(2 * np.pi * 3.3 * t)
+    elif tipo == "broken":
+        # sonido "roto": bitcrush extremo + sample&hold de pitch
+        base = np.sin(phase) + (2.0 * (t * freq % 1) - 1.0) * 0.5
+        # sample and hold
+        sh_rate = max(1, int(SR / rng_params.get("sh_freq", 800)))
+        held = base.copy()
+        for k in range(0, n, sh_rate):
+            held[k:k+sh_rate] = base[k] if k < n else 0
+        bits = 3
+        levels = 2 ** bits
+        wave = np.round(held * levels / 2) / (levels / 2)
     else:
         wave = np.sin(phase)
 
@@ -550,6 +751,14 @@ def synth_nota(tipo, freq, duracion, rng_params):
         "vibraphone": 0.6, "sitar": 0.5, "kalimba": 0.65,
         "trumpet": 0.55, "harp": 0.65, "synthbass": 0.5,
         "bellpad": 0.55, "detune": 0.5,
+        "pwm_lead": 0.5, "fm_ep": 0.7, "formant": 0.55,
+        "hoover": 0.4, "bell_fm": 0.6, "growl": 0.5,
+        "saw_stack": 0.4, "fm_3op": 0.6, "ring_mod": 0.55,
+        "sync_lead": 0.5, "pluck_soft": 0.7, "vox_pad": 0.55,
+        "dist_gtr": 0.45, "wavefold": 0.55, "phase_pad": 0.6,
+        "fm_brass": 0.6, "glass_harm": 0.6, "sub_pluck": 0.6,
+        "noise_pitch": 0.5, "organ_full": 0.55,
+        "alien": 0.5, "broken": 0.45,
     }
     
     return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
@@ -723,8 +932,84 @@ def generar_params_instrumento(rng, tipo):
         params["attack"] = rng.uniform(0.005, 0.02)
         params["decay"] = rng.uniform(3, 7)
         params["sustain"] = rng.uniform(0.4, 0.7)
-        params["detune_amt"] = rng.uniform(0.01, 0.03)    
-    
+        params["detune_amt"] = rng.uniform(0.01, 0.03)
+    elif tipo == "pwm_lead":
+        params["attack"] = rng.uniform(0.005, 0.02); params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.5, 0.8); params["pwm_rate"] = rng.uniform(0.5, 4)
+        params["vibrato"] = rng.uniform(0.1, 0.3); params["vib_speed"] = rng.uniform(4, 6)
+    elif tipo == "fm_ep":
+        params["attack"] = 0.001; params["decay"] = rng.uniform(3, 6)
+        params["sustain"] = rng.uniform(0.2, 0.4); params["fm_decay"] = rng.uniform(3, 7)
+        params["fm_ratio"] = rng.choice([1.0, 2.0, 3.0, 4.0]); params["fm_index"] = rng.uniform(2, 5)
+    elif tipo == "formant":
+        params["attack"] = rng.uniform(0.02, 0.06); params["decay"] = rng.uniform(2, 4)
+        params["sustain"] = rng.uniform(0.6, 0.85); params["vibrato"] = rng.uniform(0.3, 0.6)
+        params["vib_speed"] = rng.uniform(5, 7); params["vocal"] = rng.choice(["ah", "ee", "oh"])
+    elif tipo == "hoover":
+        params["attack"] = rng.uniform(0.005, 0.02); params["decay"] = rng.uniform(3, 6)
+        params["sustain"] = rng.uniform(0.5, 0.8)
+    elif tipo == "bell_fm":
+        params["attack"] = 0.001; params["decay"] = rng.uniform(5, 12)
+        params["sustain"] = rng.uniform(0.0, 0.15); params["bell_ratio"] = rng.choice([1.414, 1.732, 2.236, 2.5])
+        params["bell_index"] = rng.uniform(3, 7)
+    elif tipo == "growl":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 6)
+        params["sustain"] = rng.uniform(0.4, 0.7); params["growl_rate"] = rng.uniform(4, 10)
+        params["growl_index"] = rng.uniform(3, 6)
+    elif tipo == "saw_stack":
+        params["attack"] = rng.uniform(0.005, 0.03); params["decay"] = rng.uniform(3, 8)
+        params["sustain"] = rng.uniform(0.5, 0.8); params["spread"] = rng.uniform(0.008, 0.025)
+    elif tipo == "fm_3op":
+        params["attack"] = 0.001; params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.2, 0.5)
+        params["r2"] = rng.choice([1.0, 2.0, 3.0]); params["r3"] = rng.choice([2.0, 3.0, 5.0])
+        params["i2"] = rng.uniform(1.5, 3); params["i3"] = rng.uniform(1, 2)
+        params["d2"] = rng.uniform(2, 4); params["d3"] = rng.uniform(4, 7)
+    elif tipo == "ring_mod":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.3, 0.6); params["rm_ratio"] = rng.uniform(1.2, 2.5)
+    elif tipo == "sync_lead":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 6)
+        params["sustain"] = rng.uniform(0.4, 0.7); params["sync_ratio"] = rng.uniform(1.5, 3.0)
+        params["vibrato"] = rng.uniform(0.1, 0.3); params["vib_speed"] = rng.uniform(4, 6)
+    elif tipo == "pluck_soft":
+        params["attack"] = 0.001; params["decay"] = rng.uniform(3, 7); params["sustain"] = 0.0
+    elif tipo == "vox_pad":
+        params["attack"] = rng.uniform(0.05, 0.15); params["decay"] = rng.uniform(1, 3)
+        params["sustain"] = rng.uniform(0.7, 0.9); params["vibrato"] = rng.uniform(0.1, 0.3)
+        params["vib_speed"] = rng.uniform(3, 5)
+    elif tipo == "dist_gtr":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.4, 0.7); params["drive"] = rng.uniform(2, 5)
+    elif tipo == "wavefold":
+        params["attack"] = rng.uniform(0.005, 0.02); params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.4, 0.7); params["fold"] = rng.uniform(1.5, 4)
+    elif tipo == "phase_pad":
+        params["attack"] = rng.uniform(0.05, 0.2); params["decay"] = rng.uniform(1, 3)
+        params["sustain"] = rng.uniform(0.6, 0.9)
+    elif tipo == "fm_brass":
+        params["attack"] = rng.uniform(0.01, 0.04); params["decay"] = rng.uniform(2, 5)
+        params["sustain"] = rng.uniform(0.6, 0.85); params["brass_index"] = rng.uniform(3, 6)
+        params["vibrato"] = rng.uniform(0.1, 0.3); params["vib_speed"] = rng.uniform(4, 6)
+    elif tipo == "glass_harm":
+        params["attack"] = rng.uniform(0.001, 0.005); params["decay"] = rng.uniform(5, 12)
+        params["sustain"] = rng.uniform(0.0, 0.15)
+    elif tipo == "sub_pluck":
+        params["attack"] = 0.001; params["decay"] = rng.uniform(3, 7); params["sustain"] = rng.uniform(0.1, 0.3)
+    elif tipo == "noise_pitch":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 6)
+        params["sustain"] = rng.uniform(0.3, 0.6)
+    elif tipo == "organ_full":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(1, 3)
+        params["sustain"] = rng.uniform(0.7, 0.95); params["vibrato"] = rng.uniform(0.1, 0.3)
+        params["vib_speed"] = rng.uniform(5, 7)
+    elif tipo == "alien":
+        params["attack"] = rng.uniform(0.01, 0.05); params["decay"] = rng.uniform(2, 5)
+        params["sustain"] = rng.uniform(0.3, 0.6)
+    elif tipo == "broken":
+        params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 6)
+        params["sustain"] = rng.uniform(0.3, 0.6); params["sh_freq"] = rng.uniform(400, 1500)
+
     return params
 
 cache_por_instrumento = {}
@@ -1282,7 +1567,11 @@ def generar_cancion(seed, dif):
 
     notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
     kit = elegir_kit(rng)
-    instrumento = rng.choice(list(INSTRUMENTOS_JUGADOR.keys()))
+    # 8% de probabilidad de que toque un instrumento raro
+    if rng.random() < 0.08:
+        instrumento = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
+    else:
+        instrumento = rng.choice(list(INSTRUMENTOS_JUGADOR.keys()))
 
     C_INTRO     = 4
     C_NUDO      = 24
@@ -1582,7 +1871,7 @@ def iniciar_partida(seed):
     inst = cancion["instrumento"]
     # renderizar el instrumento si no está en cache
     if inst not in cache_por_instrumento:
-        tipo = INSTRUMENTOS_JUGADOR[inst]
+        tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
         renderizar_instrumento(inst, tipo, dibujar_progreso=True)
     cache_notas = cache_por_instrumento[inst]
     cache_notas_largas = cache_largas_por_instrumento[inst]
