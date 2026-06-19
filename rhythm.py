@@ -78,6 +78,9 @@ def np_to_sound(samples_mono, vol=0.8):
 EQ_TIPOS = ["bright", "warm", "dark", "crisp", "hollow", "nasal"]
 def aplicar_eq(wave, eq_type, intensity=0.5):
     """Aplica EQ sutil al array de audio"""
+    original_peak = np.max(np.abs(wave))
+    if original_peak == 0:
+        return wave
     if eq_type == "bright":
         lp = np.zeros(len(wave))
         coef = 0.6
@@ -123,6 +126,9 @@ def aplicar_eq(wave, eq_type, intensity=0.5):
             lp += coef * bp
             out[i] = wave[i] + bp * intensity * 0.5
         wave = out
+    peak = np.max(np.abs(wave))
+    if peak > 0:
+        wave = wave / peak * original_peak
     return np.clip(wave, -1, 1)
 
 def synth_kick(rng):
@@ -138,7 +144,7 @@ def synth_kick(rng):
     wave = np.sin(phase) * env
     if drive > 0:
         wave = np.tanh(wave * (1 + drive * 5))
-    return np_to_sound(wave)
+    return np_to_sound(wave, vol=0.9)
 
 def synth_snare(rng):
     dur = rng.uniform(0.1, 0.3)
@@ -150,7 +156,7 @@ def synth_snare(rng):
     noise_env = np.exp(-t * rng.uniform(8, 20))
     np_rng = np.random.RandomState(rng.randint(0, 999999))
     noise = np_rng.uniform(-1, 1, n) * noise_env * 0.7
-    return np_to_sound(tone + noise)
+    return np_to_sound(tone + noise, vol=0.9)
 
 def synth_hihat(rng, abierto=False):
     dur = rng.uniform(0.08, 0.25) if abierto else rng.uniform(0.02, 0.08)
@@ -446,13 +452,13 @@ def synth_nota(tipo, freq, duracion, rng_params):
 
     wave = wave * env * 0.7
     vol_tipo = {
-        "square": 0.35, "saw": 0.35, "chiptune": 0.3,
-        "organ": 0.45, "fm_bell": 0.5,
-        "sine": 0.6, "triangle": 0.55, "pluck": 0.55,
-        "supersaw": 0.3, "acid": 0.4, "bitcrush": 0.35, "lead": 0.35,
-        "wobble": 0.4, "glass": 0.5, "pad": 0.45,
-        "metallic": 0.4, "bass": 0.4, "flute": 0.5,
-        "reso": 0.35, "choir": 0.45,
+        "square": 0.5, "saw": 0.5, "chiptune": 0.45,
+        "organ": 0.6, "fm_bell": 0.65,
+        "sine": 0.75, "triangle": 0.7, "pluck": 0.7,
+        "supersaw": 0.45, "acid": 0.55, "bitcrush": 0.5, "lead": 0.5,
+        "wobble": 0.55, "glass": 0.65, "pad": 0.6,
+        "metallic": 0.55, "bass": 0.55, "flute": 0.65,
+        "reso": 0.5, "choir": 0.6,
     }
     return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
 
@@ -595,46 +601,48 @@ cache_largas_por_instrumento = {}
 import math
 
 # --- pantalla de carga con burbujas musicales ---
-NOTAS_SIMBOLOS = ["♩", "♪", "♫", "♬", "♯", "♭"]
 burbujas_carga = []
+
+def dibujar_nota_musical(surface, x, y, size, color):
+    """Dibuja una nota musical con circulo y palito"""
+    r = max(2, size // 4)
+    pygame.draw.ellipse(surface, color, (int(x) - r, int(y), r * 2, int(r * 1.4)))
+    pygame.draw.line(surface, color, (int(x) + r, int(y) + r // 2), (int(x) + r, int(y) - size), 2)
+    if size > 16:
+        pygame.draw.line(surface, color, (int(x) + r, int(y) - size), (int(x) + r + r, int(y) - size + r), 2)
 
 def spawn_burbuja():
     burbujas_carga.append({
-        "x": random.uniform(30, ANCHO - 30),
-        "y": ALTO + 10,
-        "dx": random.uniform(-0.3, 0.3),
-        "dy": random.uniform(-1.5, -0.5),
-        "wobble": random.uniform(0.5, 2.0),
+        "x": random.uniform(40, ANCHO - 40),
+        "y": float(ALTO + 10),
+        "dx": random.uniform(-0.4, 0.4),
+        "dy": random.uniform(-2.0, -0.6),
+        "wobble": random.uniform(0.8, 2.5),
         "wobble_speed": random.uniform(1.5, 4.0),
-        "sym": random.choice(NOTAS_SIMBOLOS),
-        "size": random.choice([14, 18, 24, 30]),
-        "alpha": random.randint(80, 200),
+        "size": random.choice([12, 16, 22, 28, 34]),
+        "alpha": random.randint(60, 220),
         "t": random.uniform(0, 6.28),
     })
 
 def dibujar_pantalla_carga(progreso, texto_inst, total_inst, inst_actual):
     pantalla.fill(NEGRO)
 
-    # actualizar burbujas
+    # spawn y actualizar burbujas
+    for _ in range(2):
+        if random.random() < 0.4:
+            spawn_burbuja()
     for b in burbujas_carga:
-        b["t"] += 0.05
+        b["t"] += 0.04
         b["x"] += b["dx"] + math.sin(b["t"] * b["wobble_speed"]) * b["wobble"]
         b["y"] += b["dy"]
-        if b["y"] < -40:
-            b["y"] = ALTO + 10
-            b["x"] = random.uniform(30, ANCHO - 30)
-    if random.random() < 0.3:
-        spawn_burbuja()
     burbujas_carga[:] = [b for b in burbujas_carga if b["y"] > -50]
 
-    # dibujar burbujas
+    # dibujar burbujas como notas musicales
     for b in burbujas_carga:
-        pct_y = 1.0 - max(0, min(1, (ALTO - b["y"]) / ALTO))
-        alpha = int(b["alpha"] * (0.3 + 0.7 * pct_y))
-        color = (alpha, alpha, alpha)
-        f = pygame.font.SysFont("courier", b["size"], bold=True)
-        txt = f.render(b["sym"], True, color)
-        pantalla.blit(txt, (int(b["x"]) - txt.get_width() // 2, int(b["y"])))
+        pct_y = max(0, min(1, b["y"] / ALTO))
+        alpha = int(b["alpha"] * (0.2 + 0.8 * pct_y))
+        color = (min(255, alpha), min(255, alpha), min(255, alpha))
+        dibujar_nota_musical(pantalla, b["x"], b["y"], b["size"], color)
 
     # titulo
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
@@ -658,12 +666,11 @@ def dibujar_pantalla_carga(progreso, texto_inst, total_inst, inst_actual):
     barra_y = 340
     pygame.draw.rect(pantalla, GRIS, (barra_x, barra_y, barra_w, 16))
     bloques = int(barra_w * progreso) // 8
-    for b in range(bloques):
-        pygame.draw.rect(pantalla, BLANCO, (barra_x + b * 8 + 1, barra_y + 2, 6, 12))
+    for bl in range(bloques):
+        pygame.draw.rect(pantalla, BLANCO, (barra_x + bl * 8 + 1, barra_y + 2, 6, 12))
     pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 16), 2)
 
     pygame.display.flip()
-    # procesar eventos para que no se congele
     for ev in pygame.event.get():
         if ev.type == pygame.QUIT:
             pygame.quit()
@@ -777,6 +784,10 @@ def dibujar_particulas():
         pantalla.blit(txt, (int(t["x"]) - txt.get_width() // 2 + shake_dx, int(t["y"]) + shake_dy))
 def nota_midi(tonica, escala, grado):
     return tonica + escala[grado % len(escala)]
+
+NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+def midi_a_nombre(midi):
+    return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
 
 NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -1320,6 +1331,59 @@ def dibujar_juego(partida, ahora):
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
 
+    # --- mini teclado de piano ---
+    notas_cols = partida["cancion"]["notas_columnas"]
+    tecl_y = ZONA_Y + 56 + sy
+    tecl_h = ALTO - tecl_y - 4
+    if tecl_h > 8:
+        tecl_h = min(tecl_h, 28)
+        # determinar rango de notas
+        midi_min = min(notas_cols) - 2
+        midi_max = max(notas_cols) + 2
+        # alinear a octava
+        midi_min = (midi_min // 12) * 12
+        midi_max = ((midi_max // 12) + 1) * 12
+        total_notas = midi_max - midi_min
+        # teclas blancas en el rango
+        es_negra = [1, 3, 6, 8, 10]  # C#, D#, F#, G#, A#
+        blancas = [m for m in range(midi_min, midi_max) if (m % 12) not in es_negra]
+        n_blancas = len(blancas)
+        if n_blancas > 0:
+            tw = ANCHO // n_blancas
+            # dibujar teclas blancas
+            for idx, m in enumerate(blancas):
+                kx = idx * tw + sx
+                activa = m in notas_cols
+                presionada = activa and any(
+                    notas_cols[c] == m and c in teclas_sostenidas
+                    for c in range(len(notas_cols))
+                )
+                if presionada:
+                    pygame.draw.rect(pantalla, BLANCO, (kx + 1, tecl_y, tw - 2, tecl_h))
+                elif activa:
+                    pygame.draw.rect(pantalla, GRIS_MED, (kx + 1, tecl_y, tw - 2, tecl_h))
+                else:
+                    pygame.draw.rect(pantalla, GRIS, (kx + 1, tecl_y, tw - 2, tecl_h), 1)
+            # dibujar teclas negras encima
+            for idx, m in enumerate(blancas):
+                if m + 1 < midi_max and (m + 1) % 12 in es_negra:
+                    mn = m + 1
+                    kx = idx * tw + tw // 2 + tw // 4 + sx
+                    bw = tw // 2
+                    bh = tecl_h * 2 // 3
+                    activa = mn in notas_cols
+                    presionada = activa and any(
+                        notas_cols[c] == mn and c in teclas_sostenidas
+                        for c in range(len(notas_cols))
+                    )
+                    if presionada:
+                        pygame.draw.rect(pantalla, BLANCO, (kx, tecl_y, bw, bh))
+                    elif activa:
+                        pygame.draw.rect(pantalla, GRIS_MED, (kx, tecl_y, bw, bh))
+                    else:
+                        pygame.draw.rect(pantalla, NEGRO, (kx, tecl_y, bw, bh))
+                        pygame.draw.rect(pantalla, GRIS, (kx, tecl_y, bw, bh), 1)
+
     hit = partida.get("ultimo_hit")
     if hit and pygame.time.get_ticks() - hit["tiempo"] < 500:
         color = BLANCO if hit["texto"] in ["PERFECTO", "BIEN"] else GRIS_MED
@@ -1476,17 +1540,18 @@ while corriendo:
                                         ancho_col = ANCHO // num_cols
                                         cx = col * ancho_col + ancho_col // 2
                                         if distancia < 30:
-                                            pts = 3
+                                            pts = 5
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 60)
+                                            combo_particulas = min(60 + partida["combo"] * 2, 200)
+                                            crear_explosion(cx, ZONA_Y, combo_particulas)
                                             crear_flash(col, 1.0)
                                             crear_shake(6)
                                         elif distancia < 60:
-                                            pts = 2
+                                            pts = 3
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 35)
+                                            crear_explosion(cx, ZONA_Y, 35 + partida["combo"])
                                             crear_flash(col, 0.6)
                                             crear_shake(3)
                                         elif distancia < 100:
@@ -1503,9 +1568,8 @@ while corriendo:
                                             crear_shake(8)
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
-                                        combo_mult = 1 + partida["combo"] // 10
+                                        combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
-                                            # hold: dar puntos iniciales y empezar hold
                                             if midi_fijo in cache_notas_largas:
                                                 ch = cache_notas_largas[midi_fijo].play()
                                                 if ch:
@@ -1515,23 +1579,28 @@ while corriendo:
                                                 "midi":  midi_fijo,
                                             }
                                             if pts > 0:
-                                                partida["puntos"] += pts * combo_mult
-                                                crear_texto_flotante(cx, ZONA_Y - 20, f"+{pts * combo_mult}", BLANCO)
+                                                total_pts = pts * combo_mult
+                                                partida["puntos"] += total_pts
+                                                txt = f"+{total_pts}"
+                                                if combo_mult > 1:
+                                                    txt += f" x{combo_mult}"
+                                                crear_texto_flotante(cx, ZONA_Y - 20, txt, BLANCO, combo_mult > 2)
                                         else:
-                                            # nota normal
                                             if pts > 0:
                                                 total_pts = pts * len(grupo["cols"]) * combo_mult
                                                 txt_pts = f"+{total_pts}"
                                                 if combo_mult > 1:
                                                     txt_pts += f" x{combo_mult}"
-                                                crear_texto_flotante(cx, ZONA_Y - 20, txt_pts, BLANCO, combo_mult > 1)
+                                                es_grande = combo_mult > 2
+                                                crear_texto_flotante(cx, ZONA_Y - 20, txt_pts, BLANCO, es_grande)
                                                 partida["puntos"] += total_pts
                                             else:
                                                 partida["puntos"] = max(0, partida["puntos"] - 2)
                                                 partida["vida"] = max(0, partida["vida"] - 1)
                                                 crear_texto_flotante(cx, ZONA_Y - 20, "-2", GRIS_MED)
-                                            if partida["combo"] > 0 and partida["combo"] % 10 == 0:
+                                            if partida["combo"] > 0 and partida["combo"] % 5 == 0:
                                                 crear_texto_flotante(ANCHO // 2, ZONA_Y - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
+                                                crear_shake(4)
                                             if grupo["acertadas"] == set(grupo["cols"]):
                                                 partida["notas_cayendo"].remove(grupo)
                                     break
@@ -1547,11 +1616,11 @@ while corriendo:
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
                         # bonus por completar hold
-                        partida["puntos"] += 3
+                        partida["puntos"] += 5
                         num_cols = partida["dificultad"]["columnas"]
                         ancho_col = ANCHO // num_cols
                         cx = col * ancho_col + ancho_col // 2
-                        crear_texto_flotante(cx, ZONA_Y - 40, "+3", BLANCO)
+                        crear_texto_flotante(cx, ZONA_Y - 40, "+5", BLANCO)
                         if grupo in partida["notas_cayendo"]:
                             partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
