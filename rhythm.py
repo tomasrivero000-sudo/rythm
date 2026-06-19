@@ -22,14 +22,13 @@ COLUMNAS = {
     pygame.K_s: 1,
     pygame.K_d: 2,
     pygame.K_f: 3,
-    pygame.K_j: 4,
-    pygame.K_k: 5,
-    pygame.K_l: 6,
-    pygame.K_SEMICOLON: 7,
-    pygame.K_PERIOD: 7,
+    pygame.K_g: 4,
+    pygame.K_h: 5,
+    pygame.K_j: 6,
+    pygame.K_k: 7,
 }
 
-LABELS = ["A", "S", "D", "F", "J", "K", "L", "N"]
+LABELS = ["A", "S", "D", "F", "G", "H", "J", "K"]
 
 ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
@@ -210,6 +209,14 @@ INSTRUMENTOS_JUGADOR = {
     "ACID":      "acid",
     "BITCRUSH":  "bitcrush",
     "LEAD":      "lead",
+    "WOBBLE":    "wobble",
+    "GLASS":     "glass",
+    "PAD":       "pad",
+    "METALLIC":  "metallic",
+    "BASS":      "bass",
+    "FLUTE":     "flute",
+    "RESO":      "reso",
+    "CHOIR":     "choir",
 }
 
 def midi_a_freq(midi):
@@ -314,17 +321,81 @@ def synth_nota(tipo, freq, duracion, rng_params):
         levels = 2 ** bits
         wave = np.round(base * levels / 2) / (levels / 2)
     elif tipo == "lead":
-        # square + saw mezclados
         mix = rng_params.get("mix", 0.5)
         sq = np.sign(np.sin(phase))
         sw = 2.0 * (t * freq % 1) - 1.0
-        wave = sq * mix + sw * (1 - mix)    
-        
+        wave = sq * mix + sw * (1 - mix)
+    elif tipo == "wobble":
+        lfo_speed = rng_params.get("lfo_speed", 6)
+        lfo_depth = rng_params.get("lfo_depth", 0.8)
+        lfo = (1 + lfo_depth * np.sin(2 * np.pi * lfo_speed * t)) * 0.5
+        raw = 2.0 * (t * freq % 1) - 1.0
+        wave = raw * lfo
+    elif tipo == "glass":
+        h_count = rng_params.get("harmonics", 6)
+        wave = np.zeros(n)
+        for h in range(1, h_count + 1):
+            amp = 1.0 / (h * h)
+            dec = np.exp(-t * h * rng_params.get("h_decay", 3))
+            wave += np.sin(phase * h) * amp * dec
+    elif tipo == "pad":
+        num_voices = 4
+        detune = rng_params.get("detune", 0.006)
+        wave = np.zeros(n)
+        for v in range(num_voices):
+            d = (v - num_voices / 2) * detune
+            wave += np.sin(2 * np.pi * freq * (1 + d) * t + v * 1.5) * 0.3
+    elif tipo == "metallic":
+        mod_freq = freq * rng_params.get("ring_ratio", 1.7)
+        carrier = np.sin(phase)
+        modulator = np.sin(2 * np.pi * mod_freq * t)
+        wave = carrier * modulator
+    elif tipo == "bass":
+        sub = np.sin(2 * np.pi * freq * 0.5 * t) * 0.6
+        mid = np.sign(np.sin(phase)) * 0.4
+        wave = sub + mid
+    elif tipo == "flute":
+        breath = rng_params.get("breath", 0.15)
+        np_rng = np.random.RandomState(int(freq * 100) % 999999)
+        noise = np_rng.uniform(-1, 1, n) * breath
+        tri = 2.0 * np.abs(2.0 * (t * freq % 1) - 1.0) - 1.0
+        wave = tri * 0.7 + noise * np.exp(-t * 2)
+    elif tipo == "reso":
+        np_rng = np.random.RandomState(rng_params.get("seed", 42))
+        raw = np_rng.uniform(-1, 1, n)
+        res = rng_params.get("resonance", 0.9)
+        center = freq / SR
+        wave = np.zeros(n)
+        bp = 0.0
+        lp = 0.0
+        for i in range(n):
+            hp = raw[i] - lp - res * bp
+            bp += center * hp
+            lp += center * bp
+            wave[i] = bp
+    elif tipo == "choir":
+        num_v = 5
+        wave = np.zeros(n)
+        for v in range(num_v):
+            vib = rng_params.get("choir_vib", 0.3)
+            spd = 4 + v * 0.7
+            detune = 1 + (v - 2) * 0.004
+            p = 2 * np.pi * freq * detune * t + vib * np.sin(2 * np.pi * spd * t)
+            wave += np.sin(p) * 0.25
     else:
         wave = np.sin(phase)
 
     wave = wave * env * 0.7
-    return np_to_sound(wave)
+    vol_tipo = {
+        "square": 0.35, "saw": 0.35, "chiptune": 0.3,
+        "organ": 0.45, "fm_bell": 0.5,
+        "sine": 0.6, "triangle": 0.55, "pluck": 0.55,
+        "supersaw": 0.3, "acid": 0.4, "bitcrush": 0.35, "lead": 0.35,
+        "wobble": 0.4, "glass": 0.5, "pad": 0.45,
+        "metallic": 0.4, "bass": 0.4, "flute": 0.5,
+        "reso": 0.35, "choir": 0.45,
+    }
+    return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
 
 def generar_params_instrumento(rng, tipo):
     """Genera parámetros aleatorios para un tipo de instrumento"""
@@ -408,7 +479,55 @@ def generar_params_instrumento(rng, tipo):
         params["sustain"] = rng.uniform(0.4, 0.7)
         params["mix"] = rng.uniform(0.2, 0.8)
         params["vibrato"] = rng.uniform(0.1, 0.4)
-        params["vib_speed"] = rng.uniform(4, 7)    
+        params["vib_speed"] = rng.uniform(4, 7)
+    elif tipo == "wobble":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.4, 0.7)
+        params["lfo_speed"] = rng.uniform(3, 12)
+        params["lfo_depth"] = rng.uniform(0.4, 0.95)
+    elif tipo == "glass":
+        params["attack"] = rng.uniform(0.001, 0.005)
+        params["decay"] = rng.uniform(6, 15)
+        params["sustain"] = rng.uniform(0.0, 0.15)
+        params["harmonics"] = rng.randint(4, 10)
+        params["h_decay"] = rng.uniform(2, 6)
+    elif tipo == "pad":
+        params["attack"] = rng.uniform(0.05, 0.2)
+        params["decay"] = rng.uniform(1, 3)
+        params["sustain"] = rng.uniform(0.7, 0.95)
+        params["detune"] = rng.uniform(0.003, 0.01)
+        params["vibrato"] = rng.uniform(0.2, 0.5)
+        params["vib_speed"] = rng.uniform(3, 6)
+    elif tipo == "metallic":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(5, 12)
+        params["sustain"] = rng.uniform(0.0, 0.2)
+        params["ring_ratio"] = rng.choice([1.2, 1.5, 1.7, 2.1, 2.5, 3.0, 3.7])
+    elif tipo == "bass":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(3, 8)
+        params["sustain"] = rng.uniform(0.3, 0.6)
+    elif tipo == "flute":
+        params["attack"] = rng.uniform(0.02, 0.08)
+        params["decay"] = rng.uniform(2, 5)
+        params["sustain"] = rng.uniform(0.5, 0.8)
+        params["breath"] = rng.uniform(0.08, 0.25)
+        params["vibrato"] = rng.uniform(0.2, 0.6)
+        params["vib_speed"] = rng.uniform(4, 7)
+    elif tipo == "reso":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(4, 10)
+        params["sustain"] = rng.uniform(0.2, 0.5)
+        params["resonance"] = rng.uniform(0.7, 0.98)
+        params["seed"] = rng.randint(0, 999999)
+    elif tipo == "choir":
+        params["attack"] = rng.uniform(0.05, 0.15)
+        params["decay"] = rng.uniform(1, 3)
+        params["sustain"] = rng.uniform(0.7, 0.9)
+        params["choir_vib"] = rng.uniform(0.15, 0.5)
+        params["vibrato"] = rng.uniform(0.1, 0.3)
+        params["vib_speed"] = rng.uniform(4, 6)
     return params
 
 cache_por_instrumento = {}
@@ -423,7 +542,10 @@ for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
     for midi in range(36, 96):
         freq = midi_a_freq(midi)
         c_cortas[midi] = synth_nota(tipo, freq, 0.3, params)
-        c_largas[midi] = synth_nota(tipo, freq, 2.0, params)
+        params_hold = dict(params)
+        params_hold["vibrato"] = params.get("vibrato", 0) + 0.4
+        params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
+        c_largas[midi] = synth_nota(tipo, freq, 2.0, params_hold)
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
 
