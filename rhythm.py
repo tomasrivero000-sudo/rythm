@@ -327,6 +327,24 @@ def sintetizar_kit(rng):
 
 print("Renderizando notas...")
 
+def synth_error():
+    """Sonido de error: buzz grave descendente, disonante"""
+    dur = 0.18
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    # dos tonos disonantes que bajan de pitch
+    f1 = 180 * np.exp(-t * 3)
+    f2 = 190 * np.exp(-t * 3)
+    ph1 = np.cumsum(f1 / SR) * 2 * np.pi
+    ph2 = np.cumsum(f2 / SR) * 2 * np.pi
+    wave = np.sign(np.sin(ph1)) * 0.5 + np.sign(np.sin(ph2)) * 0.5
+    env = np.exp(-t * 8)
+    fade = min(int(SR * 0.005), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.35)
+
+SND_ERROR = synth_error()
+
 INSTRUMENTOS_JUGADOR = {
     "SQUARE":    "square",
     "SAW":       "saw",
@@ -1945,6 +1963,7 @@ def iniciar_partida(seed):
         "vida":           20,
         "vida_max":       20,
         "game_over":      False,
+        "liss_pulso":     0.0,
     }
 
 def tick_background(partida, ahora):
@@ -2006,17 +2025,21 @@ def dibujar_fondo_lissajous(partida, ahora):
     # pulso del kick: usar el tiempo desde el ultimo golpe para latir
     beat = partida["cancion"]["beat"]
     fase_beat = (ahora % beat) / beat  # 0..1 dentro del beat
-    pulso = math.exp(-fase_beat * 4)   # decae tras cada beat
-    escala = 0.92 + pulso * 0.08
+    pulso_beat = math.exp(-fase_beat * 4)   # decae tras cada beat
+    # pulso del jugador (se setea a 1.0 al tocar y decae)
+    pulso_jug = partida.get("liss_pulso", 0.0)
+    partida["liss_pulso"] = pulso_jug * 0.90  # decae cada frame
+    pulso = max(pulso_beat * 0.7, pulso_jug)
+    escala = 0.92 + pulso * 0.12
 
     cx_c = ANCHO / 2
     cy_c = (ZONA_Y) / 2 + 20
     rx = (ANCHO * 0.42) * escala
     ry = (ZONA_Y * 0.40) * escala
 
-    color = (int(GRIS_FONDO[0] + pulso * 18),
-             int(GRIS_FONDO[1] + pulso * 18),
-             int(GRIS_FONDO[2] + pulso * 18))
+    color = (min(120, int(GRIS_FONDO[0] + pulso * 50)),
+             min(120, int(GRIS_FONDO[1] + pulso * 50)),
+             min(120, int(GRIS_FONDO[2] + pulso * 50)))
 
     puntos = []
     for i in range(npts + 1):
@@ -2466,10 +2489,15 @@ while corriendo:
                             if ch:
                                 ch.set_volume(volL, volR)
 
+                        # pulso del fondo al tocar (reacciona a la nota del jugador)
+                        partida["liss_pulso"] = 1.0
+
+                        acerto_algo = False
                         for grupo in partida["notas_cayendo"]:
                             if col in grupo["cols"]:
                                 distancia = abs(grupo["tiempo_ms"] - (ahora_ms - partida["inicio"]))
                                 if distancia < 150:
+                                    acerto_algo = True
                                     if "acertadas" not in grupo:
                                         grupo["acertadas"] = set()
                                     if col not in grupo["acertadas"]:
@@ -2551,6 +2579,20 @@ while corriendo:
                                             if grupo["acertadas"] == set(grupo["cols"]):
                                                 partida["notas_cayendo"].remove(grupo)
                                     break
+
+                        # tecla equivocada: ninguna nota cerca en esa columna
+                        if not acerto_algo:
+                            partida["combo"] = 0
+                            partida["puntos"] = max(0, partida["puntos"] - 1)
+                            partida["ultimo_hit"] = {"texto": "ERROR", "tiempo": ahora_ms}
+                            num_cols = partida["dificultad"]["columnas"]
+                            ancho_col = ANCHO // num_cols
+                            cx = col * ancho_col + ancho_col // 2
+                            crear_texto_flotante(cx, ZONA_Y - 20, "-1", GRIS_MED)
+                            crear_explosion(cx, ZONA_Y, 6, GRIS_MED)
+                            crear_shake(3)
+                            SND_ERROR.set_volume(0.35 * config["volumen"])
+                            SND_ERROR.play()
 
             if evento.type == pygame.KEYUP:
                 if evento.key in COLUMNAS:
@@ -2639,6 +2681,8 @@ while corriendo:
                         miss_x = n["cols"][0] * ancho_col + ancho_col // 2
                         crear_texto_flotante(miss_x, ALTO - 30, "-5", GRIS_MED)
                         crear_shake(4)
+                        SND_ERROR.set_volume(0.3 * config["volumen"])
+                        SND_ERROR.play()
                         if partida["vida"] <= 0:
                             partida["game_over"] = True
                             pygame.mixer.stop()
