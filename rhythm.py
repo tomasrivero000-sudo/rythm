@@ -34,14 +34,35 @@ ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
     "menor":       [0, 2, 3, 5, 7, 8, 10, 12],
     "pentatonica": [0, 2, 4, 7, 9, 12, 14, 16],
+    "dorica":      [0, 2, 3, 5, 7, 9, 10, 12],
+    "mixolidia":   [0, 2, 4, 5, 7, 9, 10, 12],
+    "arm_menor":   [0, 2, 3, 5, 7, 8, 11, 12],
+    "blues":       [0, 3, 5, 6, 7, 10, 12, 15],
 }
 
 ACORDES_PATRON = {
-    "mayor":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [4, 6, 7]],
-    "menor":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 3, 5]],
-    "pentatonica": [[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]],
-    "blues":       [[0, 2, 4], [0, 3, 5], [1, 3, 6], [2, 4, 7]],
+    "mayor":       [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
+    "menor":       [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
+    "pentatonica": [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 2, 4]],
+    "dorica":      [[0, 2, 4], [3, 5, 7], [1, 3, 5], [0, 2, 4]],
+    "mixolidia":   [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
+    "arm_menor":   [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
+    "blues":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 3, 5]],
 }
+
+# progresiones armónicas reales (indices de grado en la escala)
+PROGRESIONES = [
+    [0, 3, 4, 0],    # I - IV - V - I
+    [0, 3, 4, 3],    # I - IV - V - IV
+    [0, 5, 3, 4],    # I - vi - IV - V
+    [0, 4, 5, 3],    # I - V - vi - IV
+    [0, 3, 0, 4],    # I - IV - I - V
+    [0, 2, 3, 4],    # I - iii - IV - V
+    [0, 5, 3, 0],    # I - vi - IV - I
+    [0, 3, 5, 4],    # I - IV - vi - V
+    [0, 0, 3, 4],    # I - I - IV - V
+    [0, 4, 3, 3],    # I - V - IV - IV
+]
 
 DIFICULTADES = {
     1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False},
@@ -991,8 +1012,10 @@ def generar_cancion(seed, dif):
     tonica       = rng.choice([36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55])
     nombre_escala= rng.choice(list(ESCALAS.keys()))
     escala       = ESCALAS[nombre_escala]
-    patron_acordes = ACORDES_PATRON[nombre_escala]
-    progresion   = [rng.randint(0, 3) for _ in range(8)]
+    patron_acordes = ACORDES_PATRON.get(nombre_escala, ACORDES_PATRON["mayor"])
+    base_prog = rng.choice(PROGRESIONES)
+    # repetir la progresion de 4 acordes para cubrir 8 compases
+    progresion = base_prog * 2
 
     notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
     kit = elegir_kit(rng)
@@ -1007,41 +1030,49 @@ def generar_cancion(seed, dif):
 
     prob_acorde = {3: 0.2, 4: 0.3, 5: 0.4, 6: 0.5, 7: 0.6}.get(num_columnas, 0.2)
 
+    # frases melódicas con contornos musicales
+    # 0=bajo(tónica), 1=medio(tercera/cuarta), 2=alto(quinta+)
     frases_subir = [
-        [0, 1, 2, 2],
-        [0, 0, 1, 2],
-        [0, 2, 1, 2],
-        [1, 2, 2, 1],
-        [0, 1, 0, 2],
-        [0, 1, 2, 0],
-        [0, 0, 2, 1],
+        [0, 0, 1, 2],    # reposo -> ascenso gradual
+        [0, 1, 1, 2],    # paso a paso
+        [0, 1, 2, 1],    # arco: sube y baja
+        [0, 0, 0, 2],    # pedal con salto
+        [0, 1, 0, 2],    # zigzag ascendente
+        [1, 0, 1, 2],    # bordadura + ascenso
+        [0, 1, 2, 2],    # ascenso con reposo arriba
     ]
     frases_bajar = [
-        [2, 1, 0, 0],
-        [2, 2, 1, 0],
-        [2, 0, 1, 0],
-        [1, 0, 0, 1],
-        [2, 1, 2, 0],
-        [2, 0, 2, 0],
-        [2, 1, 0, 2],
+        [2, 2, 1, 0],    # descenso gradual
+        [2, 1, 1, 0],    # paso a paso
+        [2, 1, 0, 1],    # arco invertido
+        [2, 2, 2, 0],    # pedal con caída
+        [2, 1, 2, 0],    # zigzag descendente
+        [1, 2, 1, 0],    # bordadura + descenso
+        [2, 1, 0, 0],    # descenso con reposo abajo
     ]
     frases_medio = [
-        [1, 0, 2, 1],
-        [1, 2, 0, 1],
-        [0, 2, 0, 2],
-        [2, 0, 1, 0],
-        [1, 1, 0, 2],
-        [0, 2, 1, 0],
-        [1, 0, 1, 2],
+        [1, 0, 1, 2],    # desde medio explora
+        [1, 2, 1, 0],    # arco desde medio
+        [1, 1, 0, 1],    # bordadura inferior
+        [1, 1, 2, 1],    # bordadura superior
+        [0, 2, 1, 1],    # salto + resolución
+        [2, 0, 1, 1],    # salto inverso + resolución
+        [1, 0, 2, 0],    # péndulo
     ]
 
     def escalar_frase(frase):
+        """Mapea niveles 0,1,2 a columnas usando grados de la escala"""
         if num_columnas <= 3:
             return [min(g, num_columnas - 1) for g in frase]
-        bajo  = rng.randint(0, num_columnas // 3)
-        medio = num_columnas // 2
-        alto  = rng.randint(num_columnas * 2 // 3, num_columnas - 1)
-        mapa = {0: bajo, 1: medio, 2: alto}
+        # mapear a posiciones musicales: tónica, mediante, dominante
+        tonica = 0
+        mediante = num_columnas // 3
+        dominante = num_columnas * 2 // 3
+        # agregar variación por la seed
+        tonica = max(0, tonica + rng.randint(0, 1))
+        mediante = min(num_columnas - 1, mediante + rng.randint(-1, 1))
+        dominante = min(num_columnas - 1, max(mediante + 1, dominante + rng.randint(-1, 0)))
+        mapa = {0: tonica, 1: mediante, 2: dominante}
         return [mapa[g] for g in frase]
 
     motivos_a = [escalar_frase(rng.choice(frases_subir)) for _ in range(4)]
