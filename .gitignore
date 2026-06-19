@@ -1,0 +1,12 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+leaderboard.json
+.DS_Store
+*.log
+*.exe
+*.zip
+*.sf2
+*.SF2
+*.dll
+elementos/
