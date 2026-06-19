@@ -1891,11 +1891,14 @@ def generar_cancion(seed, dif):
 
     # parametros de la figura de lissajous de fondo (unica por seed)
     lissajous = {
-        "a": rng.randint(1, 5),        # frecuencia horizontal
-        "b": rng.randint(1, 5),        # frecuencia vertical
-        "delta": rng.uniform(0, 3.14), # desfase
-        "vel": rng.uniform(0.15, 0.5), # velocidad de animacion
-        "puntos": rng.choice([120, 160, 200]),
+        "tipo": rng.choice(["lissajous", "lissajous", "rosa", "espiro", "mariposa"]),
+        "a": rng.randint(1, 9),         # frecuencia horizontal
+        "b": rng.randint(1, 9),         # frecuencia vertical
+        "delta": rng.uniform(0, 6.28),  # desfase
+        "vel": rng.uniform(0.1, 0.6),   # velocidad de animacion
+        "puntos": rng.choice([160, 200, 240, 300]),
+        "k": rng.randint(2, 7),         # parametro para rosa/espiro
+        "ratio": rng.uniform(0.3, 0.8), # parametro para espiro
     }
 
     return {
@@ -2013,50 +2016,78 @@ def get_parte(partida, ahora):
 GRIS_FONDO = (28, 28, 28)
 GRIS_FONDO2 = (45, 45, 45)
 
+def _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, fase_extra=0.0, jitter=0.0):
+    """Genera los puntos de la figura segun el tipo"""
+    a = liss["a"]; b = liss["b"]; delta = liss["delta"]
+    k = liss.get("k", 3); ratio = liss.get("ratio", 0.5)
+    pts = []
+    for i in range(npts + 1):
+        tt = (i / npts) * 2 * math.pi
+        if tipo == "rosa":
+            # curva rosa: r = cos(k*theta)
+            r = math.cos(k * tt + t_anim * 0.5)
+            x = cx_c + rx * r * math.cos(tt + fase_extra)
+            y = cy_c + ry * r * math.sin(tt + fase_extra)
+        elif tipo == "espiro":
+            # espirógrafo: suma de dos circulos
+            x = cx_c + rx * (ratio * math.cos(tt) + (1 - ratio) * math.cos(k * tt + t_anim))
+            y = cy_c + ry * (ratio * math.sin(tt) - (1 - ratio) * math.sin(k * tt + t_anim))
+        elif tipo == "mariposa":
+            # curva mariposa simplificada
+            e = math.exp(math.cos(tt)) - 2 * math.cos(4 * tt + t_anim * 0.3)
+            x = cx_c + rx * 0.28 * math.sin(tt * a) * e
+            y = cy_c + ry * 0.28 * math.cos(tt * b + fase_extra) * e
+        else:  # lissajous
+            x = cx_c + rx * math.sin(a * tt + t_anim + delta + fase_extra)
+            y = cy_c + ry * math.sin(b * tt)
+        if jitter > 0:
+            x += random.uniform(-jitter, jitter)
+            y += random.uniform(-jitter, jitter)
+        pts.append((int(x), int(y)))
+    return pts
+
 def dibujar_fondo_lissajous(partida, ahora):
-    """Dibuja una figura de Lissajous tenue de fondo, late con el kick"""
+    """Dibuja la figura procedural de fondo. Late con el kick y las notas, vibra en holds."""
     liss = partida["cancion"].get("lissajous")
     if not liss:
         return
-    a = liss["a"]; b = liss["b"]; delta = liss["delta"]
+    tipo = liss.get("tipo", "lissajous")
     vel = liss["vel"]; npts = liss["puntos"]
-    # fase animada
     t_anim = ahora * 0.001 * vel
-    # pulso del kick: usar el tiempo desde el ultimo golpe para latir
     beat = partida["cancion"]["beat"]
-    fase_beat = (ahora % beat) / beat  # 0..1 dentro del beat
-    pulso_beat = math.exp(-fase_beat * 4)   # decae tras cada beat
-    # pulso del jugador (se setea a 1.0 al tocar y decae)
+    fase_beat = (ahora % beat) / beat
+    pulso_beat = math.exp(-fase_beat * 4)
     pulso_jug = partida.get("liss_pulso", 0.0)
-    partida["liss_pulso"] = pulso_jug * 0.90  # decae cada frame
+    partida["liss_pulso"] = pulso_jug * 0.90
     pulso = max(pulso_beat * 0.7, pulso_jug)
     escala = 0.92 + pulso * 0.12
+
+    # vibracion extra mientras hay holds activos
+    hay_hold = len(partida.get("holds_activos", {})) > 0
+    jitter = 0.0
+    if hay_hold:
+        # mas holds = mas vibracion
+        jitter = 2.0 + len(partida["holds_activos"]) * 1.5
 
     cx_c = ANCHO / 2
     cy_c = (ZONA_Y) / 2 + 20
     rx = (ANCHO * 0.42) * escala
     ry = (ZONA_Y * 0.40) * escala
 
-    color = (min(120, int(GRIS_FONDO[0] + pulso * 50)),
-             min(120, int(GRIS_FONDO[1] + pulso * 50)),
-             min(120, int(GRIS_FONDO[2] + pulso * 50)))
+    boost = 50 + (30 if hay_hold else 0)
+    color = (min(140, int(GRIS_FONDO[0] + pulso * boost)),
+             min(140, int(GRIS_FONDO[1] + pulso * boost)),
+             min(140, int(GRIS_FONDO[2] + pulso * boost)))
 
-    puntos = []
-    for i in range(npts + 1):
-        tt = (i / npts) * 2 * math.pi
-        x = cx_c + rx * math.sin(a * tt + t_anim + delta)
-        y = cy_c + ry * math.sin(b * tt)
-        puntos.append((int(x), int(y)))
+    puntos = _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, jitter=jitter)
+    clip_ant = pantalla.get_clip()
+    pantalla.set_clip(pygame.Rect(0, 0, ANCHO, ZONA_Y + 54))
     if len(puntos) > 1:
         pygame.draw.lines(pantalla, color, False, puntos, 1)
-        # segunda figura desfasada, mas tenue
-        puntos2 = []
-        for i in range(npts + 1):
-            tt = (i / npts) * 2 * math.pi
-            x = cx_c + rx * 0.7 * math.sin(a * tt - t_anim * 0.6 + delta)
-            y = cy_c + ry * 0.7 * math.sin(b * tt + 1.0)
-            puntos2.append((int(x), int(y)))
+        puntos2 = _curva_fondo(tipo, liss, npts, -t_anim * 0.6,
+                               cx_c, cy_c, rx * 0.7, ry * 0.7, fase_extra=1.0, jitter=jitter)
         pygame.draw.lines(pantalla, GRIS_FONDO, False, puntos2, 1)
+    pantalla.set_clip(clip_ant)
 
 def dibujar_juego(partida, ahora):
     num_cols  = partida["dificultad"]["columnas"]
@@ -2261,6 +2292,27 @@ def dibujar_juego(partida, ahora):
 def dibujar_menu(seed_actual, cargando):
     dif      = get_dificultad(max(seed_actual, 1))
     progreso = min(seed_actual / SEED_MAX, 1.0)
+
+    # visualizador de barras tipo ecualizador (fondo animado)
+    tms = pygame.time.get_ticks() * 0.003
+    n_barras = 32
+    bw = ANCHO // n_barras
+    for i in range(n_barras):
+        # cada barra oscila con una mezcla de senos para parecer musica
+        h = (math.sin(tms + i * 0.4) * 0.5 + 0.5)
+        h *= (math.sin(tms * 1.7 + i * 0.9) * 0.3 + 0.7)
+        altura = int(h * 160) + 4
+        bx = i * bw
+        by = ALTO - altura
+        gris = 18 + int(h * 30)
+        pygame.draw.rect(pantalla, (gris, gris, gris), (bx, by, bw - 2, altura))
+
+    # notas musicales flotando suave
+    for j in range(6):
+        nx = (j * 137 + int(tms * 20)) % (ANCHO + 60) - 30
+        ny = 200 + int(math.sin(tms * 0.8 + j) * 80) + j * 30
+        ny = ny % ALTO
+        dibujar_nota_musical(pantalla, nx, ny, 16 + (j % 3) * 6, (30, 30, 30))
 
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 70))
