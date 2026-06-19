@@ -1551,7 +1551,163 @@ def get_dificultad(seed):
 def elegir_kit(rng):
     return sintetizar_kit(rng)
 
-def generar_patrones_drums(rng):
+# =========================================================================
+# GENEROS MUSICALES
+# Cada genero define su personalidad completa: BPM, escalas, drums, bajo,
+# instrumentos que encajan, tendencia a half/double-time y densidad.
+# Los patrones de drums son listas de 16 pasos (16avos por compas).
+# =========================================================================
+GENEROS = {
+    "TECHNO": {
+        "bpm": (124, 138),
+        "escalas": ["menor", "arm_menor", "pentatonica"],
+        "drums": {
+            "kick":  [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],   # 4-on-the-floor
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+                      [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
+            "hihat": [[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
+                      [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]],
+            "hihat_o":[0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["reese", "sub", "round"],
+        "bajo_patrones": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
+                          [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],
+        "instrumentos": ["SAW", "SUPERSAW", "ACID", "RESO", "HOOVER", "SAW STACK",
+                         "PWM LEAD", "SYNC LEAD", "DETUNE", "GROWL", "WOBBLE"],
+        "tempo_mod": {"half": 0.15, "double": 0.15},
+        "densidad": 1.0,
+        "swing": 0.0,
+    },
+    "HIP HOP": {
+        "bpm": (82, 96),
+        "escalas": ["menor", "blues", "pentatonica"],
+        "drums": {
+            "kick":  [[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],   # boom-bap
+                      [1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0]],
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]],
+            "hihat": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,1],
+                      [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0]],
+            "hihat_o":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["sub", "round", "pluck"],
+        "bajo_patrones": [[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
+                          [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
+        "instrumentos": ["FM EP", "BASS", "SYNTHBASS", "SUB PLUCK", "ORGAN",
+                         "VIBRAPHONE", "PLUCK SOFT", "RING MOD", "DIST GTR"],
+        "tempo_mod": {"half": 0.20, "double": 0.05},
+        "densidad": 0.75,
+        "swing": 0.12,
+    },
+    "DNB": {
+        "bpm": (160, 178),
+        "escalas": ["menor", "arm_menor", "pentatonica"],
+        "drums": {
+            "kick":  [[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],   # breakbeat
+                      [1,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0]],
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0],
+                      [0,0,0,0,1,0,0,0,0,0,0,0,1,0,1,0]],
+            "hihat": [[1,0,1,1,1,0,1,0,1,1,1,0,1,0,1,1]],
+            "hihat_o":[0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["reese", "sub"],
+        "bajo_patrones": [[1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],
+                          [1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]],
+        "instrumentos": ["GROWL", "SAW STACK", "WOBBLE",
+                         "SUPERSAW", "HOOVER", "RESO", "ACID", "SYNC LEAD"],
+        "tempo_mod": {"half": 0.25, "double": 0.0},
+        "densidad": 1.1,
+        "swing": 0.0,
+    },
+    "SYNTHWAVE": {
+        "bpm": (100, 118),
+        "escalas": ["menor", "mayor", "arm_menor"],
+        "drums": {
+            "kick":  [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]],
+            "hihat": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
+                      [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0]],
+            "hihat_o":[0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["round", "pluck", "reese"],
+        "bajo_patrones": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
+                          [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0]],
+        "instrumentos": ["SUPERSAW", "PAD", "PWM LEAD", "DETUNE", "FM BRASS",
+                         "PHASE PAD", "LEAD", "BELLPAD", "SAW", "VOX PAD"],
+        "tempo_mod": {"half": 0.10, "double": 0.10},
+        "densidad": 0.95,
+        "swing": 0.0,
+        "arpegios": True,
+    },
+    "AMBIENT": {
+        "bpm": (62, 86),
+        "escalas": ["mayor", "menor", "pentatonica"],
+        "drums": {
+            "kick":  [[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+                      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],
+            "snare": [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                      [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
+            "hihat": [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                      [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
+            "hihat_o":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "clap":  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+        },
+        "bajo_estilos": ["sub", "round"],
+        "bajo_patrones": [[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                          [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
+        "instrumentos": ["PAD", "PHASE PAD", "VOX PAD", "GLASS", "BELLPAD",
+                         "CHOIR", "GLASS HARM", "FLUTE", "HARP", "BELL FM"],
+        "tempo_mod": {"half": 0.40, "double": 0.0},
+        "densidad": 0.4,
+        "swing": 0.0,
+    },
+    "REGGAETON": {
+        "bpm": (90, 100),
+        "escalas": ["menor", "arm_menor", "pentatonica"],
+        "drums": {
+            "kick":  [[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],   # dembow base
+            "snare": [[0,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0]],    # dembow
+            "hihat": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]],
+            "hihat_o":[0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0],
+            "clap":  [0,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0],     # acompaña al snare
+        },
+        "bajo_estilos": ["sub", "round", "pluck"],
+        "bajo_patrones": [[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+                          [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],
+        "instrumentos": ["SYNTHBASS", "SUB PLUCK", "PLUCK", "LEAD", "DETUNE",
+                         "ACID", "SAW", "PWM LEAD", "KALIMBA"],
+        "tempo_mod": {"half": 0.05, "double": 0.05},
+        "densidad": 0.85,
+        "swing": 0.0,
+    },
+}
+
+def elegir_genero(rng):
+    return rng.choice(list(GENEROS.keys()))
+
+def generar_patrones_drums(rng, genero=None):
+    if genero is not None and genero in GENEROS:
+        g = GENEROS[genero]["drums"]
+        pats = {}
+        pats["kick"]    = list(rng.choice(g["kick"]))
+        pats["snare"]   = list(rng.choice(g["snare"]))
+        pats["hihat"]   = list(rng.choice(g["hihat"]))
+        pats["hihat_o"] = list(g["hihat_o"])
+        pats["clap"]    = list(g["clap"])
+        pats["clave"]   = [0] * 16
+        pats["agogo"]   = [0] * 16
+        # detalles percusivos extra solo en algunos generos
+        if genero in ("REGGAETON", "HIP HOP"):
+            for p in rng.sample(range(16), rng.randint(1, 3)):
+                pats["clave"][p] = 1
+        pats["fill"]    = [0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1]
+        return pats
+    return _generar_patrones_drums_legacy(rng)
+
+def _generar_patrones_drums_legacy(rng):
     pat_kick_all = [
         [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
         [1,0,0,0,1,0,0,0,1,0,0,1,1,0,0,0],
@@ -1597,20 +1753,29 @@ def generar_patrones_drums(rng):
     return pats
 
 def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
-                      c_intro, c_nudo, c_desenlace, kit):
+                      c_intro, c_nudo, c_desenlace, kit, genero=None):
     paso = beat // 4
-    pats  = generar_patrones_drums(rng)
-    pats2 = generar_patrones_drums(rng)
-    pats3 = generar_patrones_drums(rng)
+    pats  = generar_patrones_drums(rng, genero)
+    pats2 = generar_patrones_drums(rng, genero)
+    pats3 = generar_patrones_drums(rng, genero)
     tercio1 = t_intro_fin + 8 * 4 * beat
     tercio2 = t_intro_fin + 16 * 4 * beat
 
-    # decidir modo de tempo: 30% half-time, 20% double-time, 50% normal
+    # probabilidades de half/double-time segun el genero
+    if genero is not None and genero in GENEROS:
+        tm = GENEROS[genero].get("tempo_mod", {"half": 0.30, "double": 0.20})
+        p_half = tm.get("half", 0.0)
+        p_double = tm.get("double", 0.0)
+        swing_amt = GENEROS[genero].get("swing", 0.0)
+    else:
+        p_half, p_double = 0.30, 0.20
+        swing_amt = 0.0
+
     roll = rng.random()
-    if roll < 0.30:
+    if roll < p_half:
         modo_tempo = "half"
         tempo_tercio = rng.choice([1, 2])   # half-time en un tercio posterior
-    elif roll < 0.50:
+    elif roll < p_half + p_double:
         modo_tempo = "double"
         tempo_tercio = 0                    # empieza lento, luego acelera
     else:
@@ -1650,6 +1815,9 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
 
         for i in range(16):
             t = tc + i * paso
+            # swing: retrasa los 16avos impares para dar groove (hip hop, reggaeton)
+            if swing_amt > 0 and (i % 2 == 1):
+                t += int(paso * swing_amt)
             if t < t_intro_fin:
                 if p["hihat"][i] and kit["hihat"]:
                     percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.04})
@@ -1712,26 +1880,38 @@ def generar_cancion(seed, dif):
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
     rng          = random.Random(seed)
-    bpm_por_cols = {3: (80, 100), 4: (95, 110), 5: (105, 120), 6: (115, 130), 7: (125, 145)}
-    bpm_min, bpm_max = bpm_por_cols.get(num_columnas, (110, 130))
+
+    # --- elegir GENERO musical por seed ---
+    genero       = elegir_genero(rng)
+    gdef         = GENEROS[genero]
+
+    bpm_min, bpm_max = gdef["bpm"]
     BPM          = rng.randint(bpm_min, bpm_max)
     beat         = 60000 // BPM
     paso16       = beat // 4
     tonica       = rng.choice([36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55])
-    nombre_escala= rng.choice(list(ESCALAS.keys()))
+    # escala restringida al pool del genero (cae en cualquiera valida si falta)
+    escalas_genero = [e for e in gdef["escalas"] if e in ESCALAS] or list(ESCALAS.keys())
+    nombre_escala= rng.choice(escalas_genero)
     escala       = ESCALAS[nombre_escala]
     patron_acordes = ACORDES_PATRON.get(nombre_escala, ACORDES_PATRON["mayor"])
     base_prog = rng.choice(PROGRESIONES)
     # repetir la progresion de 4 acordes para cubrir 8 compases
     progresion = base_prog * 2
 
+    densidad = gdef.get("densidad", 1.0)
+    swing    = gdef.get("swing", 0.0)
+
     notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
     kit = elegir_kit(rng)
-    # 8% de probabilidad de que toque un instrumento raro
-    if rng.random() < 0.08:
+    # instrumento: 6% raro, si no del pool del genero (con fallback a la lista global)
+    if rng.random() < 0.06:
         instrumento = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
     else:
-        instrumento = rng.choice(list(INSTRUMENTOS_JUGADOR.keys()))
+        pool = [i for i in gdef.get("instrumentos", []) if i in INSTRUMENTOS_JUGADOR]
+        if not pool:
+            pool = list(INSTRUMENTOS_JUGADOR.keys())
+        instrumento = rng.choice(pool)
 
     # --- CAPA 1: estructura variable por seed ---
     C_INTRO     = rng.choice([2, 4, 4, 6])
@@ -1885,7 +2065,7 @@ def generar_cancion(seed, dif):
         # CAPA 2: offset de octava si la mutacion esta activa en esta rep
         oct_off = mut_octava if (mut_activa and rep >= mut_desde) else 0
         # CAPA 4: intensidad de adornos crece con la repeticion
-        prob_adorno = 0.1 + (rep / max(1, num_reps)) * 0.35
+        prob_adorno = (0.1 + (rep / max(1, num_reps)) * 0.35) * densidad
         for c in range(4):
             compas_real = rep * 4 + c
             compas = bloque[c]
@@ -1910,6 +2090,9 @@ def generar_cancion(seed, dif):
                             "tiempo": t, "es_acorde": True, "parte": "nudo", "hold": 0,
                         })
                         continue
+                # densidad < 1: saltear notas (nunca el down-beat del compas)
+                if densidad < 1.0 and s != 0 and rng.random() > densidad:
+                    continue
                 notas_jugador.append({
                     "cols": [col], "midis": [notas_columnas[col] + oct_off],
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
@@ -1995,19 +2178,19 @@ def generar_cancion(seed, dif):
             })
 
     percusion = generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
-                                  C_INTRO, C_NUDO, C_DESENLACE, kit)
+                                  C_INTRO, C_NUDO, C_DESENLACE, kit, genero)
 
-    # --- linea de bajo procedural ---
-    estilo_bajo = rng.choice(["round", "pluck", "sub", "reese"])
-    # patrones ritmicos de bajo (16avos por compas)
-    patrones_bajo = [
+    # --- linea de bajo procedural (estilo y patron segun genero) ---
+    estilos_g = [e for e in gdef.get("bajo_estilos", []) if e in ("round","pluck","sub","reese")]
+    estilo_bajo = rng.choice(estilos_g) if estilos_g else rng.choice(["round", "pluck", "sub", "reese"])
+    patrones_bajo = gdef.get("bajo_patrones") or [
         [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],   # negras
         [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],   # blancas
         [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],   # sincopado
         [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],   # corcheas
         [1,0,0,0,1,0,1,0,1,0,0,0,1,0,1,0],   # groove
     ]
-    pat_bajo = rng.choice(patrones_bajo)
+    pat_bajo = list(rng.choice(patrones_bajo))
     bajo_eventos = []
     # nota fundamental de cada grado de la progresion, una octava abajo de la tonica
     midi_bajo_base = tonica - 12
@@ -2066,6 +2249,7 @@ def generar_cancion(seed, dif):
         "beat":           beat,
         "paso16":         paso16,
         "escala":         nombre_escala,
+        "genero":         genero,
         "duracion_loop":  t_desenlace_fin,
         "notas_jugador":  sorted(notas_jugador, key=lambda n: n["tiempo"]),
         "percusion":      percusion,
@@ -2096,10 +2280,12 @@ def iniciar_partida(seed):
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
+    gen_txt = fuente.render(f"{cancion.get('genero', '')}", True, BLANCO)
+    pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 230))
     modo_txt = fuente.render(f"INSTRUMENTO: {inst}", True, GRIS_MED)
-    pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 260))
+    pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 280))
     esc_txt = fuente_chica.render(f"ESCALA: {cancion['escala'].upper()}   {cancion['bpm']} BPM", True, GRIS)
-    pantalla.blit(esc_txt, (ANCHO // 2 - esc_txt.get_width() // 2, 300))
+    pantalla.blit(esc_txt, (ANCHO // 2 - esc_txt.get_width() // 2, 320))
     presentar()
     pygame.time.delay(900)
 
@@ -2521,7 +2707,7 @@ def dibujar_juego(partida, ahora):
         }
         ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
         pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
-    info = fuente_chica.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
+    info = fuente_chica.render(f"{partida['cancion'].get('genero','')}  {partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
     pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
