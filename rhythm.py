@@ -25,14 +25,13 @@ COLUMNAS = {
     pygame.K_s: 1,
     pygame.K_d: 2,
     pygame.K_f: 3,
-    pygame.K_j: 4,
-    pygame.K_k: 5,
-    pygame.K_l: 6,
-    pygame.K_SEMICOLON: 7,
-    pygame.K_PERIOD: 7,
+    pygame.K_g: 4,
+    pygame.K_h: 5,
+    pygame.K_j: 6,
+    pygame.K_k: 7,
 }
 
-LABELS = ["A", "S", "D", "F", "J", "K", "L", "N"]
+LABELS = ["A", "S", "D", "F", "G", "H", "J", "K"]
 
 ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
@@ -48,19 +47,22 @@ ACORDES_PATRON = {
 }
 
 DIFICULTADES = {
-    1: {"nombre": "FACIL",   "columnas": 3, "acordes": False},
-    2: {"nombre": "FACIL",   "columnas": 3, "acordes": False},
-    3: {"nombre": "NORMAL",  "columnas": 4, "acordes": False},
-    4: {"nombre": "NORMAL",  "columnas": 4, "acordes": False},
-    5: {"nombre": "DIFICIL", "columnas": 5, "acordes": True},
-    6: {"nombre": "PRO",     "columnas": 6, "acordes": True},
-    7: {"nombre": "GOD",     "columnas": 7, "acordes": True},
-    8: {"nombre": "GOD",     "columnas": 7, "acordes": True},
-    9: {"nombre": "GOD",     "columnas": 7, "acordes": True},
+    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False},
+    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False},
+    3:  {"nombre": "NORMAL",     "columnas": 4, "acordes": True},
+    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": True},
+    5:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True},
+    6:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True},
+    7:  {"nombre": "PRO",        "columnas": 6, "acordes": True},
+    8:  {"nombre": "PRO+",       "columnas": 6, "acordes": True},
+    9:  {"nombre": "MASTER",     "columnas": 7, "acordes": True},
+    10: {"nombre": "MASTER+",    "columnas": 7, "acordes": True},
+    11: {"nombre": "GOD",        "columnas": 7, "acordes": True},
+    12: {"nombre": "CHAOS",      "columnas": 8, "acordes": True},
 }
 
-SEED_MAX       = 420
-SEED_VELOCIDAD = 2.0
+SEED_MAX       = 9999
+SEED_VELOCIDAD = 9.0
 ZONA_Y         = ALTO - 90
 VELOCIDAD      = 5.5
 
@@ -87,7 +89,7 @@ toms     = cargar_samples("Tom MPCVB Fat")
 print(f"OK: {len(kicks)}k {len(snares)}s {len(hihats)}h {len(claps)}c {len(toms)}t")
 
 print("Renderizando notas...")
-SOUNDFONT = "F:\\VIDEOGAMEEE\\GeneralUser-GS.sf2"
+SOUNDFONT = "F:\\VIDEOGAMEEE\\8bitsf.SF2"
 fs = fluidsynth.Synth(samplerate=44100.0)
 sfid = fs.sfload(SOUNDFONT)
 INSTRUMENTOS_JUGADOR = {
@@ -146,13 +148,13 @@ particulas = []
 
 def crear_explosion(x, y, cantidad, color=BLANCO):
     for _ in range(cantidad):
-        dx = random.uniform(-4, 4)
-        dy = random.uniform(-6, -1)
-        vida = random.randint(15, 35)
-        tam = random.randint(2, 5)
+        dx = random.uniform(-8, 8)
+        dy = random.uniform(-10, -2)
+        vida = random.randint(20, 50)
+        tam = random.randint(2, 7)
         particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida, "tam": tam, "color": color})
 
-def dibujar_particulas():
+def actualizar_particulas():
     for p in particulas:
         p["x"] += p["dx"]
         p["y"] += p["dy"]
@@ -172,11 +174,11 @@ def nota_midi(tonica, escala, grado):
 def get_dificultad(seed):
     if seed <= 0:
         return DIFICULTADES[1]
-    tramos = [60, 120, 180, 240, 300, 360, 420]
+    tramos = [500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 9999]
     for i, tope in enumerate(tramos):
         if seed <= tope:
             return DIFICULTADES[i + 1]
-    return DIFICULTADES[7]
+    return DIFICULTADES[12]
 
 def elegir_kit(rng):
     kit = {}
@@ -521,6 +523,11 @@ def iniciar_partida(seed):
         "terminada":      False,
         "holds_activos":  {},
         "ultimo_hit":     None,
+        "combo":          0,
+        "max_combo":      0,
+        "vida":           20,
+        "vida_max":       20,
+        "game_over":      False,
     }
 
 def tick_background(partida, ahora):
@@ -587,6 +594,23 @@ def dibujar_juego(partida, ahora):
 
     pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
+
+    # combo
+    if partida["combo"] >= 5:
+        combo_txt = fuente.render(f"{partida['combo']}x COMBO", True, BLANCO)
+        pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 38))
+
+    # barra de vida
+    vida_w = 200
+    vida_x = ANCHO - vida_w - 10
+    vida_y = 28
+    vida_pct = partida["vida"] / partida["vida_max"]
+    pygame.draw.rect(pantalla, GRIS, (vida_x, vida_y, vida_w, 8))
+    if vida_pct > 0:
+        color_vida = BLANCO if vida_pct > 0.3 else GRIS_MED
+        pygame.draw.rect(pantalla, color_vida, (vida_x, vida_y, int(vida_w * vida_pct), 8))
+    pygame.draw.rect(pantalla, BLANCO, (vida_x, vida_y, vida_w, 8), 1)
+
     dif_txt = fuente_chica.render(partida["dificultad"]["nombre"], True, GRIS_MED)
     pantalla.blit(dif_txt, (10, 10))
     parte_txt = fuente_chica.render(parte, True, GRIS)
@@ -602,9 +626,21 @@ def dibujar_juego(partida, ahora):
         hit_txt = fuente.render(hit["texto"], True, color)
         pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, ZONA_Y - 60))
 
-    if partida["terminada"] and not partida["notas_cayendo"]:
-        fin = fuente.render("FIN  -  ESC PARA VOLVER", True, BLANCO)
-        pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2))
+    if partida.get("game_over"):
+        go_txt = fuente_grande.render("GAME OVER", True, BLANCO)
+        pantalla.blit(go_txt, (ANCHO // 2 - go_txt.get_width() // 2, ALTO // 2 - 50))
+        sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
+        pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2 + 10))
+        esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+        pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 50))
+
+    elif partida["terminada"] and not partida["notas_cayendo"]:
+        fin = fuente.render("FIN", True, BLANCO)
+        pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2 - 40))
+        sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
+        pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
+        esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+        pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
 
 def dibujar_menu(seed_actual, cargando):
     dif      = get_dificultad(max(seed_actual, 1))
@@ -704,20 +740,29 @@ while corriendo:
                                         cx = col * ancho_col + ancho_col // 2
                                         if distancia < 30:
                                             pts = 3
+                                            partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 30)
+                                            crear_explosion(cx, ZONA_Y, 60)
                                         elif distancia < 60:
                                             pts = 2
+                                            partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 18)
+                                            crear_explosion(cx, ZONA_Y, 35)
                                         elif distancia < 100:
                                             pts = 1
+                                            partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
                                             crear_explosion(cx, ZONA_Y, 8)
                                         else:
                                             pts = 0
+                                            partida["combo"] = 0
                                             partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 3, GRIS_MED)
+                                            crear_explosion(cx, ZONA_Y, 5, GRIS_MED)
+                                            partida["puntos"] = max(0, partida["puntos"] - 2)
+                                            partida["vida"] = max(0, partida["vida"] - 1)
+                                        if partida["combo"] > partida["max_combo"]:
+                                            partida["max_combo"] = partida["combo"]
+                                        combo_mult = 1 + partida["combo"] // 10
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
                                                 ch = cache_notas_largas[midi_fijo].play()
@@ -728,7 +773,7 @@ while corriendo:
                                                 "midi":  midi_fijo,
                                             }
                                         else:
-                                            partida["puntos"] += pts * len(grupo["cols"])
+                                            partida["puntos"] += pts * len(grupo["cols"]) * combo_mult
                                             if grupo["acertadas"] == set(grupo["cols"]):
                                                 partida["notas_cayendo"].remove(grupo)
                                     break
@@ -756,49 +801,60 @@ while corriendo:
 
     elif ESTADO == "jugando":
         ahora = ahora_ms - partida["inicio"]
-        tick_background(partida, ahora)
 
-        holds_perdidos = []
-        for col, hold in partida["holds_activos"].items():
-            if hold["grupo"]["y"] > ALTO:
-                if col in canal_hold:
-                    canal_hold[col].stop()
-                    del canal_hold[col]
-                holds_perdidos.append(col)
-        for col in holds_perdidos:
-            del partida["holds_activos"][col]
+        if not partida.get("game_over"):
+            tick_background(partida, ahora)
 
-        PIXELES_POR_MS = VELOCIDAD / (1000 / 60)
-        ANTICIPACION   = (ZONA_Y + 40) / PIXELES_POR_MS
+        if not partida.get("game_over"):
+            holds_perdidos = []
+            for col, hold in partida["holds_activos"].items():
+                if hold["grupo"]["y"] > ALTO:
+                    if col in canal_hold:
+                        canal_hold[col].stop()
+                        del canal_hold[col]
+                    holds_perdidos.append(col)
+            for col in holds_perdidos:
+                del partida["holds_activos"][col]
 
-        if not partida["terminada"]:
-            while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
-                n = partida["cancion"]["notas_jugador"][partida["indice_jugador"]]
-                hold_ms = n.get("hold", 0)
-                partida["notas_cayendo"].append({
-                    "cols":      n["cols"],
-                    "midis":     n["midis"],
-                    "tiempo_ms": n["tiempo"],
-                    "acertadas": set(),
-                    "es_acorde": n.get("es_acorde", False),
-                    "hold":      hold_ms,
-                    "hold_px":   hold_pixels(hold_ms, VELOCIDAD),
-                })
-                partida["indice_jugador"] += 1
+            PIXELES_POR_MS = VELOCIDAD / (1000 / 60)
+            ANTICIPACION   = (ZONA_Y + 40) / PIXELES_POR_MS
 
-        for grupo in partida["notas_cayendo"]:
-            ms_hasta = grupo["tiempo_ms"] - ahora
-            grupo["y"] = ZONA_Y - (ms_hasta * PIXELES_POR_MS)
+            if not partida["terminada"]:
+                while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
+                    n = partida["cancion"]["notas_jugador"][partida["indice_jugador"]]
+                    hold_ms = n.get("hold", 0)
+                    partida["notas_cayendo"].append({
+                        "cols":      n["cols"],
+                        "midis":     n["midis"],
+                        "tiempo_ms": n["tiempo"],
+                        "acertadas": set(),
+                        "es_acorde": n.get("es_acorde", False),
+                        "hold":      hold_ms,
+                        "hold_px":   hold_pixels(hold_ms, VELOCIDAD),
+                    })
+                    partida["indice_jugador"] += 1
 
-        notas_vivas = []
-        for n in partida["notas_cayendo"]:
-            if n["y"] >= ALTO + 50:
-                partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
-            else:
-                notas_vivas.append(n)
-        partida["notas_cayendo"] = notas_vivas
+            for grupo in partida["notas_cayendo"]:
+                ms_hasta = grupo["tiempo_ms"] - ahora
+                grupo["y"] = ZONA_Y - (ms_hasta * PIXELES_POR_MS)
 
+            notas_vivas = []
+            for n in partida["notas_cayendo"]:
+                if n["y"] >= ALTO + 50:
+                    partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
+                    partida["combo"] = 0
+                    partida["puntos"] = max(0, partida["puntos"] - 5)
+                    partida["vida"] = max(0, partida["vida"] - 2)
+                    if partida["vida"] <= 0:
+                        partida["game_over"] = True
+                        pygame.mixer.stop()
+                else:
+                    notas_vivas.append(n)
+            partida["notas_cayendo"] = notas_vivas
+
+        actualizar_particulas()
         dibujar_juego(partida, ahora)
+        dibujar_particulas()
 
     pygame.display.flip()
     clock.tick(60)
