@@ -1380,17 +1380,72 @@ def generar_cancion(seed, dif):
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
                 })
 
-    pat_des = [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0]
+    # --- desenlace con estilos variados ---
+    estilo_des = rng.choice([
+        "ascenso", "descenso", "acorde_final", "eco",
+        "cascada", "redoble", "pregunta_respuesta"
+    ])
+    pat_des_opciones = [
+        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],   # 2 por compas
+        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],   # negras
+        [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0],   # sincopado
+        [1,0,0,0,1,0,0,0,0,0,0,0,1,0,1,0],   # con remate
+    ]
+    pat_des = rng.choice(pat_des_opciones)
+    octava_des = rng.choice([0, 12, 12])  # a veces misma octava, a veces arriba
+
     for c in range(C_DESENLACE):
         for s in range(16):
             if pat_des[s] == 0:
                 continue
-            t        = t_nudo_fin + c * 4 * beat + (s // 4) * beat
+            t        = t_nudo_fin + c * 4 * beat + s * paso16
             progreso = (c * 16 + s) / (C_DESENLACE * 16)
-            col      = min(int(progreso * num_columnas), num_columnas - 1)
-            midi     = notas_columnas[col] + 12
-            es_hold  = rng.random() < 0.7
-            hold_dur = rng.choice([2, 3, 4]) * beat if es_hold else 0
+            es_ultima = (c == C_DESENLACE - 1)
+
+            if estilo_des == "ascenso":
+                col = min(int(progreso * num_columnas), num_columnas - 1)
+                midi = notas_columnas[col] + octava_des
+            elif estilo_des == "descenso":
+                col = max(0, num_columnas - 1 - int(progreso * num_columnas))
+                midi = notas_columnas[col] + octava_des
+            elif estilo_des == "acorde_final":
+                if es_ultima and s == 0:
+                    cols_ac = sorted(set([0, num_columnas // 2, num_columnas - 1]))
+                    notas_jugador.append({
+                        "cols": cols_ac,
+                        "midis": [notas_columnas[cx] + octava_des for cx in cols_ac],
+                        "tiempo": t, "es_acorde": True, "parte": "desenlace",
+                        "hold": 4 * beat,
+                    })
+                    continue
+                col = max(0, num_columnas - 1 - int(progreso * num_columnas))
+                midi = notas_columnas[col] + octava_des
+            elif estilo_des == "eco":
+                col = 0 if (c * 16 + s) % 8 < 4 else num_columnas - 1
+                midi = notas_columnas[col] + octava_des
+            elif estilo_des == "cascada":
+                col = (c * 4 + s // 4) % num_columnas
+                midi = notas_columnas[col] + octava_des
+            elif estilo_des == "redoble":
+                # alterna rapido entre dos notas, acelera al final
+                col = (s // 2) % num_columnas
+                midi = notas_columnas[col] + octava_des
+            else:  # pregunta_respuesta
+                # primera mitad sube, segunda baja
+                if c < C_DESENLACE // 2:
+                    col = min(int((c / (C_DESENLACE / 2)) * num_columnas), num_columnas - 1)
+                else:
+                    p2 = (c - C_DESENLACE // 2) / (C_DESENLACE / 2)
+                    col = max(0, num_columnas - 1 - int(p2 * num_columnas))
+                midi = notas_columnas[col] + octava_des
+
+            # holds mas largos al final del tema
+            if es_ultima:
+                es_hold = rng.random() < 0.85
+                hold_dur = rng.choice([3, 4, 6]) * beat if es_hold else 0
+            else:
+                es_hold = rng.random() < 0.5
+                hold_dur = rng.choice([2, 3]) * beat if es_hold else 0
             notas_jugador.append({
                 "cols": [col], "midis": [midi],
                 "tiempo": t, "es_acorde": False, "parte": "desenlace", "hold": hold_dur,
