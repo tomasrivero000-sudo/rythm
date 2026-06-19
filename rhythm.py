@@ -4,6 +4,7 @@ import numpy as np
 import json
 import wave
 import os
+import threading
 
 pygame.init()
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -1263,8 +1264,13 @@ shake_amt = 0.0      # intensidad del shake actual
 shake_dx = 0
 shake_dy = 0
 
-# --- musica de fondo en el menu (ultima cancion jugada, en loop) ---
-musica_menu = None  # None = sin musica, dict = datos de reproduccion
+# --- musica de fondo en el menu (seeds aleatorias DIFICIL+, crossfade) ---
+musica_menu = None          # stream principal
+_menu_fadeout = None        # stream anterior (fading out durante crossfade)
+_menu_siguiente = None      # (cancion, dif) pre-renderizada lista para usar
+_menu_preparando = False    # True mientras el thread de background esta trabajando
+CROSSFADE_MS = 3000         # duracion del crossfade en ms
+PREPARAR_DESPUES_MS = 3000  # empezar a preparar la sig. 3s despues de arrancar la actual
 
 def iniciar_musica_menu(cancion, dificultad):
     """Prepara la reproduccion completa de fondo para el menu"""
@@ -1299,8 +1305,10 @@ def iniciar_musica_menu(cancion, dificultad):
         musica_menu = None
 
 def detener_musica_menu():
-    global musica_menu
+    global musica_menu, _menu_fadeout, _menu_siguiente
     musica_menu = None
+    _menu_fadeout = None
+    _menu_siguiente = None
 
 # rango de seeds para la musica del menu: de DIFICIL en adelante
 SEED_MENU_MIN = 4901   # primer tramo de DIFICIL en get_dificultad
@@ -1323,31 +1331,42 @@ def _preparar_cancion_menu(seed):
     cancion["cache_bajo"] = cache_bajo
     return cancion, dif
 
+def _preparar_en_background():
+    """Thread de background: genera la siguiente cancion sin trabar el juego."""
+    global _menu_siguiente, _menu_preparando
+    try:
+        seed = random.randint(SEED_MENU_MIN, SEED_MAX)
+        resultado = _preparar_cancion_menu(seed)
+        _menu_siguiente = resultado
+    except Exception as e:
+        print(f"Error pre-render background: {e}")
+    finally:
+        _menu_preparando = False
+
 def nueva_musica_menu_aleatoria():
-    """Elige una seed al azar (DIFICIL+) y arranca su musica en el menu."""
+    """Elige una seed al azar (DIFICIL+) y arranca su musica en el menu (sincrono)."""
+    global _menu_siguiente, _menu_fadeout
     try:
         seed = random.randint(SEED_MENU_MIN, SEED_MAX)
         cancion, dif = _preparar_cancion_menu(seed)
         iniciar_musica_menu(cancion, dif)
+        _menu_siguiente = None
+        _menu_fadeout = None
     except Exception as e:
         print(f"Error generando musica de menu aleatoria: {e}")
 
-def tick_musica_menu():
-    """Reproduce melodia + bajo + drums en loop mientras estamos en el menu"""
-    global musica_menu
-    if musica_menu is None:
-        return
-    mm = musica_menu
+def _tick_stream(mm, vol_mult):
+    """Reproduce un frame de un stream de musica (melodia+perc+bajo)."""
     ahora = pygame.time.get_ticks() - mm["inicio"]
-    # al terminar: pasar a otra seed aleatoria (DIFICIL+)
-    if ahora >= mm["duracion"]:
-        nueva_musica_menu_aleatoria()
+    if ahora < 0 or ahora >= mm["duracion"]:
         return
-    vol_base = config["vol_menu"] * config["volumen"]
+    vol_base = config["vol_menu"] * config["volumen"] * vol_mult
+    if vol_base < 0.01:
+        return
     # --- melodia ---
-    notas = mm["notas"]
     c_notas = cache_por_instrumento.get(mm["inst"])
     if c_notas:
+        notas = mm["notas"]
         num_cols = mm["num_cols"]
         while mm["idx_notas"] < len(notas) and ahora >= notas[mm["idx_notas"]]["tiempo"]:
             n = notas[mm["idx_notas"]]
@@ -1359,10 +1378,7 @@ def tick_musica_menu():
             if not snd:
                 continue
             col = n["cols"][0] if n["cols"] else 0
-            if num_cols > 1:
-                pan = col / (num_cols - 1)
-            else:
-                pan = 0.5
+            pan = col / max(1, num_cols - 1)
             vol_l = vol_base * (1.0 - pan * 0.6)
             vol_r = vol_base * (0.4 + pan * 0.6)
             ch = snd.play()
@@ -1379,7 +1395,7 @@ def tick_musica_menu():
         sample = kit.get(p["sample"])
         if not sample:
             continue
-        vol = min(1.0, p["vol"] * 1.0) * vol_perc
+        vol = min(1.0, p["vol"]) * vol_perc
         gl, gr = pan_p.get(p["sample"], (1.0, 1.0))
         ch = sample.play()
         if ch:
@@ -1397,6 +1413,65 @@ def tick_musica_menu():
         ch = snd_b.play()
         if ch:
             ch.set_volume(vol_bajo)
+
+def tick_musica_menu():
+    """Reproduce musica en el menu con crossfade entre canciones.
+    La siguiente cancion se pre-renderiza en un thread de background
+    para que la transicion sea imperceptible."""
+    global musica_menu, _menu_fadeout, _menu_siguiente, _menu_preparando
+    # tick del stream que esta fading out (si hay crossfade activo)
+    if _menu_fadeout is not None:
+        ahora_fo = pygame.time.get_ticks() - _menu_fadeout["fade_start"]
+        fade_out = max(0.0, 1.0 - ahora_fo / CROSSFADE_MS)
+        if fade_out <= 0.0:
+            _menu_fadeout = None
+        else:
+            _tick_stream(_menu_fadeout, fade_out)
+    if musica_menu is None:
+        return
+    mm = musica_menu
+    ahora = pygame.time.get_ticks() - mm["inicio"]
+    restante = mm["duracion"] - ahora
+    # 1) lanzar thread para pre-renderizar la siguiente (3s despues de arrancar)
+    #    el thread tiene toda la duracion de la cancion (~30s+) para terminar
+    if ahora > PREPARAR_DESPUES_MS and _menu_siguiente is None and not _menu_preparando:
+        _menu_preparando = True
+        t = threading.Thread(target=_preparar_en_background, daemon=True)
+        t.start()
+    # 2) iniciar crossfade cuando quedan CROSSFADE_MS y la siguiente esta lista
+    if restante <= CROSSFADE_MS and not mm.get("crossfading"):
+        if _menu_siguiente is not None:
+            mm["crossfading"] = True
+            mm["fade_start"] = pygame.time.get_ticks()
+            _menu_fadeout = mm
+            cancion, dif = _menu_siguiente
+            _menu_siguiente = None
+            iniciar_musica_menu(cancion, dif)
+            if musica_menu is not None:
+                musica_menu["fade_in_start"] = pygame.time.get_ticks()
+            return
+        # si el thread no termino aun, esperar (la cancion seguira en silencio
+        # unos instantes hasta que el thread termine y el proximo frame haga crossfade)
+    # 3) si la cancion ya paso y no hubo crossfade (thread llego tarde),
+    #    arrancar la siguiente apenas este lista
+    if ahora >= mm["duracion"] and not mm.get("crossfading"):
+        if _menu_siguiente is not None:
+            cancion, dif = _menu_siguiente
+            _menu_siguiente = None
+            _menu_fadeout = None
+            iniciar_musica_menu(cancion, dif)
+            if musica_menu is not None:
+                musica_menu["fade_in_start"] = pygame.time.get_ticks()
+        return
+    # 4) calcular volumen con fade-in si recien arranco
+    vol_mult = 1.0
+    if mm.get("fade_in_start"):
+        elapsed = pygame.time.get_ticks() - mm["fade_in_start"]
+        vol_mult = min(1.0, elapsed / CROSSFADE_MS)
+        if vol_mult >= 1.0:
+            del mm["fade_in_start"]
+    # 5) reproducir stream principal
+    _tick_stream(mm, vol_mult)
 
 def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0):
     for _ in range(cantidad):
