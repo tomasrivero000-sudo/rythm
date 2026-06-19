@@ -206,6 +206,10 @@ INSTRUMENTOS_JUGADOR = {
     "PLUCK":     "pluck",
     "ORGAN":     "organ",
     "CHIPTUNE":  "chiptune",
+    "SUPERSAW":  "supersaw",
+    "ACID":      "acid",
+    "BITCRUSH":  "bitcrush",
+    "LEAD":      "lead",
 }
 
 def midi_a_freq(midi):
@@ -282,22 +286,44 @@ def synth_nota(tipo, freq, duracion, rng_params):
         arp = np.where((t * arp_speed % 3).astype(int) == 0, 1.0,
               np.where((t * arp_speed % 3).astype(int) == 1, 2.0, 1.5))
         wave = np.sign(np.sin(2 * np.pi * freq * arp * t))
+    elif tipo == "supersaw":
+        # 5 saws detuned
+        detune = rng_params.get("detune", 0.008)
+        wave = np.zeros(n)
+        for d in [-2, -1, 0, 1, 2]:
+            wave += (2.0 * (t * freq * (1 + d * detune) % 1) - 1.0) * 0.25
+    elif tipo == "acid":
+        # saw con filter sweep (TB-303)
+        raw = 2.0 * (t * freq % 1) - 1.0
+        cutoff = rng_params.get("cutoff", 0.3)
+        resonance = rng_params.get("resonance", 0.7)
+        sweep = np.exp(-t * rng_params.get("sweep_speed", 6)) * cutoff + 0.05
+        wave = np.zeros(n)
+        lp = 0.0
+        bp = 0.0
+        for i in range(n):
+            f = sweep[i]
+            lp += f * bp
+            hp = raw[i] - lp - resonance * bp
+            bp += f * hp
+            wave[i] = lp
+    elif tipo == "bitcrush":
+        # onda con reduccion de bits
+        bits = rng_params.get("bits", 4)
+        base = np.sin(phase) + np.sin(phase * 2) * 0.3
+        levels = 2 ** bits
+        wave = np.round(base * levels / 2) / (levels / 2)
+    elif tipo == "lead":
+        # square + saw mezclados
+        mix = rng_params.get("mix", 0.5)
+        sq = np.sign(np.sin(phase))
+        sw = 2.0 * (t * freq % 1) - 1.0
+        wave = sq * mix + sw * (1 - mix)    
+        
     else:
         wave = np.sin(phase)
 
-   # volumen por tipo de onda
-    vol_tipo = {
-        "square": 0.35, "saw": 0.35, "chiptune": 0.3,
-        "organ": 0.45, "fm_bell": 0.5,
-        "sine": 0.6, "triangle": 0.55, "pluck": 0.55,
-    }
-    # volumen por tipo de onda
-    vol_tipo = {
-        "square": 0.35, "saw": 0.35, "chiptune": 0.3,
-        "organ": 0.45, "fm_bell": 0.5,
-        "sine": 0.6, "triangle": 0.55, "pluck": 0.55,
-    }
-    wave = wave * env * vol_tipo.get(tipo, 0.5)
+    wave = wave * env * 0.7
     return np_to_sound(wave)
 
 def generar_params_instrumento(rng, tipo):
@@ -355,6 +381,34 @@ def generar_params_instrumento(rng, tipo):
         params["decay"] = rng.uniform(4, 10)
         params["sustain"] = rng.uniform(0.3, 0.6)
         params["arp_speed"] = rng.choice([15, 20, 25, 30])
+    elif tipo == "supersaw":
+        params["attack"] = rng.uniform(0.005, 0.02)
+        params["decay"] = rng.uniform(3, 8)
+        params["sustain"] = rng.uniform(0.5, 0.8)
+        params["detune"] = rng.uniform(0.003, 0.015)
+        params["vibrato"] = rng.uniform(0, 0.2)
+        params["vib_speed"] = rng.uniform(3, 6)
+    elif tipo == "acid":
+        params["attack"] = 0.001
+        params["decay"] = rng.uniform(4, 10)
+        params["sustain"] = rng.uniform(0.2, 0.5)
+        params["cutoff"] = rng.uniform(0.15, 0.5)
+        params["resonance"] = rng.uniform(0.5, 0.95)
+        params["sweep_speed"] = rng.uniform(3, 10)
+    elif tipo == "bitcrush":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(3, 8)
+        params["sustain"] = rng.uniform(0.3, 0.6)
+        params["bits"] = rng.choice([2, 3, 4, 5, 6])
+        params["vibrato"] = rng.uniform(0, 0.3)
+        params["vib_speed"] = rng.uniform(4, 7)
+    elif tipo == "lead":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(4, 8)
+        params["sustain"] = rng.uniform(0.4, 0.7)
+        params["mix"] = rng.uniform(0.2, 0.8)
+        params["vibrato"] = rng.uniform(0.1, 0.4)
+        params["vib_speed"] = rng.uniform(4, 7)    
     return params
 
 cache_por_instrumento = {}
@@ -369,10 +423,7 @@ for nombre, tipo in INSTRUMENTOS_JUGADOR.items():
     for midi in range(36, 96):
         freq = midi_a_freq(midi)
         c_cortas[midi] = synth_nota(tipo, freq, 0.3, params)
-        params_hold = dict(params)
-        params_hold["vibrato"] = params.get("vibrato", 0) + 0.4
-        params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
-        c_largas[midi] = synth_nota(tipo, freq, 2.0, params_hold)
+        c_largas[midi] = synth_nota(tipo, freq, 2.0, params)
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
 
