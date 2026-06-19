@@ -97,10 +97,17 @@ fuente_chica  = pygame.font.SysFont("courier", 14, bold=True)
 
 SR = 44100
 
-def np_to_sound(samples_mono, vol=0.8):
-    """Convierte array numpy mono a pygame.Sound stereo"""
-    samples_mono = np.clip(samples_mono * vol * 32767, -32768, 32767).astype(np.int16)
-    stereo = np.column_stack((samples_mono, samples_mono))
+def np_to_sound(samples_mono, vol=0.8, pan=0.0):
+    """Convierte array numpy mono a pygame.Sound stereo.
+    pan: -1.0 = todo izquierda, 0 = centro, 1.0 = todo derecha"""
+    base = np.clip(samples_mono * vol * 32767, -32768, 32767)
+    # ganancia por canal con ley de paneo de potencia constante
+    ang = (pan + 1) * 0.25 * np.pi  # 0..pi/2
+    gL = np.cos(ang)
+    gR = np.sin(ang)
+    left  = np.clip(base * gL, -32768, 32767).astype(np.int16)
+    right = np.clip(base * gR, -32768, 32767).astype(np.int16)
+    stereo = np.column_stack((left, right))
     return pygame.sndarray.make_sound(stereo)
 
 EQ_TIPOS = ["bright", "warm", "dark", "crisp", "hollow", "nasal"]
@@ -323,6 +330,41 @@ INSTRUMENTOS_JUGADOR = {
 def midi_a_freq(midi):
     return 440.0 * (2.0 ** ((midi - 69) / 12.0))
 
+def synth_bajo(freq, duracion, estilo="round"):
+    """Sintetiza una nota de bajo. estilo: round, pluck, sub, reese"""
+    n = int(SR * duracion)
+    t = np.linspace(0, duracion, n)
+    phase = 2 * np.pi * freq * t
+    if estilo == "round":
+        # sine + 2do armonico suave
+        wave = np.sin(phase) * 0.8 + np.sin(phase * 2) * 0.15
+        env = np.minimum(1.0, np.exp(-t * 1.5) + 0.3)
+    elif estilo == "pluck":
+        # ataque rapido con decay
+        wave = np.sign(np.sin(phase)) * 0.4 + np.sin(phase) * 0.6
+        env = np.exp(-t * 4)
+    elif estilo == "sub":
+        # casi pura sub-frecuencia
+        wave = np.sin(phase)
+        env = np.minimum(1.0, np.exp(-t * 1.0) + 0.5)
+    else:  # reese
+        # dos saws detuned graves
+        wave = (2.0 * (t * freq % 1) - 1.0) * 0.4 + (2.0 * (t * freq * 1.01 % 1) - 1.0) * 0.4
+        env = np.minimum(1.0, np.exp(-t * 1.2) + 0.4)
+    # fade in/out corto
+    fade = min(int(SR * 0.005), n)
+    if fade > 0:
+        env[:fade] *= np.linspace(0, 1, fade)
+        env[-fade:] *= np.linspace(1, 0, fade)
+    wave = wave * env
+    # filtro pasa-bajos para redondear
+    out = np.zeros(n)
+    coef = 0.4
+    out[0] = wave[0]
+    for i in range(1, n):
+        out[i] = coef * out[i-1] + (1 - coef) * wave[i]
+    return out
+
 def synth_nota(tipo, freq, duracion, rng_params):
     """Sintetiza una nota con el tipo de onda y parámetros dados"""
     n = int(SR * duracion)
@@ -491,20 +533,19 @@ def synth_nota(tipo, freq, duracion, rng_params):
         wave = np.sin(phase)
 
     wave = wave * env * 0.7
-   vol_tipo = {
-        "square": 0.7, "saw": 0.7, "chiptune": 0.65,
-        "organ": 0.8, "fm_bell": 0.85,
-        "sine": 0.95, "triangle": 0.9, "pluck": 0.9,
-        "supersaw": 0.65, "acid": 0.75, "bitcrush": 0.7, "lead": 0.7,
-        "wobble": 0.75, "glass": 0.85, "pad": 0.8,
-        "metallic": 0.75, "bass": 0.75, "flute": 0.85,
-        "reso": 0.7, "choir": 0.8,
-        "vibraphone": 0.8, "sitar": 0.7, "kalimba": 0.85,
-        "trumpet": 0.75, "harp": 0.85, "synthbass": 1,
-        "bellpad": 0.75, "detune": 0.7,
-    },
+    vol_tipo = {
+        "square": 0.5, "saw": 0.5, "chiptune": 0.45,
+        "organ": 0.6, "fm_bell": 0.65,
+        "sine": 0.75, "triangle": 0.7, "pluck": 0.7,
+        "supersaw": 0.45, "acid": 0.55, "bitcrush": 0.5, "lead": 0.5,
+        "wobble": 0.55, "glass": 0.65, "pad": 0.6,
+        "metallic": 0.55, "bass": 0.55, "flute": 0.65,
+        "reso": 0.5, "choir": 0.6,
+        "vibraphone": 0.6, "sitar": 0.5, "kalimba": 0.65,
+        "trumpet": 0.55, "harp": 0.65, "synthbass": 0.5,
+        "bellpad": 0.55, "detune": 0.5,
     }
-    return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.9))
+    return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
 
 def generar_params_instrumento(rng, tipo):
     """Genera parámetros aleatorios para un tipo de instrumento"""
@@ -1358,6 +1399,39 @@ def generar_cancion(seed, dif):
     percusion = generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
                                   C_INTRO, C_NUDO, C_DESENLACE, kit)
 
+    # --- linea de bajo procedural ---
+    estilo_bajo = rng.choice(["round", "pluck", "sub", "reese"])
+    # patrones ritmicos de bajo (16avos por compas)
+    patrones_bajo = [
+        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],   # negras
+        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],   # blancas
+        [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],   # sincopado
+        [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],   # corcheas
+        [1,0,0,0,1,0,1,0,1,0,0,0,1,0,1,0],   # groove
+    ]
+    pat_bajo = rng.choice(patrones_bajo)
+    bajo_eventos = []
+    # nota fundamental de cada grado de la progresion, una octava abajo de la tonica
+    midi_bajo_base = tonica - 12
+    for c in range(C_NUDO):
+        compas_t = t_intro_fin + c * 4 * beat
+        grado = progresion[c % len(progresion)]
+        # fundamental del acorde segun el grado en la escala
+        midi_nota = midi_bajo_base + escala[grado % len(escala)]
+        for s in range(16):
+            if pat_bajo[s] == 0:
+                continue
+            t = compas_t + s * paso16
+            bajo_eventos.append({
+                "tiempo": t,
+                "midi": midi_nota,
+                "dur": beat / 1000.0 * 0.9,
+            })
+    cancion_bajo = {
+        "estilo": estilo_bajo,
+        "eventos": sorted(bajo_eventos, key=lambda e: e["tiempo"]),
+    }
+
     return {
         "bpm":            BPM,
         "beat":           beat,
@@ -1366,6 +1440,7 @@ def generar_cancion(seed, dif):
         "duracion_loop":  t_desenlace_fin,
         "notas_jugador":  sorted(notas_jugador, key=lambda n: n["tiempo"]),
         "percusion":      percusion,
+        "bajo":           cancion_bajo,
         "kit":            kit,
         "instrumento":    instrumento,
         "notas_columnas": notas_columnas,
@@ -1392,12 +1467,24 @@ def iniciar_partida(seed):
         renderizar_instrumento(inst, tipo, dibujar_progreso=True)
     cache_notas = cache_por_instrumento[inst]
     cache_notas_largas = cache_largas_por_instrumento[inst]
+
+    # pre-renderizar sonidos de bajo (uno por midi único usado)
+    estilo_b = cancion["bajo"]["estilo"]
+    cache_bajo = {}
+    midis_bajo = set(e["midi"] for e in cancion["bajo"]["eventos"])
+    for mb in midis_bajo:
+        fb = midi_a_freq(mb)
+        wave_b = synth_bajo(fb, 0.5, estilo_b)
+        cache_bajo[mb] = np_to_sound(wave_b, vol=0.55, pan=0.0)
+    cancion["cache_bajo"] = cache_bajo
+
     return {
         "seed":           seed,
         "dificultad":     dif,
         "cancion":        cancion,
         "indice_jugador": 0,
         "indice_perc":    0,
+        "indice_bajo":    0,
         "inicio":         pygame.time.get_ticks(),
         "notas_cayendo":  [],
         "puntos":         0,
@@ -1418,13 +1505,33 @@ def tick_background(partida, ahora):
     if ahora >= c["duracion_loop"] and not partida["terminada"]:
         partida["terminada"] = True
 
+    # paneo por tipo de elemento de percusión
+    pan_perc = {
+        "kick": (1.0, 1.0), "snare": (1.0, 1.0), "clap": (0.95, 0.95),
+        "hihat": (0.7, 1.0), "hihat_o": (0.7, 1.0),
+        "clave": (1.0, 0.7), "agogo": (1.0, 0.65),
+        "crash": (0.9, 0.9), "tom1": (1.0, 0.8), "tom2": (0.8, 1.0),
+    }
     while partida["indice_perc"] < len(c["percusion"]) and ahora >= c["percusion"][partida["indice_perc"]]["tiempo"]:
         p = c["percusion"][partida["indice_perc"]]
         sample = kit.get(p["sample"])
         if sample:
-            sample.set_volume(min(1.0, p["vol"] * 1.2))
-            sample.play()
+            vol = min(1.0, p["vol"] * 1.2)
+            gl, gr = pan_perc.get(p["sample"], (1.0, 1.0))
+            ch = sample.play()
+            if ch:
+                ch.set_volume(vol * gl, vol * gr)
         partida["indice_perc"] += 1
+
+    # reproducir linea de bajo
+    bajo = c["bajo"]["eventos"]
+    cache_bajo = c.get("cache_bajo", {})
+    while partida["indice_bajo"] < len(bajo) and ahora >= bajo[partida["indice_bajo"]]["tiempo"]:
+        ev = bajo[partida["indice_bajo"]]
+        snd_b = cache_bajo.get(ev["midi"])
+        if snd_b:
+            snd_b.play()
+        partida["indice_bajo"] += 1
 
 def get_parte(partida, ahora):
     e = partida["cancion"]["estructura"]
@@ -1743,8 +1850,17 @@ while corriendo:
 
                         snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
                         if snd_tocar:
-                            snd_tocar.set_volume(vol_nota)
-                            snd_tocar.play()
+                            # paneo segun posicion de la columna (izq a der)
+                            num_cols_t = partida["dificultad"]["columnas"]
+                            if num_cols_t > 1:
+                                pan = col / (num_cols_t - 1)  # 0..1
+                            else:
+                                pan = 0.5
+                            volL = vol_nota * (1.0 - pan * 0.6)
+                            volR = vol_nota * (0.4 + pan * 0.6)
+                            ch = snd_tocar.play()
+                            if ch:
+                                ch.set_volume(volL, volR)
 
                         for grupo in partida["notas_cayendo"]:
                             if col in grupo["cols"]:
