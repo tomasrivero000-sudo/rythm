@@ -1173,8 +1173,9 @@ def dibujar_carga_seed(seed):
             pygame.quit()
             exit()
 
-def renderizar_instrumento(nombre, tipo, dibujar_progreso=False):
+def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
     """Renderiza un instrumento completo (60 notas x 2 duraciones)"""
+    texto_carga = display if display else nombre
     inst_rng = random.Random(hash(nombre))
     params = generar_params_instrumento(inst_rng, tipo)
     inst_eq = inst_rng.choice(EQ_TIPOS)
@@ -1185,7 +1186,7 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False):
     for midi in range(36, 96):
         idx += 1
         if dibujar_progreso and midi % 4 == 0:
-            dibujar_carga_seed_inst(idx / 60, nombre)
+            dibujar_carga_seed_inst(idx / 60, texto_carga)
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
@@ -1623,7 +1624,7 @@ def generar_cancion(seed, dif):
         instrumento = rng.choice(list(INSTRUMENTOS_JUGADOR.keys()))
 
     # --- MODO DRUMS: muy de vez en cuando, toda la cancion es de bateria ---
-    modo_drums = rng.random() < 0.06
+    modo_drums = rng.random() < 0.15
     # mapeo de cada columna a un elemento de bateria
     drums_disponibles = ["kick", "snare", "hihat", "clap", "tom1", "tom2", "clave", "agogo"]
     col_a_drum = [drums_disponibles[i % len(drums_disponibles)] for i in range(num_columnas)]
@@ -1997,10 +1998,27 @@ def iniciar_partida(seed):
     dif     = get_dificultad(seed)
     cancion = generar_cancion(int(seed * 23819), dif)
     inst = cancion["instrumento"]
+    es_drums = cancion.get("modo_drums")
+    # mostrar el tag de la partida (instrumento o DRUMS) antes de arrancar
+    tag = "DRUMS" if es_drums else inst
+    pantalla.fill(NEGRO)
+    titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
+    if es_drums:
+        modo_txt = fuente.render(">> DRUM MODE <<", True, BLANCO)
+    else:
+        modo_txt = fuente.render(f"INSTRUMENTO: {tag}", True, GRIS_MED)
+    pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 260))
+    esc_txt = fuente_chica.render(f"ESCALA: {cancion['escala'].upper()}   {cancion['bpm']} BPM", True, GRIS)
+    pantalla.blit(esc_txt, (ANCHO // 2 - esc_txt.get_width() // 2, 300))
+    presentar()
+    pygame.time.delay(900)
+
     # renderizar el instrumento si no está en cache
     if inst not in cache_por_instrumento:
         tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
-        renderizar_instrumento(inst, tipo, dibujar_progreso=True)
+        renderizar_instrumento(inst, tipo, dibujar_progreso=True,
+                               display="DRUMS" if es_drums else None)
     cache_notas = cache_por_instrumento[inst]
     cache_notas_largas = cache_largas_por_instrumento[inst]
 
