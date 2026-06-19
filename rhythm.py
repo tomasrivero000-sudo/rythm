@@ -46,7 +46,7 @@ ESCALAS = {
     "menor":       [0, 2, 3, 5, 7, 8, 10, 12],
     "pentatonica": [0, 2, 4, 7, 9, 12, 14, 16],
     "arm_menor":   [0, 2, 3, 5, 7, 8, 11, 12],
-    "blues":       [0, 3, 5, 6, 7, 10, 12, 15],
+    "blues":       [0, 3, 5, 7, 10, 12, 15, 17],
 }
 
 ACORDES_PATRON = {
@@ -54,7 +54,7 @@ ACORDES_PATRON = {
     "menor":       [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
     "pentatonica": [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 2, 4]],
     "arm_menor":   [[0, 2, 4], [3, 5, 7], [4, 6, 8], [0, 2, 4]],
-    "blues":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 3, 5]],
+    "blues":       [[0, 2, 4], [3, 5, 7], [0, 2, 4], [2, 4, 6]],
 }
 
 # progresiones armónicas reales (indices de grado en la escala)
@@ -1475,7 +1475,7 @@ def iniciar_partida(seed):
     for mb in midis_bajo:
         fb = midi_a_freq(mb)
         wave_b = synth_bajo(fb, 0.5, estilo_b)
-        cache_bajo[mb] = np_to_sound(wave_b, vol=0.55, pan=0.0)
+        cache_bajo[mb] = np_to_sound(wave_b, vol=0.3, pan=0.0)
     cancion["cache_bajo"] = cache_bajo
 
     return {
@@ -1934,7 +1934,6 @@ while corriendo:
                                                 partida["puntos"] += total_pts
                                             else:
                                                 partida["puntos"] = max(0, partida["puntos"] - 2)
-                                                partida["vida"] = max(0, partida["vida"] - 1)
                                                 crear_texto_flotante(cx, ZONA_Y - 20, "-2", GRIS_MED)
                                             if partida["combo"] > 0 and partida["combo"] % 5 == 0:
                                                 crear_texto_flotante(ANCHO // 2, ZONA_Y - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
