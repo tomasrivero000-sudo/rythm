@@ -105,18 +105,21 @@ PROGRESIONES = [
 ]
 
 DIFICULTADES = {
-    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False},
-    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False},
-    3:  {"nombre": "NORMAL",     "columnas": 4, "acordes": True},
-    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": True},
-    5:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True},
-    6:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True},
-    7:  {"nombre": "PRO",        "columnas": 6, "acordes": True},
-    8:  {"nombre": "PRO+",       "columnas": 6, "acordes": True},
-    9:  {"nombre": "MASTER",     "columnas": 7, "acordes": True},
-    10: {"nombre": "MASTER+",    "columnas": 7, "acordes": True},
-    11: {"nombre": "GOD",        "columnas": 7, "acordes": True},
-    12: {"nombre": "CHAOS",      "columnas": 8, "acordes": True},
+    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.70},
+    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.85},
+    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 1.00},
+    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.80},
+    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.95},
+    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 1.10},
+    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 1.25},
+    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 1.00},
+    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.20},
+    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.10},
+    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.30},
+    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.20},
+    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.40},
+    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.60},
+    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.70},
 }
 
 SEED_MAX       = 9999
@@ -1542,11 +1545,13 @@ def dibujar_input_nombre(nombre_actual):
 def get_dificultad(seed):
     if seed <= 0:
         return DIFICULTADES[1]
-    tramos = [500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 9999]
+    # mas tramos (y mas anchos) en la zona facil/normal/intermedia
+    tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
+              7100, 7800, 8400, 9000, 9500, 9999]
     for i, tope in enumerate(tramos):
         if seed <= tope:
             return DIFICULTADES[i + 1]
-    return DIFICULTADES[12]
+    return DIFICULTADES[15]
 
 def elegir_kit(rng):
     return sintetizar_kit(rng)
@@ -1899,7 +1904,7 @@ def generar_cancion(seed, dif):
     # repetir la progresion de 4 acordes para cubrir 8 compases
     progresion = base_prog * 2
 
-    densidad = gdef.get("densidad", 1.0)
+    densidad = gdef.get("densidad", 1.0) * dif.get("dens", 1.0)
     swing    = gdef.get("swing", 0.0)
 
     notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
