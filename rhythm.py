@@ -511,11 +511,13 @@ def generar_cancion(seed, dif):
             for idx, pos in enumerate(activas):
                 if rng.random() < 0.45:
                     if idx + 1 < len(activas):
-                        dur = (activas[idx + 1] - pos) * paso16
+                        dur_beats = (activas[idx + 1] - pos) // 4
+                        dur = dur_beats * beat
                     else:
-                        dur = (16 - pos) * paso16
-                    if dur >= 2 * paso16:
-                        compas[pos]["hold"] = dur - paso16
+                        dur_beats = (16 - pos) // 4
+                        dur = dur_beats * beat
+                    if dur >= 2 * (beat // 4):
+                        compas[pos]["hold"] = dur - beat // 4
             bloque.append(compas)
         return bloque
 
@@ -668,27 +670,29 @@ def dibujar_juego(partida, ahora):
 
     for grupo in partida["notas_cayendo"]:
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
+        cols_hold_activo = [c for c in grupo["cols"] if c in partida["holds_activos"]]
+        cols_a_dibujar = list(set(pendientes + cols_hold_activo))
         xs = []
         hold_h = grupo.get("hold_px", 0)
-        for col in pendientes:
+        for col in cols_a_dibujar:
             x = col * ancho_col
             if hold_h > 0:
                 bar_x = x + ancho_col // 2 - 6
                 bar_y = grupo["y"] - hold_h
                 bar_h = hold_h
                 if col in partida["holds_activos"]:
-                    # hold activo: barra ancha brillante
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x - 4, bar_y, 20, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h))
                 else:
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
-            if grupo.get("es_acorde"):
-                pygame.draw.rect(pantalla, BLANCO, (x + 6,  grupo["y"],     ancho_col - 12, 28))
-                pygame.draw.rect(pantalla, NEGRO,  (x + 9,  grupo["y"] + 3, ancho_col - 18, 22))
-                pygame.draw.rect(pantalla, BLANCO, (x + 11, grupo["y"] + 5, ancho_col - 22, 18))
-            else:
-                pygame.draw.rect(pantalla, BLANCO, (x + 6, grupo["y"], ancho_col - 12, 28))
+            if col in pendientes:
+                if grupo.get("es_acorde"):
+                    pygame.draw.rect(pantalla, BLANCO, (x + 6,  grupo["y"],     ancho_col - 12, 28))
+                    pygame.draw.rect(pantalla, NEGRO,  (x + 9,  grupo["y"] + 3, ancho_col - 18, 22))
+                    pygame.draw.rect(pantalla, BLANCO, (x + 11, grupo["y"] + 5, ancho_col - 22, 18))
+                else:
+                    pygame.draw.rect(pantalla, BLANCO, (x + 6, grupo["y"], ancho_col - 12, 28))
             xs.append(x + ancho_col // 2)
         if len(xs) > 1:
             pygame.draw.line(pantalla, BLANCO, (xs[0], grupo["y"] + 14), (xs[-1], grupo["y"] + 14), 2)
@@ -902,14 +906,6 @@ while corriendo:
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
                                         combo_mult = 1 + partida["combo"] // 10
-                                        if pts > 0:
-                                            total_pts = pts * len(grupo["cols"]) * combo_mult
-                                            txt_pts = f"+{total_pts}"
-                                            if combo_mult > 1:
-                                                txt_pts += f" x{combo_mult}"
-                                            crear_texto_flotante(cx, ZONA_Y - 20, txt_pts, BLANCO, combo_mult > 1)
-                                            if partida["combo"] > 0 and partida["combo"] % 10 == 0:
-                                                crear_texto_flotante(ANCHO // 2, ZONA_Y - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
                                                 ch = cache_notas_largas[midi_fijo].play()
@@ -920,6 +916,14 @@ while corriendo:
                                                 "midi":  midi_fijo,
                                             }
                                         else:
+                                            if pts > 0:
+                                                total_pts = pts * len(grupo["cols"]) * combo_mult
+                                                txt_pts = f"+{total_pts}"
+                                                if combo_mult > 1:
+                                                    txt_pts += f" x{combo_mult}"
+                                                crear_texto_flotante(cx, ZONA_Y - 20, txt_pts, BLANCO, combo_mult > 1)
+                                                if partida["combo"] > 0 and partida["combo"] % 10 == 0:
+                                                    crear_texto_flotante(ANCHO // 2, ZONA_Y - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
                                             partida["puntos"] += pts * len(grupo["cols"]) * combo_mult
                                             if grupo["acertadas"] == set(grupo["cols"]):
                                                 partida["notas_cayendo"].remove(grupo)
@@ -935,9 +939,12 @@ while corriendo:
                             del canal_hold[col]
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
-                        # siempre dar puntos y remover al soltar
                         if grupo["y"] > ZONA_Y + 20:
                             partida["puntos"] += 3
+                            num_cols = partida["dificultad"]["columnas"]
+                            ancho_col = ANCHO // num_cols
+                            cx = col * ancho_col + ancho_col // 2
+                            crear_texto_flotante(cx, ZONA_Y - 40, "+3", BLANCO)
                         if grupo in partida["notas_cayendo"]:
                             partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
@@ -995,12 +1002,7 @@ while corriendo:
             notas_vivas = []
             for n in partida["notas_cayendo"]:
                 if n["y"] >= ALTO + 50:
-                    # no contar MISS si es un hold activo
-                    es_hold_activo = False
-                    for col_h, hold_h in partida["holds_activos"].items():
-                        if hold_h["grupo"] is n:
-                            es_hold_activo = True
-                            break
+                    es_hold_activo = any(c in partida["holds_activos"] for c in n["cols"])
                     if not es_hold_activo:
                         partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
                         partida["combo"] = 0
