@@ -1623,12 +1623,6 @@ def generar_cancion(seed, dif):
     else:
         instrumento = rng.choice(list(INSTRUMENTOS_JUGADOR.keys()))
 
-    # --- MODO DRUMS: muy de vez en cuando, toda la cancion es de bateria ---
-    modo_drums = rng.random() < 0.15
-    # mapeo de cada columna a un elemento de bateria
-    drums_disponibles = ["kick", "snare", "hihat", "clap", "tom1", "tom2", "clave", "agogo"]
-    col_a_drum = [drums_disponibles[i % len(drums_disponibles)] for i in range(num_columnas)]
-
     # --- CAPA 1: estructura variable por seed ---
     C_INTRO     = rng.choice([2, 4, 4, 6])
     num_reps    = rng.choice([4, 5, 6, 6, 7, 8])   # repeticiones de 4 compases en el nudo
@@ -1890,14 +1884,6 @@ def generar_cancion(seed, dif):
                 "tiempo": t, "es_acorde": False, "parte": "desenlace", "hold": hold_dur,
             })
 
-    # --- MODO DRUMS: convertir notas melodicas en notas de bateria ---
-    if modo_drums:
-        for n in notas_jugador:
-            # los acordes se vuelven golpes multiples; cada columna su drum
-            n["drum"] = True
-            n["drums"] = [col_a_drum[c] for c in n["cols"]]
-            n["hold"] = 0  # sin holds en modo drums
-
     percusion = generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
                                   C_INTRO, C_NUDO, C_DESENLACE, kit)
 
@@ -1979,8 +1965,6 @@ def generar_cancion(seed, dif):
         "notas_columnas": notas_columnas,
         "lissajous":      lissajous,
         "eventos":        eventos,
-        "modo_drums":     modo_drums,
-        "col_a_drum":     col_a_drum,
         "estructura": {
             "intro_fin":     t_intro_fin,
             "nudo_fin":      t_nudo_fin,
@@ -1998,16 +1982,11 @@ def iniciar_partida(seed):
     dif     = get_dificultad(seed)
     cancion = generar_cancion(int(seed * 23819), dif)
     inst = cancion["instrumento"]
-    es_drums = cancion.get("modo_drums")
-    # mostrar el tag de la partida (instrumento o DRUMS) antes de arrancar
-    tag = "DRUMS" if es_drums else inst
+    # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
-    if es_drums:
-        modo_txt = fuente.render(">> DRUM MODE <<", True, BLANCO)
-    else:
-        modo_txt = fuente.render(f"INSTRUMENTO: {tag}", True, GRIS_MED)
+    modo_txt = fuente.render(f"INSTRUMENTO: {inst}", True, GRIS_MED)
     pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 260))
     esc_txt = fuente_chica.render(f"ESCALA: {cancion['escala'].upper()}   {cancion['bpm']} BPM", True, GRIS)
     pantalla.blit(esc_txt, (ANCHO // 2 - esc_txt.get_width() // 2, 300))
@@ -2017,8 +1996,7 @@ def iniciar_partida(seed):
     # renderizar el instrumento si no está en cache
     if inst not in cache_por_instrumento:
         tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
-        renderizar_instrumento(inst, tipo, dibujar_progreso=True,
-                               display="DRUMS" if es_drums else None)
+        renderizar_instrumento(inst, tipo, dibujar_progreso=True)
     cache_notas = cache_por_instrumento[inst]
     cache_notas_largas = cache_largas_por_instrumento[inst]
 
@@ -2075,8 +2053,6 @@ def tick_background(partida, ahora):
             break
     partida["evento_activo"] = evento_activo
 
-    # en modo drums, la percusion de fondo baja para dejar espacio al jugador
-    factor_perc = 0.4 if c.get("modo_drums") else 1.0
     while partida["indice_perc"] < len(c["percusion"]) and ahora >= c["percusion"][partida["indice_perc"]]["tiempo"]:
         p = c["percusion"][partida["indice_perc"]]
         sample = kit.get(p["sample"])
@@ -2085,7 +2061,7 @@ def tick_background(partida, ahora):
         # solo_drums: la percusion suena mas fuerte
         boost = 1.6 if evento_activo == "solo_drums" else 1.2
         if sample and not saltar:
-            vol = min(1.0, p["vol"] * boost) * config["volumen"] * factor_perc
+            vol = min(1.0, p["vol"] * boost) * config["volumen"]
             gl, gr = pan_perc.get(p["sample"], (1.0, 1.0))
             ch = sample.play()
             if ch:
@@ -2168,24 +2144,37 @@ def dibujar_fondo_lissajous(partida, ahora):
         # mas holds = mas vibracion
         jitter = 2.0 + len(partida["holds_activos"]) * 1.5
 
+    # brillo extra segun el combo: la figura se ilumina con la racha
+    combo = partida.get("combo", 0)
+    brillo_combo = min(combo / 30.0, 1.0)   # 0 a 1 entre combo 0 y 30
+    # un pulso de fondo constante crece con el combo
+    pulso = max(pulso, brillo_combo * 0.5)
+
     cx_c = ANCHO / 2
     cy_c = (ZONA_Y) / 2 + 20
     rx = (ANCHO * 0.42) * escala
     ry = (ZONA_Y * 0.40) * escala
 
-    boost = 50 + (30 if hay_hold else 0)
-    color = (min(140, int(GRIS_FONDO[0] + pulso * boost)),
-             min(140, int(GRIS_FONDO[1] + pulso * boost)),
-             min(140, int(GRIS_FONDO[2] + pulso * boost)))
+    # techo de brillo y boost suben con el combo
+    techo = int(140 + brillo_combo * 90)        # hasta 230 con combo alto
+    boost = 50 + (30 if hay_hold else 0) + int(brillo_combo * 80)
+    color = (min(techo, int(GRIS_FONDO[0] + pulso * boost)),
+             min(techo, int(GRIS_FONDO[1] + pulso * boost)),
+             min(techo, int(GRIS_FONDO[2] + pulso * boost)))
+    # color de la segunda figura tambien se aviva con el combo
+    base2 = int(GRIS_FONDO[0] + brillo_combo * 40)
+    color2 = (base2, base2, base2)
 
     puntos = _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, jitter=jitter)
     clip_ant = pantalla.get_clip()
     pantalla.set_clip(pygame.Rect(0, 0, ANCHO, ZONA_Y + 54))
     if len(puntos) > 1:
-        pygame.draw.lines(pantalla, color, False, puntos, 1)
+        # con combo muy alto, la linea se engrosa
+        grosor = 2 if brillo_combo >= 0.8 else 1
+        pygame.draw.lines(pantalla, color, False, puntos, grosor)
         puntos2 = _curva_fondo(tipo, liss, npts, -t_anim * 0.6,
                                cx_c, cy_c, rx * 0.7, ry * 0.7, fase_extra=1.0, jitter=jitter)
-        pygame.draw.lines(pantalla, GRIS_FONDO, False, puntos2, 1)
+        pygame.draw.lines(pantalla, color2, False, puntos2, 1)
     pantalla.set_clip(clip_ant)
 
 def dibujar_juego(partida, ahora):
@@ -2222,9 +2211,6 @@ def dibujar_juego(partida, ahora):
                 if idx_c < len(grupo.get("midis", [])) and c < len(notas_label):
                     notas_label[c] = grupo["midis"][idx_c]
 
-    es_modo_drums = partida["cancion"].get("modo_drums")
-    drum_corto = {"kick": "BD", "snare": "SN", "hihat": "HH", "clap": "CL",
-                  "tom1": "T1", "tom2": "T2", "clave": "CV", "agogo": "AG"}
     for i in range(num_cols):
         x = i * ancho_col + sx
         if i in teclas_sostenidas:
@@ -2232,11 +2218,7 @@ def dibujar_juego(partida, ahora):
         col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
         label = fuente_chica.render(LABELS[i], True, col_activa)
         pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 10 + sy))
-        if es_modo_drums:
-            dname = partida["cancion"]["col_a_drum"][i]
-            sub_txt = fuente_chica.render(drum_corto.get(dname, dname[:2].upper()), True, col_activa)
-            pantalla.blit(sub_txt, (x + ancho_col // 2 - sub_txt.get_width() // 2, ZONA_Y + 28 + sy))
-        elif i < len(notas_label):
+        if i < len(notas_label):
             nota_name = midi_a_nombre(notas_label[i])
             nota_txt = fuente_chica.render(nota_name, True, col_activa)
             pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, ZONA_Y + 28 + sy))
@@ -2324,10 +2306,7 @@ def dibujar_juego(partida, ahora):
         }
         ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
         pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
-    if partida["cancion"].get("modo_drums"):
-        info = fuente_chica.render(f"DRUM MODE  {partida['cancion']['bpm']}BPM", True, BLANCO)
-    else:
-        info = fuente_chica.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
+    info = fuente_chica.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
     pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
@@ -2648,28 +2627,19 @@ while corriendo:
                         else:
                             vol_nota = 0.6
 
-                        if partida["cancion"].get("modo_drums"):
-                            # modo drums: tocar el sample de bateria de la columna
-                            drum_name = partida["cancion"]["col_a_drum"][col]
-                            snd_drum = partida["cancion"]["kit"].get(drum_name)
-                            if snd_drum:
-                                ch = snd_drum.play()
-                                if ch:
-                                    ch.set_volume(config["volumen"])
-                        else:
-                            snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
-                            if snd_tocar:
-                                # paneo segun posicion de la columna (izq a der)
-                                num_cols_t = partida["dificultad"]["columnas"]
-                                if num_cols_t > 1:
-                                    pan = col / (num_cols_t - 1)  # 0..1
-                                else:
-                                    pan = 0.5
-                                volL = vol_nota * (1.0 - pan * 0.6) * config["volumen"]
-                                volR = vol_nota * (0.4 + pan * 0.6) * config["volumen"]
-                                ch = snd_tocar.play()
-                                if ch:
-                                    ch.set_volume(volL, volR)
+                        snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
+                        if snd_tocar:
+                            # paneo segun posicion de la columna (izq a der)
+                            num_cols_t = partida["dificultad"]["columnas"]
+                            if num_cols_t > 1:
+                                pan = col / (num_cols_t - 1)  # 0..1
+                            else:
+                                pan = 0.5
+                            volL = vol_nota * (1.0 - pan * 0.6) * config["volumen"]
+                            volR = vol_nota * (0.4 + pan * 0.6) * config["volumen"]
+                            ch = snd_tocar.play()
+                            if ch:
+                                ch.set_volume(volL, volR)
 
                         # pulso del fondo al tocar (reacciona a la nota del jugador)
                         partida["liss_pulso"] = 1.0
