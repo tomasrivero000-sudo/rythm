@@ -1238,21 +1238,21 @@ shake_amt = 0.0      # intensidad del shake actual
 shake_dx = 0
 shake_dy = 0
 
-def crear_explosion(x, y, cantidad, color=BLANCO):
+def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0):
     for _ in range(cantidad):
         angulo = random.uniform(0, 6.28)
-        fuerza = random.uniform(2, 14)
+        fuerza = random.uniform(2, 14) * potencia
         dx = math.cos(angulo) * fuerza
-        dy = math.sin(angulo) * fuerza - 5
-        vida = random.randint(25, 65)
-        tam = random.randint(3, 12)
+        dy = math.sin(angulo) * fuerza - 5 * potencia
+        vida = random.randint(25, 65) + int((potencia - 1) * 15)
+        tam = int(random.randint(3, 12) * (0.8 + potencia * 0.4))
         forma = random.choice(["rect", "rect", "linea"])
         particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida,
                            "vida_max": vida, "tam": tam, "color": color, "forma": forma,
                            "spin": random.uniform(-0.3, 0.3)})
 
-def crear_onda(x, y, intensidad=1.0):
-    ondas.append({"x": x, "y": y, "r": 4, "vida": 20, "vida_max": 20, "intensidad": intensidad})
+def crear_onda(x, y, intensidad=1.0, r0=4):
+    ondas.append({"x": x, "y": y, "r": r0, "vida": 20, "vida_max": 20, "intensidad": intensidad})
 
 def crear_flash(col, intensidad=1.0):
     flashes.append({"col": col, "vida": 14, "vida_max": 14, "intensidad": intensidad})
@@ -1871,6 +1871,15 @@ def generar_cancion(seed, dif):
         "eventos": sorted(bajo_eventos, key=lambda e: e["tiempo"]),
     }
 
+    # parametros de la figura de lissajous de fondo (unica por seed)
+    lissajous = {
+        "a": rng.randint(1, 5),        # frecuencia horizontal
+        "b": rng.randint(1, 5),        # frecuencia vertical
+        "delta": rng.uniform(0, 3.14), # desfase
+        "vel": rng.uniform(0.15, 0.5), # velocidad de animacion
+        "puntos": rng.choice([120, 160, 200]),
+    }
+
     return {
         "bpm":            BPM,
         "beat":           beat,
@@ -1883,6 +1892,7 @@ def generar_cancion(seed, dif):
         "kit":            kit,
         "instrumento":    instrumento,
         "notas_columnas": notas_columnas,
+        "lissajous":      lissajous,
         "estructura": {
             "intro_fin":     t_intro_fin,
             "nudo_fin":      t_nudo_fin,
@@ -1981,11 +1991,59 @@ def get_parte(partida, ahora):
     elif ahora < e["desenlace_fin"]: return "FIN"
     return "FIN"
 
+GRIS_FONDO = (28, 28, 28)
+GRIS_FONDO2 = (45, 45, 45)
+
+def dibujar_fondo_lissajous(partida, ahora):
+    """Dibuja una figura de Lissajous tenue de fondo, late con el kick"""
+    liss = partida["cancion"].get("lissajous")
+    if not liss:
+        return
+    a = liss["a"]; b = liss["b"]; delta = liss["delta"]
+    vel = liss["vel"]; npts = liss["puntos"]
+    # fase animada
+    t_anim = ahora * 0.001 * vel
+    # pulso del kick: usar el tiempo desde el ultimo golpe para latir
+    beat = partida["cancion"]["beat"]
+    fase_beat = (ahora % beat) / beat  # 0..1 dentro del beat
+    pulso = math.exp(-fase_beat * 4)   # decae tras cada beat
+    escala = 0.92 + pulso * 0.08
+
+    cx_c = ANCHO / 2
+    cy_c = (ZONA_Y) / 2 + 20
+    rx = (ANCHO * 0.42) * escala
+    ry = (ZONA_Y * 0.40) * escala
+
+    color = (int(GRIS_FONDO[0] + pulso * 18),
+             int(GRIS_FONDO[1] + pulso * 18),
+             int(GRIS_FONDO[2] + pulso * 18))
+
+    puntos = []
+    for i in range(npts + 1):
+        tt = (i / npts) * 2 * math.pi
+        x = cx_c + rx * math.sin(a * tt + t_anim + delta)
+        y = cy_c + ry * math.sin(b * tt)
+        puntos.append((int(x), int(y)))
+    if len(puntos) > 1:
+        pygame.draw.lines(pantalla, color, False, puntos, 1)
+        # segunda figura desfasada, mas tenue
+        puntos2 = []
+        for i in range(npts + 1):
+            tt = (i / npts) * 2 * math.pi
+            x = cx_c + rx * 0.7 * math.sin(a * tt - t_anim * 0.6 + delta)
+            y = cy_c + ry * 0.7 * math.sin(b * tt + 1.0)
+            puntos2.append((int(x), int(y)))
+        pygame.draw.lines(pantalla, GRIS_FONDO, False, puntos2, 1)
+
 def dibujar_juego(partida, ahora):
     num_cols  = partida["dificultad"]["columnas"]
     ancho_col = ANCHO // num_cols
     parte     = get_parte(partida, ahora)
     sx, sy    = shake_dx, shake_dy
+
+    # fondo procedural (figura de lissajous tenue)
+    if not partida.get("game_over"):
+        dibujar_fondo_lissajous(partida, ahora)
 
     for i in range(1, num_cols):
         pygame.draw.line(pantalla, GRIS, (i * ancho_col + sx, 0), (i * ancho_col + sx, ALTO), 1)
@@ -2042,8 +2100,19 @@ def dibujar_juego(partida, ahora):
                 bar_y = gy - hold_h
                 bar_h = hold_h
                 if col in partida["holds_activos"]:
-                    pygame.draw.rect(pantalla, GRIS_MED, (bar_x - 4, bar_y, 20, bar_h))
-                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h))
+                    # barra que oscila: dibujada por segmentos con desplazamiento senoidal
+                    fase = pygame.time.get_ticks() * 0.012
+                    seg = 6
+                    cx_bar = x + ancho_col // 2
+                    pasos = max(2, bar_h // seg)
+                    for k in range(pasos):
+                        yy = bar_y + k * seg
+                        prog = k / pasos
+                        # mas amplitud arriba (lejos de la zona), se calma al llegar
+                        amp = 7 * prog
+                        ox = math.sin(fase + k * 0.5) * amp
+                        pygame.draw.rect(pantalla, GRIS_MED, (int(cx_bar + ox - 8), yy, 16, seg + 1))
+                        pygame.draw.rect(pantalla, BLANCO, (int(cx_bar + ox - 5), yy, 10, seg + 1))
                 else:
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
@@ -2411,21 +2480,26 @@ while corriendo:
                                         if distancia < 30:
                                             pts = 5
                                             partida["combo"] += 1
+                                            # potencia crece con el combo (1.0 a 2.5)
+                                            pot = min(1.0 + partida["combo"] * 0.05, 2.5)
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
-                                            combo_particulas = min(100 + partida["combo"] * 4, 320)
-                                            crear_explosion(cx, ZONA_Y, combo_particulas)
+                                            combo_particulas = min(100 + partida["combo"] * 8, 500)
+                                            crear_explosion(cx, ZONA_Y, combo_particulas, potencia=pot)
                                             crear_onda(cx, ZONA_Y, 1.0)
-                                            crear_onda(cx, ZONA_Y, 0.6)
-                                            crear_flash(col, 1.0)
-                                            crear_shake(8)
+                                            crear_onda(cx, ZONA_Y, 0.6, r0=int(4 + partida["combo"] * 0.5))
+                                            if partida["combo"] >= 20:
+                                                crear_onda(cx, ZONA_Y, 0.8, r0=int(20 + partida["combo"]))
+                                            crear_flash(col, min(1.0, 0.7 + partida["combo"] * 0.02))
+                                            crear_shake(min(8 + partida["combo"] * 0.3, 22))
                                         elif distancia < 60:
                                             pts = 3
                                             partida["combo"] += 1
+                                            pot = min(1.0 + partida["combo"] * 0.035, 2.0)
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 60 + partida["combo"] * 2)
+                                            crear_explosion(cx, ZONA_Y, min(60 + partida["combo"] * 4, 280), potencia=pot)
                                             crear_onda(cx, ZONA_Y, 0.7)
                                             crear_flash(col, 0.6)
-                                            crear_shake(4)
+                                            crear_shake(min(4 + partida["combo"] * 0.2, 14))
                                         elif distancia < 100:
                                             pts = 1
                                             partida["combo"] += 1
