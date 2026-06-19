@@ -1,0 +1,712 @@
+import os
+os.add_dll_directory("F:\\VIDEOGAMEEE")
+import fluidsynth
+import pygame
+import random
+import glob
+import numpy as np
+
+pygame.init()
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+pygame.mixer.set_num_channels(32)
+
+ANCHO, ALTO = 720, 640
+pantalla = pygame.display.set_mode((ANCHO, ALTO))
+pygame.display.set_caption("Rhythm Game")
+clock = pygame.time.Clock()
+
+NEGRO    = (0,   0,   0)
+BLANCO   = (255, 255, 255)
+GRIS     = (80,  80,  80)
+GRIS_MED = (140, 140, 140)
+
+COLUMNAS = {
+    pygame.K_a: 0,
+    pygame.K_s: 1,
+    pygame.K_d: 2,
+    pygame.K_f: 3,
+    pygame.K_j: 4,
+    pygame.K_k: 5,
+    pygame.K_l: 6,
+    pygame.K_SEMICOLON: 7,
+    pygame.K_PERIOD: 7,
+}
+
+LABELS = ["A", "S", "D", "F", "J", "K", "L", "N"]
+
+ESCALAS = {
+    "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
+    "menor":       [0, 2, 3, 5, 7, 8, 10, 12],
+    "pentatonica": [0, 2, 4, 7, 9, 12, 14, 16],
+}
+
+ACORDES_PATRON = {
+    "mayor":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [4, 6, 7]],
+    "menor":       [[0, 2, 4], [1, 3, 5], [2, 4, 6], [0, 3, 5]],
+    "pentatonica": [[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]],
+    "blues":       [[0, 2, 4], [0, 3, 5], [1, 3, 6], [2, 4, 7]], 
+}
+
+DIFICULTADES = {
+    1: {"nombre": "FACIL",   "columnas": 3, "acordes": False},
+    2: {"nombre": "FACIL",   "columnas": 3, "acordes": False},
+    3: {"nombre": "NORMAL",  "columnas": 4, "acordes": False},
+    4: {"nombre": "NORMAL",  "columnas": 4, "acordes": False},
+    5: {"nombre": "DIFICIL", "columnas": 5, "acordes": True},
+    6: {"nombre": "PRO",     "columnas": 6, "acordes": True},
+    7: {"nombre": "GOD",     "columnas": 7, "acordes": True},
+    8: {"nombre": "GOD",     "columnas": 7, "acordes": True},
+    9: {"nombre": "GOD",     "columnas": 7, "acordes": True},
+}
+
+SEED_MAX       = 420
+SEED_VELOCIDAD = 1.0
+ZONA_Y         = ALTO - 90
+VELOCIDAD      = 3
+
+fuente_grande = pygame.font.SysFont("courier", 48, bold=True)
+fuente        = pygame.font.SysFont("courier", 24, bold=True)
+fuente_chica  = pygame.font.SysFont("courier", 14, bold=True)
+
+# --- samples de bateria ---
+SAMPLES_PATH = "F:\\VIDEOGAMEEE\\elementos\\MPC60vsVB_Maschine\\MPC60vsVB_Maschine\\MPCVB Fat Samples\\"
+
+def cargar_samples(prefijo):
+    archivos = sorted(glob.glob(SAMPLES_PATH + prefijo + "*.wav"))
+    return [pygame.mixer.Sound(a) for a in archivos]
+
+print("Cargando samples...")
+kicks    = cargar_samples("BD MPCVB Fat")
+snares   = cargar_samples("SD MPCVB Fat")
+hihats   = cargar_samples("HH MPCVB Fat")
+hihats_o = cargar_samples("HHo MPCVB Fat")
+claps    = cargar_samples("Clap MPCVB Fat")
+claves   = cargar_samples("Clave MPCVB Fat")
+crashes  = cargar_samples("Crash MPCVB Fat")
+agogos   = cargar_samples("Agogo MPCVB Fat")
+toms     = cargar_samples("Tom MPCVB Fat")
+print(f"OK: {len(kicks)}k {len(snares)}s {len(hihats)}h {len(claps)}c {len(toms)}t")
+
+# --- pre-renderizar notas con fluidsynth ---
+print("Renderizando notas...")
+SOUNDFONT = "F:\\VIDEOGAMEEE\\GeneralUser-GS.sf2"
+fs = fluidsynth.Synth(samplerate=44100.0)
+sfid = fs.sfload(SOUNDFONT)
+fs.program_select(0, sfid, 0, 4)
+
+SR = 44100
+cache_notas = {}
+cache_notas_largas = {}
+
+def renderizar_nota(midi, duracion_seg):
+    fs.noteon(0, midi, 100)
+    total = int(SR * duracion_seg)
+    buf = np.zeros(total * 2, dtype=np.int16)
+    pos = 0
+    while pos < total * 2:
+        chunk = min(512, (total * 2 - pos) // 2)
+        if chunk <= 0:
+            break
+        raw = fs.get_samples(chunk)
+        arr = np.frombuffer(raw, dtype=np.int16)
+        end = min(pos + len(arr), total * 2)
+        buf[pos:end] = arr[:end - pos]
+        pos = end
+    fs.noteoff(0, midi)
+    fs.get_samples(2048)
+    stereo = buf.reshape(-1, 2)
+    return pygame.sndarray.make_sound(stereo)
+
+for midi in range(36, 96):
+    cache_notas[midi] = renderizar_nota(midi, 0.3)
+    cache_notas_largas[midi] = renderizar_nota(midi, 2.0)
+
+fs.delete()
+print("Notas OK")
+
+# --- canales de pygame.mixer para holds ---
+canal_hold = {}
+
+def nota_midi(tonica, escala, grado):
+    return tonica + escala[grado % len(escala)]
+
+def get_dificultad(seed):
+    if seed <= 0:
+        return DIFICULTADES[1]
+    tramos = [60, 120, 180, 240, 300, 360, 420]
+    for i, tope in enumerate(tramos):
+        if seed <= tope:
+            return DIFICULTADES[i + 1]
+    return DIFICULTADES[7]
+
+def elegir_kit(rng):
+    kit = {}
+    kit["kick"]    = rng.choice(kicks)   if kicks    else None
+    kit["snare"]   = rng.choice(snares)  if snares   else None
+    kit["hihat"]   = rng.choice(hihats)  if hihats   else None
+    kit["hihat_o"] = rng.choice(hihats_o) if hihats_o else None
+    kit["clap"]    = rng.choice(claps)   if claps    else None
+    kit["clave"]   = rng.choice(claves)  if claves   else None
+    kit["crash"]   = rng.choice(crashes) if crashes  else None
+    kit["agogo"]   = rng.choice(agogos)  if agogos   else None
+    kit["tom1"]    = rng.choice(toms)    if toms     else None
+    kit["tom2"]    = rng.choice(toms)    if toms     else None
+    return kit
+
+def generar_patrones_drums(rng):
+    pat_kick_all = [
+        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
+        [1,0,0,0,1,0,0,0,1,0,0,1,1,0,0,0],
+        [1,0,0,1,0,0,1,0,0,0,1,0,0,0,1,0],
+        [1,0,0,0,1,0,1,0,1,0,0,0,1,0,0,0],
+        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,1,0],
+        [1,0,1,0,0,0,1,0,1,0,0,0,1,0,0,0],
+        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
+        [1,0,0,0,1,0,0,1,0,0,1,0,0,0,1,0],
+        [1,0,0,1,0,0,0,0,1,0,0,1,0,0,0,0],
+        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0],
+    ]
+    pat_hh_all = [
+        [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
+        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+        [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1],
+        [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
+        [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,1],
+        [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],
+        [0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
+        [1,0,1,0,0,1,0,1,1,0,1,0,0,1,0,1],
+    ]
+    pat_snare_all = [
+        [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1],
+        [0,0,0,0,1,0,0,1,0,0,0,0,1,0,0,0],
+        [0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],
+        [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+    ]
+    pats = {}
+    pats["kick"]    = rng.choice(pat_kick_all)
+    pats["snare"]   = rng.choice(pat_snare_all)
+    pats["hihat"]   = rng.choice(pat_hh_all)
+    pats["hihat_o"] = [0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0]
+    pats["clap"]    = [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]
+    pats["clave"]   = [0] * 16
+    for p in rng.sample(range(16), rng.randint(2, 4)):
+        pats["clave"][p] = 1
+    pats["agogo"]   = [0] * 16
+    for p in rng.sample(range(16), rng.randint(1, 3)):
+        pats["agogo"][p] = 1
+    pats["fill"]    = [0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1]
+    return pats
+
+def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
+                      c_intro, c_nudo, c_desenlace, kit):
+    paso = beat // 4
+    pats  = generar_patrones_drums(rng)
+    pats2 = generar_patrones_drums(rng)
+    pats3 = generar_patrones_drums(rng)
+    tercio1 = t_intro_fin + 8 * 4 * beat
+    tercio2 = t_intro_fin + 16 * 4 * beat
+    percusion = []
+    total = c_intro + c_nudo + c_desenlace
+    for c in range(total):
+        tc = c * 4 * beat
+        if tc >= t_desenlace_fin:
+            break
+        es_fill = (c > 0) and (c % 4 == 3)
+        if tc < tercio1:
+            p = pats
+        elif tc < tercio2:
+            p = pats2
+        else:
+            p = pats3
+        for i in range(16):
+            t = tc + i * paso
+            if t < t_intro_fin:
+                if p["hihat"][i] and kit["hihat"]:
+                    percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.04})
+                continue
+            if t >= t_nudo_fin:
+                if p["kick"][i] and kit["kick"]:
+                    percusion.append({"tiempo": t, "sample": "kick", "vol": 0.15})
+                if p["clap"][i] and kit["clap"]:
+                    percusion.append({"tiempo": t, "sample": "clap", "vol": 0.09})
+                continue
+            if p["kick"][i] and kit["kick"]:
+                percusion.append({"tiempo": t, "sample": "kick", "vol": 0.18})
+            if p["snare"][i] and kit["snare"]:
+                percusion.append({"tiempo": t, "sample": "snare", "vol": 0.11})
+            if p["hihat"][i] and kit["hihat"]:
+                percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.05})
+            if p["hihat_o"][i] and kit["hihat_o"]:
+                percusion.append({"tiempo": t, "sample": "hihat_o", "vol": 0.06})
+            if p["clap"][i] and kit["clap"]:
+                percusion.append({"tiempo": t, "sample": "clap", "vol": 0.10})
+            if p["clave"][i] and kit["clave"]:
+                percusion.append({"tiempo": t, "sample": "clave", "vol": 0.04})
+            if p["agogo"][i] and kit["agogo"]:
+                percusion.append({"tiempo": t, "sample": "agogo", "vol": 0.03})
+            if es_fill and p["fill"][i]:
+                tk = rng.choice(["tom1", "tom2"])
+                if kit[tk]:
+                    percusion.append({"tiempo": t, "sample": tk, "vol": 0.07})
+            if i == 0 and c % 8 == 0 and kit["crash"]:
+                percusion.append({"tiempo": t, "sample": "crash", "vol": 0.06})
+    return sorted(percusion, key=lambda n: n["tiempo"])
+
+def generar_cancion(seed, dif):
+    num_columnas = dif["columnas"]
+    usar_acordes = dif["acordes"]
+    rng          = random.Random(seed)
+    bpm_por_cols = {3: (120, 140), 4: (140, 180), 5: (180, 220), 6: (220, 260), 7: (260, 300)}
+    bpm_min, bpm_max = bpm_por_cols.get(num_columnas, (110, 130))
+    BPM          = rng.randint(bpm_min, bpm_max)
+    beat         = 60000 // BPM
+    paso16       = beat // 4
+    tonica       = rng.choice([36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55])
+    nombre_escala= rng.choice(list(ESCALAS.keys()))
+    escala       = ESCALAS[nombre_escala]
+    patron_acordes = ACORDES_PATRON[nombre_escala]
+    progresion   = [rng.randint(0, 3) for _ in range(8)]
+
+    notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
+    kit = elegir_kit(rng)
+
+    C_INTRO     = 4
+    C_NUDO      = 24
+    C_DESENLACE = 4
+    t_intro_fin     = C_INTRO * 4 * beat
+    t_nudo_fin      = t_intro_fin + C_NUDO * 4 * beat
+    t_desenlace_fin = t_nudo_fin + C_DESENLACE * 4 * beat
+
+    prob_acorde = {3: 0.2, 4: 0.3, 5: 0.4, 6: 0.5, 7: 0.6}.get(num_columnas, 0.2)
+
+    def gen_frase_subiendo(largo, inicio):
+        frase = [inicio]
+        for _ in range(largo - 1):
+            sig = frase[-1] + rng.choice([0, 1, 1])
+            frase.append(min(sig, num_columnas - 1))
+        return frase
+
+    def gen_frase_bajando(largo, inicio):
+        frase = [inicio]
+        for _ in range(largo - 1):
+            sig = frase[-1] + rng.choice([0, -1, -1])
+            frase.append(max(sig, 0))
+        return frase
+
+    inicio_a = rng.randint(0, max(num_columnas // 3, 0))
+    inicio_b = rng.randint(max(num_columnas * 2 // 3, 1), num_columnas - 1)
+    motivos_a = [gen_frase_subiendo(3, inicio_a) for _ in range(4)]
+    motivos_b = [gen_frase_bajando(3, inicio_b) for _ in range(4)]
+
+    pat_jugador_all = [
+        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],  # beat 1 y 3
+        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],  # beat 1 y 4
+        [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],  # beat 2 y 4
+        [1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],  # beat 1 y 2
+        [0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],  # beat 3 y 4
+        [1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],  # beat 1 3 4
+        [1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0],  # beat 1 2 3
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],  # solo beat 1
+        [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],  # solo beat 4
+        [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],  # solo beat 2
+    ]
+
+    notas_jugador = []
+
+    # --- intro: nota hold larga ---
+    nota_intro = motivos_a[0][0]
+    for c in range(C_INTRO):
+        if c % 2 == 0:
+            notas_jugador.append({
+                "cols": [nota_intro], "midis": [notas_columnas[nota_intro]],
+                "tiempo": c * 4 * beat,
+                "es_acorde": False, "parte": "intro", "hold": beat * 3,
+            })
+
+    # --- nudo: bloques AABB ---
+    def crear_bloque(motivos_bloque):
+        bloque = []
+        # generar solo 2 compases y repetir cada uno
+        pat1 = pat_jugador_all[rng.randint(0, len(pat_jugador_all) - 1)]
+        pat2 = pat_jugador_all[rng.randint(0, len(pat_jugador_all) - 1)]
+        mot  = motivos_bloque[0]  # un solo motivo para todo el bloque
+
+        for c in range(4):
+            pat      = pat1 if c % 2 == 0 else pat2
+            nota_idx = 0
+            compas   = []
+            for s in range(16):
+                if pat[s] == 0:
+                    compas.append(None)
+                    continue
+                col = mot[nota_idx % len(mot)]
+                nota_idx += 1
+                compas.append({"col": col, "hold": 0})
+            activas = [i for i, n in enumerate(compas) if n is not None]
+            for idx, pos in enumerate(activas):
+                if rng.random() < 0.45:
+                    if idx + 1 < len(activas):
+                        dur = (activas[idx + 1] - pos) * paso16
+                    else:
+                        dur = (16 - pos) * paso16
+                    if dur >= 2 * paso16:
+                        compas[pos]["hold"] = dur - paso16
+            bloque.append(compas)
+        return bloque
+
+    bloque_a = crear_bloque(motivos_a)
+    bloque_b = crear_bloque(motivos_b)
+
+    # bloque C: mezcla de subir y bajar
+    inicio_c = rng.randint(num_columnas // 4, num_columnas * 3 // 4)
+    motivos_c = [gen_frase_subiendo(3, inicio_c)]
+    bloque_c = crear_bloque(motivos_c)
+
+    for rep in range(6):
+        if rep < 2:
+            bloque = bloque_a
+        elif rep < 4:
+            bloque = bloque_b
+        else:
+            bloque = bloque_c
+        for c in range(4):
+            compas_real = rep * 4 + c
+            compas = bloque[c]
+            for s in range(16):
+                if compas[s] is None:
+                    continue
+                t   = t_intro_fin + (compas_real * 16 + s) * paso16
+                col = compas[s]["col"]
+                hd  = compas[s]["hold"]
+
+                if usar_acordes and s == 0 and rng.random() < prob_acorde:
+                    grado   = progresion[compas_real % len(progresion)]
+                    cols_ac = []
+                    for g in patron_acordes[grado % len(patron_acordes)][:3]:
+                        col_ac = g % num_columnas
+                        if col_ac not in cols_ac:
+                            cols_ac.append(col_ac)
+                    if len(cols_ac) >= 2:
+                        notas_jugador.append({
+                            "cols": cols_ac,
+                            "midis": [notas_columnas[cx] for cx in cols_ac],
+                            "tiempo": t, "es_acorde": True, "parte": "nudo", "hold": 0,
+                        })
+                        continue
+
+                notas_jugador.append({
+                    "cols": [col], "midis": [notas_columnas[col]],
+                    "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
+                })
+
+    # --- desenlace: subiendo con holds ---
+    pat_des = [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0]
+    for c in range(C_DESENLACE):
+        for s in range(16):
+            if pat_des[s] == 0:
+                continue
+            t        = t_nudo_fin + (c * 16 + s) * paso16
+            progreso = (c * 16 + s) / (C_DESENLACE * 16)
+            col      = min(int(progreso * num_columnas), num_columnas - 1)
+            midi     = notas_columnas[col] + 12
+            es_hold  = rng.random() < 0.7
+            hold_dur = rng.choice([8, 10, 12]) * paso16 if es_hold else 0
+            notas_jugador.append({
+                "cols": [col], "midis": [midi],
+                "tiempo": t, "es_acorde": False, "parte": "desenlace", "hold": hold_dur,
+            })
+
+    percusion = generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
+                                  C_INTRO, C_NUDO, C_DESENLACE, kit)
+
+    return {
+        "bpm":            BPM,
+        "beat":           beat,
+        "paso16":         paso16,
+        "escala":         nombre_escala,
+        "duracion_loop":  t_desenlace_fin,
+        "notas_jugador":  sorted(notas_jugador, key=lambda n: n["tiempo"]),
+        "percusion":      percusion,
+        "kit":            kit,
+        "notas_columnas": notas_columnas,
+        "estructura": {
+            "intro_fin":     t_intro_fin,
+            "nudo_fin":      t_nudo_fin,
+            "desenlace_fin": t_desenlace_fin,
+        }
+    }
+
+def hold_pixels(hold_ms, vel, fps=60):
+    if hold_ms <= 0:
+        return 0
+    return int((hold_ms / (1000 / fps)) * vel)
+
+def iniciar_partida(seed):
+    dif     = get_dificultad(seed)
+    cancion = generar_cancion(int(seed * 23819), dif)
+    return {
+        "seed":           seed,
+        "dificultad":     dif,
+        "cancion":        cancion,
+        "indice_jugador": 0,
+        "indice_perc":    0,
+        "inicio":         pygame.time.get_ticks(),
+        "notas_cayendo":  [],
+        "puntos":         0,
+        "terminada":      False,
+        "holds_activos":  {},
+    }
+
+def tick_background(partida, ahora):
+    c = partida["cancion"]
+    kit = c["kit"]
+
+    if ahora >= c["duracion_loop"] and not partida["terminada"]:
+        partida["terminada"] = True
+
+    while partida["indice_perc"] < len(c["percusion"]) and ahora >= c["percusion"][partida["indice_perc"]]["tiempo"]:
+        p = c["percusion"][partida["indice_perc"]]
+        sample = kit.get(p["sample"])
+        if sample:
+            sample.set_volume(p["vol"])
+            sample.play()
+        partida["indice_perc"] += 1
+
+def get_parte(partida, ahora):
+    e = partida["cancion"]["estructura"]
+    if ahora < e["intro_fin"]:       return "INTRO"
+    elif ahora < e["nudo_fin"]:      return "NUDO"
+    elif ahora < e["desenlace_fin"]: return "FIN"
+    return "FIN"
+
+def dibujar_juego(partida, ahora):
+    num_cols  = partida["dificultad"]["columnas"]
+    ancho_col = ANCHO // num_cols
+    parte     = get_parte(partida, ahora)
+
+    for i in range(1, num_cols):
+        pygame.draw.line(pantalla, GRIS, (i * ancho_col, 0), (i * ancho_col, ALTO), 1)
+
+    pygame.draw.line(pantalla, BLANCO, (0, ZONA_Y), (ANCHO, ZONA_Y), 2)
+    pygame.draw.line(pantalla, BLANCO, (0, ZONA_Y + 54), (ANCHO, ZONA_Y + 54), 1)
+
+    for i in range(num_cols):
+        x     = i * ancho_col
+        label = fuente_chica.render(LABELS[i], True, GRIS_MED)
+        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 18))
+
+    for grupo in partida["notas_cayendo"]:
+        pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
+        xs = []
+        hold_h = grupo.get("hold_px", 0)
+        for col in pendientes:
+            x = col * ancho_col
+            if hold_h > 0:
+                bar_x = x + ancho_col // 2 - 6
+                bar_y = grupo["y"] - hold_h
+                if col in partida["holds_activos"]:
+                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, hold_h))
+                else:
+                    pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, hold_h))
+                    pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, hold_h), 1)
+            if grupo.get("es_acorde"):
+                pygame.draw.rect(pantalla, BLANCO, (x + 6,  grupo["y"],     ancho_col - 12, 28))
+                pygame.draw.rect(pantalla, NEGRO,  (x + 9,  grupo["y"] + 3, ancho_col - 18, 22))
+                pygame.draw.rect(pantalla, BLANCO, (x + 11, grupo["y"] + 5, ancho_col - 22, 18))
+            else:
+                pygame.draw.rect(pantalla, BLANCO, (x + 6, grupo["y"], ancho_col - 12, 28))
+            xs.append(x + ancho_col // 2)
+        if len(xs) > 1:
+            pygame.draw.line(pantalla, BLANCO, (xs[0], grupo["y"] + 14), (xs[-1], grupo["y"] + 14), 2)
+
+    pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
+    pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
+    dif_txt = fuente_chica.render(partida["dificultad"]["nombre"], True, GRIS_MED)
+    pantalla.blit(dif_txt, (10, 10))
+    parte_txt = fuente_chica.render(parte, True, GRIS)
+    pantalla.blit(parte_txt, (10, 28))
+    info = fuente_chica.render(f"{partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
+    pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
+    esc_txt = fuente_chica.render("ESC", True, GRIS)
+    pantalla.blit(esc_txt, (10, ALTO - 20))
+
+    if partida["terminada"] and not partida["notas_cayendo"]:
+        fin = fuente.render("FIN  -  ESC PARA VOLVER", True, BLANCO)
+        pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2))
+
+def dibujar_menu(seed_actual, cargando):
+    dif      = get_dificultad(max(seed_actual, 1))
+    progreso = min(seed_actual / SEED_MAX, 1.0)
+
+    titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 70))
+    pygame.draw.line(pantalla, BLANCO, (60, 140), (ANCHO - 60, 140), 2)
+
+    ins = fuente_chica.render("MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
+    pantalla.blit(ins, (ANCHO // 2 - ins.get_width() // 2, 170))
+
+    barra_w = 400
+    barra_x = ANCHO // 2 - barra_w // 2
+    barra_y = 210
+    pygame.draw.rect(pantalla, GRIS, (barra_x, barra_y, barra_w, 20))
+    if seed_actual > 0:
+        bloques = int(barra_w * progreso) // 10
+        for b in range(bloques):
+            pygame.draw.rect(pantalla, BLANCO, (barra_x + b * 10 + 1, barra_y + 2, 8, 16))
+    pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 20), 2)
+
+    seed_str   = str(int(seed_actual)).zfill(6) if seed_actual > 0 else "000000"
+    seed_texto = fuente_grande.render(seed_str, True, BLANCO)
+    pantalla.blit(seed_texto, (ANCHO // 2 - seed_texto.get_width() // 2, 260))
+
+    pygame.draw.line(pantalla, GRIS, (60, 340), (ANCHO - 60, 340), 1)
+    dif_texto  = fuente.render(f"> {dif['nombre']} <", True, BLANCO)
+    pantalla.blit(dif_texto, (ANCHO // 2 - dif_texto.get_width() // 2, 355))
+    cols_texto = fuente_chica.render(f"{dif['columnas']} COLUMNAS  {'ACORDES ON' if dif['acordes'] else 'ACORDES OFF'}", True, GRIS_MED)
+    pantalla.blit(cols_texto, (ANCHO // 2 - cols_texto.get_width() // 2, 395))
+    pygame.draw.line(pantalla, GRIS, (60, 425), (ANCHO - 60, 425), 1)
+
+    if seed_actual > 0:
+        enter = fuente_chica.render("ENTER = JUGAR     R = RESET", True, GRIS_MED)
+        pantalla.blit(enter, (ANCHO // 2 - enter.get_width() // 2, 460))
+
+    if seed_actual == 0:
+        if (pygame.time.get_ticks() // 500) % 2 == 0:
+            coin = fuente.render("INSERT COIN", True, BLANCO)
+            pantalla.blit(coin, (ANCHO // 2 - coin.get_width() // 2, 460))
+
+ESTADO         = "menu"
+partida        = None
+seed_acumulada = 0.0
+cargando_seed  = False
+teclas_sostenidas = set()
+
+corriendo = True
+while corriendo:
+    pantalla.fill(NEGRO)
+    ahora_ms = pygame.time.get_ticks()
+
+    for evento in pygame.event.get():
+        if evento.type == pygame.QUIT:
+            corriendo = False
+
+        if ESTADO == "menu":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_SPACE:
+                    cargando_seed = True
+                if evento.key == pygame.K_RETURN and seed_acumulada > 0:
+                    partida = iniciar_partida(int(seed_acumulada))
+                    ESTADO  = "jugando"
+                if evento.key == pygame.K_r:
+                    seed_acumulada = 0.0
+                    cargando_seed  = False
+            if evento.type == pygame.KEYUP:
+                if evento.key == pygame.K_SPACE:
+                    cargando_seed = False
+
+        elif ESTADO == "jugando":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    pygame.mixer.stop()
+                    teclas_sostenidas.clear()
+                    ESTADO = "menu"
+                elif evento.key in COLUMNAS:
+                    col = COLUMNAS[evento.key]
+                    if col < partida["dificultad"]["columnas"]:
+                        teclas_sostenidas.add(col)
+                        midi_fijo = partida["cancion"]["notas_columnas"][col]
+
+                        # tocar nota via pygame.mixer
+                        if midi_fijo in cache_notas:
+                            cache_notas[midi_fijo].play()
+
+                        for grupo in partida["notas_cayendo"]:
+                            if col in grupo["cols"] and ZONA_Y - 40 < grupo["y"] < ZONA_Y + 60:
+                                if "acertadas" not in grupo:
+                                    grupo["acertadas"] = set()
+                                if col not in grupo["acertadas"]:
+                                    grupo["acertadas"].add(col)
+                                    if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
+                                        # hold: tocar version larga
+                                        if midi_fijo in cache_notas_largas:
+                                            ch = cache_notas_largas[midi_fijo].play()
+                                            if ch:
+                                                canal_hold[col] = ch
+                                        partida["holds_activos"][col] = {
+                                            "grupo": grupo,
+                                            "midi":  midi_fijo,
+                                        }
+                                    else:
+                                        if grupo["acertadas"] == set(grupo["cols"]):
+                                            partida["puntos"] += len(grupo["cols"])
+                                            partida["notas_cayendo"].remove(grupo)
+                                break
+
+            if evento.type == pygame.KEYUP:
+                if evento.key in COLUMNAS:
+                    col = COLUMNAS[evento.key]
+                    teclas_sostenidas.discard(col)
+                    if col in partida.get("holds_activos", {}):
+                        # parar el sonido del hold
+                        if col in canal_hold:
+                            canal_hold[col].stop()
+                            del canal_hold[col]
+                        hold = partida["holds_activos"][col]
+                        grupo = hold["grupo"]
+                        if grupo["y"] > ZONA_Y + 20:
+                            partida["puntos"] += 3
+                            if grupo in partida["notas_cayendo"]:
+                                partida["notas_cayendo"].remove(grupo)
+                        del partida["holds_activos"][col]
+
+    if ESTADO == "menu":
+        if cargando_seed:
+            seed_acumulada = min(seed_acumulada + SEED_VELOCIDAD, SEED_MAX)
+        dibujar_menu(seed_acumulada, cargando_seed)
+
+    elif ESTADO == "jugando":
+        ahora = ahora_ms - partida["inicio"]
+        tick_background(partida, ahora)
+
+        # limpiar holds perdidos
+        holds_perdidos = []
+        for col, hold in partida["holds_activos"].items():
+            if hold["grupo"]["y"] > ALTO:
+                if col in canal_hold:
+                    canal_hold[col].stop()
+                    del canal_hold[col]
+                holds_perdidos.append(col)
+        for col in holds_perdidos:
+            del partida["holds_activos"][col]
+
+        PIXELES_POR_MS = VELOCIDAD / (1000 / 60)
+        ANTICIPACION   = (ZONA_Y + 40) / PIXELES_POR_MS
+
+        if not partida["terminada"]:
+            while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
+                n = partida["cancion"]["notas_jugador"][partida["indice_jugador"]]
+                hold_ms = n.get("hold", 0)
+                partida["notas_cayendo"].append({
+                    "cols":      n["cols"],
+                    "midis":     n["midis"],
+                    "tiempo_ms": n["tiempo"],
+                    "acertadas": set(),
+                    "es_acorde": n.get("es_acorde", False),
+                    "hold":      hold_ms,
+                    "hold_px":   hold_pixels(hold_ms, VELOCIDAD),
+                })
+                partida["indice_jugador"] += 1
+
+        for grupo in partida["notas_cayendo"]:
+            ms_hasta = grupo["tiempo_ms"] - ahora
+            grupo["y"] = ZONA_Y - (ms_hasta * PIXELES_POR_MS)
+
+        partida["notas_cayendo"] = [n for n in partida["notas_cayendo"] if n["y"] < ALTO + 50]
+
+        dibujar_juego(partida, ahora)
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
