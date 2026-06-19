@@ -1922,7 +1922,7 @@ def generar_cancion(seed, dif):
 
     # parametros de la figura de lissajous de fondo (unica por seed)
     lissajous = {
-        "tipo": rng.choice(["lissajous", "lissajous", "rosa", "espiro", "mariposa"]),
+        "tipo": rng.choice(["lissajous", "lissajous", "rosa", "espiro", "mariposa", "tunel"]),
         "a": rng.randint(1, 9),         # frecuencia horizontal
         "b": rng.randint(1, 9),         # frecuencia vertical
         "delta": rng.uniform(0, 6.28),  # desfase
@@ -2121,6 +2121,78 @@ def _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, fase_extra=0.0, j
         pts.append((int(x), int(y)))
     return pts
 
+def _dibujar_tunel(partida, liss, ahora, pulso, brillo_combo, hay_hold, jitter, clip_rect):
+    """Tunel de aros que se acercan al jugador. Late con el beat y reacciona al combo."""
+    beat = partida["cancion"]["beat"]
+    # los aros avanzan con el tiempo
+    vel_base = 0.6 + liss.get("vel", 0.3) * 0.4
+    # aceleracion extra al pulso del beat
+    vel = vel_base + pulso * 1.2
+    t_avance = ahora * 0.0015 * vel
+
+    # forma del aro: lissajous con frecuencias bajas o circulo si a=b=1
+    a = max(1, liss.get("a", 1) % 4 + 1)
+    b = max(1, liss.get("b", 1) % 4 + 1)
+    delta = liss.get("delta", 0.0)
+    rotacion = ahora * 0.0003 * (1 + brillo_combo)
+
+    # punto de fuga (centro del tunel)
+    cx_c = ANCHO / 2
+    cy_c = (ZONA_Y) / 2 + 20
+
+    # cada aro tiene una "profundidad" entre 0 (lejos) y 1 (cerca)
+    # los dibujamos del mas lejano al mas cercano
+    n_aros = 14
+    rx_max = ANCHO * 0.55
+    ry_max = ZONA_Y * 0.48
+
+    clip_ant = pantalla.get_clip()
+    pantalla.set_clip(clip_rect)
+
+    for k in range(n_aros):
+        # profundidad ciclica: cada aro avanza y al llegar a 1 reaparece atras
+        d = ((k / n_aros) + t_avance) % 1.0
+        # curva no lineal para que los lejanos se vean mas juntos
+        d_curva = d ** 1.6
+        radio_pct = 0.05 + d_curva * 0.95
+        rx_aro = rx_max * radio_pct * (0.92 + pulso * 0.12)
+        ry_aro = ry_max * radio_pct * (0.92 + pulso * 0.12)
+
+        # color: aros lejanos oscuros, cercanos brillantes
+        brillo_aro = d * (0.4 + brillo_combo * 0.6)
+        if hay_hold:
+            brillo_aro += 0.15
+        techo_aro = int(40 + brillo_combo * 160)
+        c_val = min(techo_aro + int(brillo_aro * 30), int(60 + brillo_aro * 180))
+        c_val = max(20, min(230, c_val))
+        color_aro = (c_val, c_val, c_val)
+
+        # generar puntos del aro (forma lissajous-like)
+        npts = 70 if d > 0.5 else 50
+        pts = []
+        for i in range(npts + 1):
+            tt = (i / npts) * 2 * math.pi
+            # rotar con el tiempo y por aro
+            tt_r = tt + rotacion + k * 0.2
+            x = cx_c + rx_aro * math.sin(a * tt_r + delta)
+            y = cy_c + ry_aro * math.sin(b * tt_r)
+            if jitter > 0 and d > 0.3:
+                x += random.uniform(-jitter, jitter) * d
+                y += random.uniform(-jitter, jitter) * d
+            pts.append((int(x), int(y)))
+
+        # grosor mayor para los cercanos y combo alto
+        grosor = 1
+        if d > 0.7:
+            grosor = 2
+        if brillo_combo >= 0.8 and d > 0.5:
+            grosor = max(grosor, 2)
+
+        if len(pts) > 1:
+            pygame.draw.lines(pantalla, color_aro, False, pts, grosor)
+
+    pantalla.set_clip(clip_ant)
+
 def dibujar_fondo_lissajous(partida, ahora):
     """Dibuja la figura procedural de fondo. Late con el kick y las notas, vibra en holds."""
     liss = partida["cancion"].get("lissajous")
@@ -2149,6 +2221,12 @@ def dibujar_fondo_lissajous(partida, ahora):
     brillo_combo = min(combo / 30.0, 1.0)   # 0 a 1 entre combo 0 y 30
     # un pulso de fondo constante crece con el combo
     pulso = max(pulso, brillo_combo * 0.5)
+
+    # si la figura es tunel, usar dibujo especial
+    if tipo == "tunel":
+        clip_tunel = pygame.Rect(0, 0, ANCHO, ZONA_Y + 54)
+        _dibujar_tunel(partida, liss, ahora, pulso, brillo_combo, hay_hold, jitter, clip_tunel)
+        return
 
     cx_c = ANCHO / 2
     cy_c = (ZONA_Y) / 2 + 20
