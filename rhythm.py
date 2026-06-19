@@ -310,6 +310,14 @@ INSTRUMENTOS_JUGADOR = {
     "FLUTE":     "flute",
     "RESO":      "reso",
     "CHOIR":     "choir",
+    "VIBRAPHONE": "vibraphone",
+    "SITAR":      "sitar",
+    "KALIMBA":    "kalimba",
+    "TRUMPET":    "trumpet",
+    "HARP":       "harp",
+    "SYNTHBASS":  "synthbass",
+    "BELLPAD":    "bellpad",
+    "DETUNE":     "detune",
 }
 
 def midi_a_freq(midi):
@@ -483,16 +491,20 @@ def synth_nota(tipo, freq, duracion, rng_params):
         wave = np.sin(phase)
 
     wave = wave * env * 0.7
-    vol_tipo = {
-        "square": 0.5, "saw": 0.5, "chiptune": 0.45,
-        "organ": 0.6, "fm_bell": 0.65,
-        "sine": 0.75, "triangle": 0.7, "pluck": 0.7,
-        "supersaw": 0.45, "acid": 0.55, "bitcrush": 0.5, "lead": 0.5,
-        "wobble": 0.55, "glass": 0.65, "pad": 0.6,
-        "metallic": 0.55, "bass": 0.55, "flute": 0.65,
-        "reso": 0.5, "choir": 0.6,
+   vol_tipo = {
+        "square": 0.7, "saw": 0.7, "chiptune": 0.65,
+        "organ": 0.8, "fm_bell": 0.85,
+        "sine": 0.95, "triangle": 0.9, "pluck": 0.9,
+        "supersaw": 0.65, "acid": 0.75, "bitcrush": 0.7, "lead": 0.7,
+        "wobble": 0.75, "glass": 0.85, "pad": 0.8,
+        "metallic": 0.75, "bass": 0.75, "flute": 0.85,
+        "reso": 0.7, "choir": 0.8,
+        "vibraphone": 0.8, "sitar": 0.7, "kalimba": 0.85,
+        "trumpet": 0.75, "harp": 0.85, "synthbass": 1,
+        "bellpad": 0.75, "detune": 0.7,
+    },
     }
-    return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
+    return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.9))
 
 def generar_params_instrumento(rng, tipo):
     """Genera parámetros aleatorios para un tipo de instrumento"""
@@ -625,6 +637,46 @@ def generar_params_instrumento(rng, tipo):
         params["choir_vib"] = rng.uniform(0.15, 0.5)
         params["vibrato"] = rng.uniform(0.1, 0.3)
         params["vib_speed"] = rng.uniform(4, 6)
+    elif tipo == "vibraphone":
+        params["attack"] = rng.uniform(0.001, 0.005)
+        params["decay"] = rng.uniform(4, 9)
+        params["sustain"] = rng.uniform(0.2, 0.4)
+    elif tipo == "sitar":
+        params["attack"] = rng.uniform(0.001, 0.01)
+        params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.3, 0.6)
+        params["vibrato"] = rng.uniform(0.2, 0.5)
+        params["vib_speed"] = rng.uniform(5, 9)
+    elif tipo == "kalimba":
+        params["attack"] = 0.001
+        params["decay"] = rng.uniform(5, 10)
+        params["sustain"] = rng.uniform(0.1, 0.3)
+    elif tipo == "trumpet":
+        params["attack"] = rng.uniform(0.01, 0.04)
+        params["decay"] = rng.uniform(2, 5)
+        params["sustain"] = rng.uniform(0.6, 0.85)
+        params["vibrato"] = rng.uniform(0.15, 0.4)
+        params["vib_speed"] = rng.uniform(5, 7)
+    elif tipo == "harp":
+        params["attack"] = 0.001
+        params["decay"] = rng.uniform(4, 9)
+        params["sustain"] = 0.0
+    elif tipo == "synthbass":
+        params["attack"] = rng.uniform(0.001, 0.008)
+        params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.4, 0.7)
+    elif tipo == "bellpad":
+        params["attack"] = rng.uniform(0.02, 0.08)
+        params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.4, 0.7)
+        params["vibrato"] = rng.uniform(0.1, 0.3)
+        params["vib_speed"] = rng.uniform(3, 5)
+    elif tipo == "detune":
+        params["attack"] = rng.uniform(0.005, 0.02)
+        params["decay"] = rng.uniform(3, 7)
+        params["sustain"] = rng.uniform(0.4, 0.7)
+        params["detune_amt"] = rng.uniform(0.01, 0.03)    
+    
     return params
 
 cache_por_instrumento = {}
@@ -817,6 +869,7 @@ canal_hold = {}
 particulas = []
 textos_flotantes = []
 flashes = []         # {col, vida, vida_max}
+ondas = []           # anillos de choque expansivos
 shake_amt = 0.0      # intensidad del shake actual
 shake_dx = 0
 shake_dy = 0
@@ -824,15 +877,21 @@ shake_dy = 0
 def crear_explosion(x, y, cantidad, color=BLANCO):
     for _ in range(cantidad):
         angulo = random.uniform(0, 6.28)
-        fuerza = random.uniform(1, 8)
+        fuerza = random.uniform(2, 14)
         dx = math.cos(angulo) * fuerza
-        dy = math.sin(angulo) * fuerza - 4
-        vida = random.randint(20, 50)
-        tam = random.randint(2, 8)
-        particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida, "vida_max": vida, "tam": tam, "color": color})
+        dy = math.sin(angulo) * fuerza - 5
+        vida = random.randint(25, 65)
+        tam = random.randint(3, 12)
+        forma = random.choice(["rect", "rect", "linea"])
+        particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida,
+                           "vida_max": vida, "tam": tam, "color": color, "forma": forma,
+                           "spin": random.uniform(-0.3, 0.3)})
+
+def crear_onda(x, y, intensidad=1.0):
+    ondas.append({"x": x, "y": y, "r": 4, "vida": 20, "vida_max": 20, "intensidad": intensidad})
 
 def crear_flash(col, intensidad=1.0):
-    flashes.append({"col": col, "vida": 12, "vida_max": 12, "intensidad": intensidad})
+    flashes.append({"col": col, "vida": 14, "vida_max": 14, "intensidad": intensidad})
 
 def crear_shake(intensidad):
     global shake_amt
@@ -849,8 +908,8 @@ def actualizar_particulas():
     for p in particulas:
         p["x"] += p["dx"]
         p["y"] += p["dy"]
-        p["dy"] += 0.15
-        p["dx"] *= 0.98
+        p["dy"] += 0.18
+        p["dx"] *= 0.97
         p["vida"] -= 1
     particulas[:] = [p for p in particulas if p["vida"] > 0]
     for t in textos_flotantes:
@@ -860,6 +919,10 @@ def actualizar_particulas():
     for f in flashes:
         f["vida"] -= 1
     flashes[:] = [f for f in flashes if f["vida"] > 0]
+    for o in ondas:
+        o["r"] += 6
+        o["vida"] -= 1
+    ondas[:] = [o for o in ondas if o["vida"] > 0]
     # shake decay
     if shake_amt > 0:
         shake_dx = random.randint(int(-shake_amt), int(shake_amt))
@@ -871,6 +934,13 @@ def actualizar_particulas():
             shake_dy = 0
 
 def dibujar_particulas():
+    # anillos de choque
+    for o in ondas:
+        pct = o["vida"] / o["vida_max"]
+        alpha = int(200 * pct * o["intensidad"])
+        col = (alpha, alpha, alpha)
+        grosor = max(1, int(3 * pct))
+        pygame.draw.circle(pantalla, col, (int(o["x"]) + shake_dx, int(o["y"]) + shake_dy), int(o["r"]), grosor)
     for p in particulas:
         pct = p["vida"] / p["vida_max"]
         alpha = int(255 * pct)
@@ -878,7 +948,12 @@ def dibujar_particulas():
         tam = max(1, int(p["tam"] * pct))
         px = int(p["x"]) + shake_dx
         py = int(p["y"]) + shake_dy
-        pygame.draw.rect(pantalla, color, (px, py, tam, tam))
+        if p["forma"] == "linea":
+            ex = int(px - p["dx"] * 1.5)
+            ey = int(py - p["dy"] * 1.5)
+            pygame.draw.line(pantalla, color, (px, py), (ex, ey), max(1, tam // 2))
+        else:
+            pygame.draw.rect(pantalla, color, (px, py, tam, tam))
     for t in textos_flotantes:
         pct = t["vida"] / t["vida_max"]
         alpha = int(255 * pct)
@@ -1686,28 +1761,32 @@ while corriendo:
                                             pts = 5
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
-                                            combo_particulas = min(60 + partida["combo"] * 2, 200)
+                                            combo_particulas = min(100 + partida["combo"] * 4, 320)
                                             crear_explosion(cx, ZONA_Y, combo_particulas)
+                                            crear_onda(cx, ZONA_Y, 1.0)
+                                            crear_onda(cx, ZONA_Y, 0.6)
                                             crear_flash(col, 1.0)
-                                            crear_shake(6)
+                                            crear_shake(8)
                                         elif distancia < 60:
                                             pts = 3
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 35 + partida["combo"])
+                                            crear_explosion(cx, ZONA_Y, 60 + partida["combo"] * 2)
+                                            crear_onda(cx, ZONA_Y, 0.7)
                                             crear_flash(col, 0.6)
-                                            crear_shake(3)
+                                            crear_shake(4)
                                         elif distancia < 100:
                                             pts = 1
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 8)
+                                            crear_explosion(cx, ZONA_Y, 20)
+                                            crear_onda(cx, ZONA_Y, 0.4)
                                             crear_flash(col, 0.3)
                                         else:
                                             pts = 0
                                             partida["combo"] = 0
                                             partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 5, GRIS_MED)
+                                            crear_explosion(cx, ZONA_Y, 8, GRIS_MED)
                                             crear_shake(8)
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
