@@ -2,8 +2,7 @@ import pygame
 import random
 import numpy as np
 import json
-import wave
-import os
+import math
 
 pygame.init()
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -25,9 +24,6 @@ ventana = pygame.display.set_mode((_w, _h))
 pygame.display.set_caption("Rhythm Game")
 pantalla = pygame.Surface((ANCHO, ALTO))
 clock = pygame.time.Clock()
-
-def aplicar_volumen():
-    pygame.mixer.set_num_channels(32)
 
 def presentar():
     """Escala la superficie interna a la ventana, aplica brillo y muestra"""
@@ -474,8 +470,6 @@ def synth_nota(tipo, freq, duracion, rng_params):
         phase = phase + vib_amt * np.sin(2 * np.pi * vib_speed * t)
 
     if tipo == "square":
-        wave = np.sign(np.sin(phase))
-        # suavizar un poco
         pw = rng_params.get("pulse_width", 0.5)
         wave = np.where((np.sin(phase) / (2 * np.pi)) % 1 < pw, 1.0, -1.0)
     elif tipo == "saw":
@@ -685,8 +679,6 @@ def synth_nota(tipo, freq, duracion, rng_params):
     elif tipo == "sync_lead":
         # oscilador sincronizado (hard sync): timbre brillante y agresivo
         slave_ratio = rng_params.get("sync_ratio", 1.5)
-        master_phase = (t * freq) % 1.0
-        slave = (t * freq * slave_ratio) % 1.0
         # reset del slave cuando el master cicla
         ciclo = np.floor(t * freq)
         slave_sync = (t * freq * slave_ratio - ciclo * slave_ratio) % 1.0
@@ -1066,8 +1058,6 @@ def generar_params_instrumento(rng, tipo):
 cache_por_instrumento = {}
 cache_largas_por_instrumento = {}
 
-import math
-
 # --- pantalla de carga con burbujas musicales ---
 burbujas_carga = []
 
@@ -1350,11 +1340,6 @@ def nota_midi(tonica, escala, grado):
     return tonica + escala[grado % len(escala)]
 
 NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-def midi_a_nombre(midi):
-    return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
-
-NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-
 def midi_a_nombre(midi):
     return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
 
@@ -1937,7 +1922,7 @@ def generar_cancion(seed, dif):
     # --- CAPA 3: eventos sorpresa en vivo ---
     # se disparan en momentos del nudo, elegidos por la seed
     eventos = []
-    tipos_evento = ["silencio_drums", "solo_drums", "stutter", "boost_bajo", "freeze_mel"]
+    tipos_evento = ["silencio_drums", "solo_drums", "boost_bajo"]
     n_eventos = rng.choice([0, 1, 1, 2, 2, 3])
     momentos_posibles = list(range(2, num_reps - 1))
     rng.shuffle(momentos_posibles)
@@ -2033,124 +2018,6 @@ def iniciar_partida(seed):
         "liss_pulso":     0.0,
     }
 
-def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
-    """Mezcla un sample stereo en el buffer global en la posicion dada"""
-    if pos_sample < 0:
-        return
-    n_buf = buffer.shape[0]
-    n_smp = sample_arr.shape[0]
-    fin = min(pos_sample + n_smp, n_buf)
-    if fin <= pos_sample:
-        return
-    largo = fin - pos_sample
-    buffer[pos_sample:fin, 0] += sample_arr[:largo, 0] * vol_l
-    buffer[pos_sample:fin, 1] += sample_arr[:largo, 1] * vol_r
-
-def _sound_to_array(snd):
-    """Convierte un pygame.Sound a array stereo float64 normalizado"""
-    arr = pygame.sndarray.array(snd).astype(np.float64) / 32767.0
-    if arr.ndim == 1:
-        arr = np.column_stack((arr, arr))
-    return arr
-
-def exportar_cancion(partida):
-    """Renderiza la cancion completa (melodia + percusion + bajo) a un WAV.
-    Devuelve la ruta del archivo guardado, o None si falla."""
-    try:
-        c = partida["cancion"]
-        # duracion total en samples (con cola para que terminen los holds finales)
-        dur_ms = c["duracion_loop"] + 3000
-        n_total = int(SR * dur_ms / 1000)
-        buffer = np.zeros((n_total, 2), dtype=np.float64)
-
-        num_cols_t = partida["dificultad"]["columnas"]
-
-        # 1) MELODIA: notas del jugador (la version ideal, todas en tiempo)
-        for nota in c["notas_jugador"]:
-            t_ms = nota["tiempo"]
-            pos = int(SR * t_ms / 1000)
-            es_hold = nota.get("hold", 0) > 0 and not nota.get("es_acorde")
-            for idx_c, col in enumerate(nota["cols"]):
-                if idx_c >= len(nota.get("midis", [])):
-                    continue
-                midi = nota["midis"][idx_c]
-                if es_hold:
-                    snd = cache_notas_largas.get(midi) or cache_notas.get(midi)
-                else:
-                    snd = cache_notas.get(midi)
-                if snd is None:
-                    continue
-                arr = _sound_to_array(snd)
-                if num_cols_t > 1:
-                    pan = col / (num_cols_t - 1)
-                else:
-                    pan = 0.5
-                vol = 0.85
-                vol_l = vol * (1.0 - pan * 0.6)
-                vol_r = vol * (0.4 + pan * 0.6)
-                _mezclar_sample(buffer, arr, pos, vol_l, vol_r)
-
-        # 2) PERCUSION
-        pan_perc = {
-            "kick": (1.0, 1.0), "snare": (1.0, 1.0), "clap": (0.95, 0.95),
-            "hihat": (0.7, 1.0), "hihat_o": (0.7, 1.0),
-            "clave": (1.0, 0.7), "agogo": (1.0, 0.65),
-            "crash": (0.9, 0.9), "tom1": (1.0, 0.8), "tom2": (0.8, 1.0),
-        }
-        kit = c["kit"]
-        # cache arrays de los samples del kit
-        kit_arr = {}
-        for k, snd in kit.items():
-            if snd is not None:
-                kit_arr[k] = _sound_to_array(snd)
-        for ev in c["percusion"]:
-            sname = ev["sample"]
-            if sname not in kit_arr:
-                continue
-            pos = int(SR * ev["tiempo"] / 1000)
-            vol = min(1.0, ev["vol"] * 1.2)
-            gl, gr = pan_perc.get(sname, (1.0, 1.0))
-            _mezclar_sample(buffer, kit_arr[sname], pos, vol * gl, vol * gr)
-
-        # 3) BAJO
-        cache_bajo = c.get("cache_bajo", {})
-        for ev in c["bajo"]["eventos"]:
-            snd = cache_bajo.get(ev["midi"])
-            if snd is None:
-                continue
-            arr = _sound_to_array(snd)
-            pos = int(SR * ev["tiempo"] / 1000)
-            _mezclar_sample(buffer, arr, pos, 1.0, 1.0)
-
-        # normalizar para evitar clipping
-        pico = np.max(np.abs(buffer))
-        if pico > 0:
-            buffer = buffer / pico * 0.95
-        # convertir a int16
-        salida = np.clip(buffer * 32767, -32768, 32767).astype(np.int16)
-
-        # asegurar carpeta export
-        carpeta = "F:\\VIDEOGAMEEE\\export"
-        try:
-            os.makedirs(carpeta, exist_ok=True)
-        except Exception:
-            carpeta = "."
-        # nombre con seed e instrumento
-        seed_str = str(int(partida["seed"])).zfill(4)
-        inst_safe = "".join(ch if ch.isalnum() else "_" for ch in c["instrumento"])
-        ruta = os.path.join(carpeta, f"rhythm_seed{seed_str}_{inst_safe}.wav")
-
-        with wave.open(ruta, "wb") as wf:
-            wf.setnchannels(2)
-            wf.setsampwidth(2)
-            wf.setframerate(SR)
-            wf.writeframes(salida.tobytes())
-        print(f"Cancion exportada a: {ruta}")
-        return ruta
-    except Exception as e:
-        print(f"Error exportando: {e}")
-        return None
-
 def tick_background(partida, ahora):
     c = partida["cancion"]
     kit = c["kit"]
@@ -2209,7 +2076,6 @@ def get_parte(partida, ahora):
     return "FIN"
 
 GRIS_FONDO = (28, 28, 28)
-GRIS_FONDO2 = (45, 45, 45)
 
 def _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, fase_extra=0.0, jitter=0.0):
     """Genera los puntos de la figura segun el tipo"""
@@ -2420,9 +2286,7 @@ def dibujar_juego(partida, ahora):
         nombres_ev = {
             "silencio_drums": "! SILENCIO !",
             "solo_drums": "! SOLO DRUMS !",
-            "stutter": "! STUTTER !",
             "boost_bajo": "! BASS DROP !",
-            "freeze_mel": "! FREEZE !",
         }
         ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
         pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
@@ -2500,17 +2364,6 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2 + 10))
         esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 50))
-        # hint de descarga
-        ruta = partida.get("export_ruta")
-        if ruta:
-            ok_txt = fuente_chica.render("GUARDADA EN export/", True, BLANCO)
-            pantalla.blit(ok_txt, (ANCHO // 2 - ok_txt.get_width() // 2, ALTO // 2 + 75))
-        elif partida.get("exportando"):
-            ex_txt = fuente_chica.render("GUARDANDO...", True, GRIS_MED)
-            pantalla.blit(ex_txt, (ANCHO // 2 - ex_txt.get_width() // 2, ALTO // 2 + 75))
-        else:
-            dl_txt = fuente_chica.render("D = DESCARGAR CANCION", True, BLANCO)
-            pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 75))
 
     elif partida["terminada"] and not partida["notas_cayendo"]:
         fin = fuente.render("FIN", True, BLANCO)
@@ -2519,16 +2372,6 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
         esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
-        ruta = partida.get("export_ruta")
-        if ruta:
-            ok_txt = fuente_chica.render("GUARDADA EN export/", True, BLANCO)
-            pantalla.blit(ok_txt, (ANCHO // 2 - ok_txt.get_width() // 2, ALTO // 2 + 65))
-        elif partida.get("exportando"):
-            ex_txt = fuente_chica.render("GUARDANDO...", True, GRIS_MED)
-            pantalla.blit(ex_txt, (ANCHO // 2 - ex_txt.get_width() // 2, ALTO // 2 + 65))
-        else:
-            dl_txt = fuente_chica.render("D = DESCARGAR CANCION", True, BLANCO)
-            pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 65))
 
 def dibujar_menu(seed_actual, cargando):
     dif      = get_dificultad(max(seed_actual, 1))
@@ -2741,17 +2584,6 @@ while corriendo:
                         ESTADO = "input_nombre"
                     else:
                         ESTADO = "menu"
-                elif evento.key == pygame.K_d and (partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"])) and not partida.get("export_ruta") and not partida.get("exportando"):
-                    # exportar la cancion (melodia + percusion + bajo) a WAV
-                    partida["exportando"] = True
-                    # dibujar el estado actual con "GUARDANDO..." para feedback inmediato
-                    pantalla.fill(NEGRO)
-                    dibujar_juego(partida, ahora_ms - partida["inicio"])
-                    presentar()
-                    ruta = exportar_cancion(partida)
-                    partida["exportando"] = False
-                    if ruta:
-                        partida["export_ruta"] = ruta
                 elif evento.key in COLUMNAS:
                     col = COLUMNAS[evento.key]
                     if col < partida["dificultad"]["columnas"]:
