@@ -111,6 +111,20 @@ def cargar_config():
 
 cargar_config()
 
+# si la config guardo un dispositivo de audio especifico, reabrir el mixer con el
+if config.get("audio_idx", 0) != 0 and config["audio_idx"] < len(AUDIO_DEVICES):
+    try:
+        pygame.mixer.quit()
+        nombre_dev = AUDIO_DEVICES[config["audio_idx"]]
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512, devicename=nombre_dev)
+        pygame.mixer.set_num_channels(32)
+        print(f"Audio en dispositivo guardado: {nombre_dev}")
+    except Exception as e:
+        print(f"No se pudo abrir dispositivo guardado, usando default: {e}")
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        pygame.mixer.set_num_channels(32)
+        config["audio_idx"] = 0
+
 # la ventana real puede cambiar de tamaño; el juego siempre dibuja en 720x640 y se escala
 _w, _h = RESOLUCIONES[config["res_idx"]]
 ventana = pygame.display.set_mode((_w, _h))
