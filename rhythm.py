@@ -6,6 +6,7 @@ import wave
 import os
 import sys
 import threading
+import math
 
 # directorio base: donde esta el .exe (compilado) o el .py (desarrollo)
 if getattr(sys, 'frozen', False):
@@ -131,9 +132,6 @@ ventana = pygame.display.set_mode((_w, _h))
 pygame.display.set_caption("Rhythm Game")
 pantalla = pygame.Surface((ANCHO, ALTO))
 clock = pygame.time.Clock()
-
-def aplicar_volumen():
-    pygame.mixer.set_num_channels(32)
 
 def presentar():
     """Escala la superficie interna a la ventana, aplica brillo y muestra"""
@@ -592,8 +590,21 @@ def synth_game_over():
     wave = np.concatenate(partes)
     return np_to_sound(wave, vol=0.42)
 
+def synth_dado_tick():
+    """Tick corto y seco para el dado girando (estilo clic de ruleta)."""
+    dur = 0.04
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    # click: pulso de ruido + tono corto agudo
+    np_rng = np.random.RandomState(7)
+    noise = np_rng.uniform(-1, 1, n) * np.exp(-t * 120)
+    tono = np.sin(2 * np.pi * 1200 * t) * np.exp(-t * 80)
+    wave = noise * 0.4 + tono * 0.5
+    return np_to_sound(wave, vol=0.25)
+
 SND_SELECT = synth_ui_select()
 SND_CONFIRM = synth_ui_confirm()
+SND_DADO = synth_dado_tick()
 SND_EXPLOSION = synth_explosion(1.0)
 SND_EXPLOSION_BIG = synth_explosion(2.0)
 SND_WIN = synth_fanfarria_win()
@@ -707,7 +718,6 @@ INST_FORMA = {
 
 def dibujar_icono_inst(surf, forma, cx, cy, r, color):
     """Dibuja el icono de un instrumento centrado en (cx, cy) con radio r."""
-    import math as _m
     if forma == "square":
         pygame.draw.rect(surf, color, (cx - r, cy - r, r * 2, r * 2), 2)
         pygame.draw.rect(surf, color, (cx - r//2, cy - r//2, r, r))
@@ -719,26 +729,26 @@ def dibujar_icono_inst(surf, forma, cx, cy, r, color):
             pts.append((x, y))
         pygame.draw.lines(surf, color, False, pts, 2)
     elif forma == "sine":
-        pts = [(cx - r + i, cy - int(_m.sin(i / r * _m.pi * 2) * r)) for i in range(0, 2 * r, 2)]
+        pts = [(cx - r + i, cy - int(math.sin(i / r * math.pi * 2) * r)) for i in range(0, 2 * r, 2)]
         if len(pts) > 1:
             pygame.draw.lines(surf, color, False, pts, 2)
     elif forma == "triangle":
         pygame.draw.polygon(surf, color, [(cx, cy - r), (cx - r, cy + r), (cx + r, cy + r)], 2)
     elif forma == "bell":
-        pygame.draw.arc(surf, color, (cx - r, cy - r, 2 * r, 2 * r), _m.pi, 2 * _m.pi, 2)
+        pygame.draw.arc(surf, color, (cx - r, cy - r, 2 * r, 2 * r), math.pi, 2 * math.pi, 2)
         pygame.draw.line(surf, color, (cx - r, cy), (cx + r, cy), 2)
         pygame.draw.circle(surf, color, (cx, cy + r), 2)
     elif forma == "pluck":
         pygame.draw.line(surf, color, (cx, cy - r), (cx, cy + r), 2)
         pygame.draw.circle(surf, color, (cx, cy - r), 3)
-        pygame.draw.arc(surf, color, (cx, cy - r//2, r, r), -_m.pi/2, _m.pi/2, 2)
+        pygame.draw.arc(surf, color, (cx, cy - r//2, r, r), -math.pi/2, math.pi/2, 2)
     elif forma == "pad":
         pygame.draw.ellipse(surf, color, (cx - r, cy - r//2, 2 * r, r), 2)
         pygame.draw.ellipse(surf, color, (cx - r//2, cy - r, r, 2 * r), 1)
     elif forma == "metal":
         for a in range(0, 360, 60):
-            x = cx + int(_m.cos(_m.radians(a)) * r)
-            y = cy + int(_m.sin(_m.radians(a)) * r)
+            x = cx + int(math.cos(math.radians(a)) * r)
+            y = cy + int(math.sin(math.radians(a)) * r)
             pygame.draw.line(surf, color, (cx, cy), (x, y), 2)
         pygame.draw.circle(surf, color, (cx, cy), 3)
     elif forma == "glass":
@@ -754,9 +764,9 @@ def dibujar_icono_inst(surf, forma, cx, cy, r, color):
         pygame.draw.line(surf, color, (cx - r, cy - 3), (cx - r, cy + 3), 2)
     elif forma == "choir":
         for dx in (-r, 0, r):
-            pygame.draw.arc(surf, color, (cx + dx - r//2, cy - r, r, 2 * r), _m.pi/2, 3*_m.pi/2, 2)
+            pygame.draw.arc(surf, color, (cx + dx - r//2, cy - r, r, 2 * r), math.pi/2, 3*math.pi/2, 2)
     elif forma == "wobble":
-        pts = [(cx - r + i, cy - int(_m.sin(i / r * _m.pi * 3) * r * (0.4 + 0.6 * i / (2*r)))) for i in range(0, 2 * r, 2)]
+        pts = [(cx - r + i, cy - int(math.sin(i / r * math.pi * 3) * r * (0.4 + 0.6 * i / (2*r)))) for i in range(0, 2 * r, 2)]
         if len(pts) > 1:
             pygame.draw.lines(surf, color, False, pts, 2)
     elif forma == "atmos":
@@ -1577,8 +1587,6 @@ def generar_params_instrumento(rng, tipo):
 cache_por_instrumento = {}
 cache_largas_por_instrumento = {}
 
-import math
-
 # --- pantalla de carga con burbujas musicales ---
 burbujas_carga = []
 
@@ -2362,14 +2370,6 @@ COLOR_DEFECTO = (255, 255, 255)
 def color_genero(partida):
     g = partida["cancion"].get("genero", "")
     return COLOR_GENERO.get(g, COLOR_DEFECTO)
-
-def mezclar_color(c, blanco_pct):
-    """Mezcla un color con blanco. blanco_pct=0 -> color puro, 1 -> blanco"""
-    return (
-        int(c[0] + (255 - c[0]) * blanco_pct),
-        int(c[1] + (255 - c[1]) * blanco_pct),
-        int(c[2] + (255 - c[2]) * blanco_pct),
-    )
 
 def elegir_genero(rng):
     # pesos: AMBIENT sale mucho menos (~0.5% vs ~20% cada otro)
@@ -3301,7 +3301,6 @@ def get_parte(partida, ahora):
     return "FIN"
 
 GRIS_FONDO = (28, 28, 28)
-GRIS_FONDO2 = (45, 45, 45)
 
 def _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, fase_extra=0.0, jitter=0.0):
     """Genera los puntos de la figura segun el tipo"""
@@ -3833,6 +3832,7 @@ def dibujar_run_overview():
 # --- animacion de dado para revelar el mod del siguiente stage ---
 dado_inicio = 0
 DADO_DURACION = 2500  # ms que dura la animacion del dado
+_dado_ultima_fase = -2  # para detectar cambios y reproducir tick
 
 def dibujar_dado():
     """Animacion de dado que revela el mod del siguiente stage."""
@@ -3854,13 +3854,23 @@ def dibujar_dado():
     pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 180))
 
     # dado girando: cicla entre mods cada vez mas lento
+    global _dado_ultima_fase
     if progreso < 1.0:
         freq = 20.0 * (1.0 - progreso * 0.9)
         fase = int(ahora * freq / 1000)
         todos_mods = MODS_FACILES + ["sudden"]
         mod_mostrar = todos_mods[fase % len(todos_mods)]
+        # tick cada vez que cambia el mod mostrado
+        if fase != _dado_ultima_fase:
+            _dado_ultima_fase = fase
+            SND_DADO.set_volume(0.35 * config["volumen"])
+            SND_DADO.play()
     else:
         mod_mostrar = list(mod_real)[0] if mod_real else ""
+        if _dado_ultima_fase != -1:
+            # sonido de confirmacion al detenerse
+            _dado_ultima_fase = -1
+            sfx_confirm()
 
     # dibujar el "dado"
     dado_w = 400
@@ -3916,12 +3926,10 @@ def dibujar_dado():
 
 run_completado_inicio = 0
 run_completado_particulas = []
-run_completado_fuegos = []
 
 def _spawn_notas_celebracion(col_g):
     """Genera la primera oleada de particulas."""
     run_completado_particulas.clear()
-    run_completado_fuegos.clear()
     global run_completado_inicio
     run_completado_inicio = pygame.time.get_ticks()
     # fanfarria de victoria
@@ -4203,7 +4211,7 @@ def aplicar_resolucion():
 def cambiar_audio_device(idx):
     """Reinicializa el mixer con el dispositivo seleccionado."""
     global SND_ERROR, SND_EXPLOSION, SND_EXPLOSION_BIG, SND_WIN
-    global SND_SELECT, SND_CONFIRM, SND_GAMEOVER
+    global SND_SELECT, SND_CONFIRM, SND_GAMEOVER, SND_DADO
     global cache_por_instrumento, cache_largas_por_instrumento
     config["audio_idx"] = idx
     try:
@@ -4222,6 +4230,7 @@ def cambiar_audio_device(idx):
         SND_SELECT = synth_ui_select()
         SND_CONFIRM = synth_ui_confirm()
         SND_GAMEOVER = synth_game_over()
+        SND_DADO = synth_dado_tick()
         cache_por_instrumento.clear()
         cache_largas_por_instrumento.clear()
     except Exception as e:
@@ -4528,12 +4537,11 @@ while corriendo:
                                 else:
                                     run_actual["stage"] += 1
                                     idx_next = run_actual["stage"] - 1
-                                    print(f"[DEBUG] Avanzando a stage {run_actual['stage']}, mods[{idx_next}]={run_actual['mods'][idx_next]}")
                                     if run_actual["mods"][idx_next]:
                                         # tiene mods -> animacion de dado
                                         dado_inicio = pygame.time.get_ticks()
+                                        _dado_ultima_fase = -2
                                         ESTADO = "run_dado"
-                                        print(f"[DEBUG] -> run_dado (dado_inicio={dado_inicio})")
                                     else:
                                         ESTADO = "run_overview"
                                         nueva_musica_menu_aleatoria()
