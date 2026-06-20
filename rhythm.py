@@ -7,12 +7,29 @@ import os
 import sys
 import threading
 import math
+import traceback
 
 # directorio base: donde esta el .exe (compilado) o el .py (desarrollo)
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# --- crash handler: guarda cualquier error no manejado a un archivo ---
+def _crash_handler(exc_type, exc_value, exc_tb):
+    try:
+        ruta = os.path.join(BASE_DIR, "crash_log.txt")
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write("RHYTHM crash log\n")
+            f.write("=" * 40 + "\n")
+            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        print(f"Error guardado en {ruta}")
+    except Exception:
+        pass
+    # tambien imprimir a consola si hay
+    traceback.print_exception(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _crash_handler
 
 pygame.init()
 
@@ -1860,8 +1877,15 @@ def _preparar_en_background():
         seed = random.randint(SEED_MENU_MIN, SEED_MAX)
         resultado = _preparar_cancion_menu(seed)
         _menu_siguiente = resultado
-    except Exception as e:
-        print(f"Error pre-render background: {e}")
+    except Exception:
+        try:
+            ruta = os.path.join(BASE_DIR, "crash_log.txt")
+            with open(ruta, "a", encoding="utf-8") as f:
+                f.write("\n[thread pre-render background]\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+        traceback.print_exc()
     finally:
         _menu_preparando = False
 
