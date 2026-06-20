@@ -114,21 +114,21 @@ PROGRESIONES = [
 ]
 
 DIFICULTADES = {
-    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.30, "bpm_mult": 0.75},
-    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.40, "bpm_mult": 0.80},
-    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.50, "bpm_mult": 0.85},
-    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.45, "bpm_mult": 0.85},
-    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.55, "bpm_mult": 0.90},
-    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.65, "bpm_mult": 0.90},
-    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.80, "bpm_mult": 0.95},
-    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 0.85, "bpm_mult": 1.0},
-    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0},
-    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0},
-    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.15, "bpm_mult": 1.0},
-    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.10, "bpm_mult": 1.0},
-    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.25, "bpm_mult": 1.0},
-    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.40, "bpm_mult": 1.0},
-    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.60, "bpm_mult": 1.0},
+    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.30, "bpm_mult": 0.75, "vel_mult": 0.60},
+    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.40, "bpm_mult": 0.80, "vel_mult": 0.70},
+    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.50, "bpm_mult": 0.85, "vel_mult": 0.75},
+    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.45, "bpm_mult": 0.85, "vel_mult": 0.80},
+    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.55, "bpm_mult": 0.90, "vel_mult": 0.85},
+    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.65, "bpm_mult": 0.90, "vel_mult": 0.90},
+    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.80, "bpm_mult": 0.95, "vel_mult": 0.95},
+    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 0.85, "bpm_mult": 1.0,  "vel_mult": 1.0},
+    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0,  "vel_mult": 1.0},
+    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0,  "vel_mult": 1.0},
+    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.15, "bpm_mult": 1.0,  "vel_mult": 1.05},
+    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.10, "bpm_mult": 1.0,  "vel_mult": 1.05},
+    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.25, "bpm_mult": 1.0,  "vel_mult": 1.10},
+    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.40, "bpm_mult": 1.0,  "vel_mult": 1.15},
+    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.60, "bpm_mult": 1.0,  "vel_mult": 1.20},
 }
 
 SEED_MAX       = 9999
@@ -2595,7 +2595,7 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         "liss_pulso":     0.0,
         "mods":           set(mods_partida),
         "mult_mods":      mult_mods,
-        "velocidad":      VELOCIDAD * (2.0 if "veloz" in mods_partida else 1.0),
+        "velocidad":      VELOCIDAD * dif.get("vel_mult", 1.0) * (2.0 if "veloz" in mods_partida else 1.0),
         "stage_info":     stage_info,
         "mapa_teclas":    mapa_teclas,
         "es_inverso":     "inverso" in mods_partida,
@@ -3005,8 +3005,6 @@ def dibujar_juego(partida, ahora):
     if si:
         st_txt = fuente_chica.render(f"STAGE {si['n']}/{NUM_STAGES}", True, col_nota)
         pantalla.blit(st_txt, (10, 46))
-    parte_txt = fuente_chica.render(parte, True, GRIS)
-    pantalla.blit(parte_txt, (10, 28))
     # CAPA 3: mostrar evento activo
     ev_act = partida.get("evento_activo")
     if ev_act:
