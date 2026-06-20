@@ -252,10 +252,11 @@ def np_to_sound(samples_mono, vol=0.7, pan=0.0, lpf=False):
     if lpf:
         n = len(samples_mono)
         if n > 64:
-            fft = np.fft.rfft(samples_mono)
-            freqs = np.fft.rfftfreq(n, 1.0 / SR)
-            mask = 1.0 / (1.0 + (freqs / 8000.0) ** 4)
-            samples_mono = np.fft.irfft(fft * mask, n)
+            # LPF FIR vectorizado (promedio movil ponderado) - rapido con numpy
+            k = 9  # taps; mas = corte mas bajo
+            kernel = np.hanning(k)
+            kernel /= kernel.sum()
+            samples_mono = np.convolve(samples_mono, kernel, mode="same")
     scaled = samples_mono * vol
     # soft clipping con tanh: comprime picos suavemente en vez de cortarlos
     # esto previene distorsion cuando varios sonidos se superponen en el mixer
@@ -1563,10 +1564,10 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
     c_cortas = {}
     c_largas = {}
     idx = 0
-    for midi in range(36, 96):
+    for midi in range(38, 91):
         idx += 1
         if dibujar_progreso and midi % 4 == 0:
-            dibujar_carga_seed_inst(idx / 60, texto_carga)
+            dibujar_carga_seed_inst(idx / 53, texto_carga)
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
@@ -1725,14 +1726,24 @@ def _preparar_en_background():
         _menu_preparando = False
 
 def nueva_musica_menu_aleatoria():
-    """Elige una seed al azar (DIFICIL+) y arranca su musica en el menu (sincrono)."""
-    global _menu_siguiente, _menu_fadeout
+    """Arranca musica de menu. Usa la cancion pre-renderizada en background
+    si esta lista (instantaneo); si no, renderiza una rapida sincrona."""
+    global _menu_siguiente, _menu_fadeout, _menu_preparando
     try:
-        seed = random.randint(SEED_MENU_MIN, SEED_MAX)
-        cancion, dif = _preparar_cancion_menu(seed)
+        # si el thread ya preparo una cancion, usarla (instantaneo)
+        if _menu_siguiente is not None:
+            cancion, dif = _menu_siguiente
+            _menu_siguiente = None
+        else:
+            seed = random.randint(SEED_MENU_MIN, SEED_MAX)
+            cancion, dif = _preparar_cancion_menu(seed)
         iniciar_musica_menu(cancion, dif)
-        _menu_siguiente = None
         _menu_fadeout = None
+        # arrancar pre-render de la proxima en background para la siguiente transicion
+        if not _menu_preparando:
+            _menu_preparando = True
+            t = threading.Thread(target=_preparar_en_background, daemon=True)
+            t.start()
     except Exception as e:
         print(f"Error generando musica de menu aleatoria: {e}")
 
