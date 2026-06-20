@@ -3757,8 +3757,10 @@ def mods_de_stage(n, rng):
     elif n == 3:
         # stage 3: cualquier mod facil (ya puede salir inverso)
         return {rng.choice(MODS_FACILES)}
-    else:  # stage 4: todos los mods de movimiento + sudden death con 10%
-        mods = {"espejo", "inverso", "veloz", "acelerando"}
+    else:  # stage 4: hasta 2 mods de movimiento al azar + sudden death con 10%
+        movimiento = ["espejo", "inverso", "veloz", "acelerando"]
+        cantidad = rng.choice([1, 2])
+        mods = set(rng.sample(movimiento, cantidad))
         if rng.random() < 0.10:
             mods.add("sudden")
         return mods
