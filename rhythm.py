@@ -3972,12 +3972,14 @@ def dibujar_dado():
 
 run_completado_inicio = 0
 run_completado_particulas = []
+_ultimo_fuego_t = 0
 
 def _spawn_notas_celebracion(col_g):
     """Genera la primera oleada de particulas."""
     run_completado_particulas.clear()
-    global run_completado_inicio
+    global run_completado_inicio, _ultimo_fuego_t
     run_completado_inicio = pygame.time.get_ticks()
+    _ultimo_fuego_t = 0
     # fanfarria de victoria
     SND_WIN.set_volume(0.6 * config["volumen"])
     SND_WIN.play()
@@ -4011,20 +4013,22 @@ def _spawn_fuego(col_g):
 
 def dibujar_run_completado():
     """Pantalla de run completado con fuegos artificiales."""
+    global _ultimo_fuego_t
     pantalla.fill(NEGRO)
     col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
     ahora = pygame.time.get_ticks()
     t_total = (ahora - run_completado_inicio) / 1000.0
     dt = 1.0 / 60
 
-    # spawns periodicos de fuegos artificiales
-    if t_total < 8.0 and random.random() < 0.08:
+    # spawns periodicos de fuegos: maximo uno cada ~0.6s durante 7s
+    if t_total < 7.0 and (ahora - _ultimo_fuego_t) > 600 and len(run_completado_particulas) < 400:
+        _ultimo_fuego_t = ahora
         _spawn_fuego(col_g)
         SND_EXPLOSION.set_volume(0.3 * config["volumen"])
         SND_EXPLOSION.play()
 
-    # lluvia de chispas desde arriba
-    if t_total < 6.0 and random.random() < 0.3:
+    # lluvia de chispas desde arriba (con cap de particulas)
+    if t_total < 6.0 and random.random() < 0.2 and len(run_completado_particulas) < 400:
         run_completado_particulas.append({
             "x": random.randint(0, ANCHO), "y": -5,
             "vx": random.uniform(-0.5, 0.5), "vy": random.uniform(1, 3),
@@ -4033,14 +4037,15 @@ def dibujar_run_completado():
             "tam": random.randint(1, 4),
         })
 
-    # barras de fondo pulsantes
+    # barras de fondo pulsantes (una sola surface reusada)
     pulso = math.sin(t_total * 4) * 0.5 + 0.5
-    for i in range(0, ANCHO, 60):
-        alpha = int(12 * pulso)
+    alpha = int(12 * pulso)
+    if alpha > 0:
         bar = pygame.Surface((30, ALTO))
         bar.fill(col_g)
         bar.set_alpha(alpha)
-        pantalla.blit(bar, (i, 0))
+        for i in range(0, ANCHO, 60):
+            pantalla.blit(bar, (i, 0))
 
     # actualizar y dibujar particulas
     vivas = []
