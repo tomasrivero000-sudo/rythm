@@ -3675,6 +3675,7 @@ while corriendo:
                 if dado_elapsed >= DADO_DURACION:
                     if evento.key == pygame.K_RETURN:
                         ESTADO = "run_overview"
+                        nueva_musica_menu_aleatoria()
                     elif evento.key == pygame.K_ESCAPE:
                         run_actual = None
                         ESTADO = "menu"
@@ -3876,8 +3877,7 @@ while corriendo:
                                         print(f"[DEBUG] -> run_dado (dado_inicio={dado_inicio})")
                                     else:
                                         ESTADO = "run_overview"
-                                        print("[DEBUG] -> run_overview (sin mods)")
-                                    nueva_musica_menu_aleatoria()
+                                        nueva_musica_menu_aleatoria()
                         else:
                             # modo libre normal
                             if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
