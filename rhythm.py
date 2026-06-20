@@ -2881,11 +2881,8 @@ def dibujar_juego(partida, ahora):
 
     # linea de hit (se mueve con inverso)
     pygame.draw.line(pantalla, col_nota, (sx, zy + sy), (ANCHO + sx, zy + sy), 2)
-    # borde inferior de las etiquetas del jugador (junto al hit)
+    # borde inferior de las etiquetas del jugador
     pygame.draw.line(pantalla, BLANCO, (sx, zy + 54 + sy), (ANCHO + sx, zy + 54 + sy), 1)
-    # borde del mini teclado (siempre abajo)
-    if es_inv:
-        pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + 54 + sy), (ANCHO + sx, ZONA_Y + 54 + sy), 1)
 
     # nota actual de cada columna (puede cambiar de octava en el desenlace)
     notas_label = list(partida["cancion"]["notas_columnas"])
@@ -2915,10 +2912,12 @@ def dibujar_juego(partida, ahora):
             nota_txt = fuente_chica.render(nota_name, True, col_activa)
             pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, zy + 28 + sy))
 
-    # limite donde se cortan las notas (no entran al area del teclado de abajo)
-    limite_notas = ZONA_Y + 54
+    # limite donde se cortan las notas (no entran al area de labels)
     clip_anterior = pantalla.get_clip()
-    pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
+    if es_inv:
+        pantalla.set_clip(pygame.Rect(0, zy + 54, ANCHO, ALTO - zy - 54))
+    else:
+        pantalla.set_clip(pygame.Rect(0, 0, ANCHO, zy + 54))
 
     es_invisible = "invisible" in partida.get("mods", set())
     for grupo in partida["notas_cayendo"]:
@@ -2940,10 +2939,18 @@ def dibujar_juego(partida, ahora):
                 bar_x = x + ancho_col // 2 - 6
                 if es_inv:
                     bar_y = gy + 28   # barra se extiende hacia abajo
+                    # recortar: no dibujar por encima de la zona de labels
+                    limite_sup = zy + 54
+                    bar_end = bar_y + hold_h
+                    if bar_y < limite_sup:
+                        bar_y = limite_sup
+                    bar_h = max(0, bar_end - bar_y)
                 else:
                     bar_y = gy - hold_h  # barra se extiende hacia arriba
-                bar_h = hold_h
-                if col in partida["holds_activos"]:
+                    bar_h = hold_h
+                if bar_h <= 0:
+                    pass  # cola ya consumida, no dibujar
+                elif col in partida["holds_activos"]:
                     # barra que oscila: dibujada por segmentos con desplazamiento senoidal
                     fase = pygame.time.get_ticks() * 0.012
                     seg = 6
@@ -3020,62 +3027,6 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 50))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
-
-    # --- mini teclado de piano (refleja las notas actuales) ---
-    notas_base = partida["cancion"]["notas_columnas"]
-    # determinar la nota actual de cada columna segun las notas que estan sonando
-    notas_actuales = list(notas_base)
-    for grupo in partida["notas_cayendo"]:
-        # notas cerca de la zona de golpe definen la tonalidad actual
-        if abs(grupo["y"] - zy) < 200:
-            for idx_c, c in enumerate(grupo["cols"]):
-                if idx_c < len(grupo.get("midis", [])) and c < len(notas_actuales):
-                    notas_actuales[c] = grupo["midis"][idx_c]
-    notas_cols = notas_actuales
-    tecl_y = ZONA_Y + 56 + sy
-    tecl_h = ALTO - tecl_y - 4
-    if tecl_h > 8:
-        tecl_h = min(tecl_h, 28)
-        midi_min = min(notas_cols) - 2
-        midi_max = max(notas_cols) + 2
-        midi_min = (midi_min // 12) * 12
-        midi_max = ((midi_max // 12) + 1) * 12
-        es_negra = [1, 3, 6, 8, 10]
-        blancas = [m for m in range(midi_min, midi_max) if (m % 12) not in es_negra]
-        n_blancas = len(blancas)
-        if n_blancas > 0:
-            tw = ANCHO // n_blancas
-            for idx, m in enumerate(blancas):
-                kx = idx * tw + sx
-                activa = m in notas_cols
-                presionada = activa and any(
-                    notas_cols[c] == m and c in teclas_sostenidas
-                    for c in range(len(notas_cols))
-                )
-                if presionada:
-                    pygame.draw.rect(pantalla, BLANCO, (kx + 1, tecl_y, tw - 2, tecl_h))
-                elif activa:
-                    pygame.draw.rect(pantalla, GRIS_MED, (kx + 1, tecl_y, tw - 2, tecl_h))
-                else:
-                    pygame.draw.rect(pantalla, GRIS, (kx + 1, tecl_y, tw - 2, tecl_h), 1)
-            for idx, m in enumerate(blancas):
-                if m + 1 < midi_max and (m + 1) % 12 in es_negra:
-                    mn = m + 1
-                    kx = idx * tw + tw // 2 + tw // 4 + sx
-                    bw = tw // 2
-                    bh = tecl_h * 2 // 3
-                    activa = mn in notas_cols
-                    presionada = activa and any(
-                        notas_cols[c] == mn and c in teclas_sostenidas
-                        for c in range(len(notas_cols))
-                    )
-                    if presionada:
-                        pygame.draw.rect(pantalla, BLANCO, (kx, tecl_y, bw, bh))
-                    elif activa:
-                        pygame.draw.rect(pantalla, GRIS_MED, (kx, tecl_y, bw, bh))
-                    else:
-                        pygame.draw.rect(pantalla, NEGRO, (kx, tecl_y, bw, bh))
-                        pygame.draw.rect(pantalla, GRIS, (kx, tecl_y, bw, bh), 1)
 
     hit = partida.get("ultimo_hit")
     if hit and pygame.time.get_ticks() - hit["tiempo"] < 500:
