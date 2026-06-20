@@ -525,9 +525,45 @@ def synth_fanfarria_win():
     wave = np.concatenate(partes)
     return np_to_sound(wave, vol=0.45)
 
+def synth_ui_select():
+    """Beep corto de navegacion de menu."""
+    dur = 0.06
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    wave = np.sin(2 * np.pi * 660 * t) * 0.5 + np.sin(2 * np.pi * 1320 * t) * 0.2
+    env = np.exp(-t * 30)
+    fade = min(int(SR * 0.005), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.3)
+
+def synth_ui_confirm():
+    """Sonido de confirmacion: dos tonos ascendentes."""
+    dur = 0.18
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    mitad = n // 2
+    f = np.ones(n) * 660
+    f[mitad:] = 880
+    ph = np.cumsum(f / SR) * 2 * np.pi
+    wave = np.sin(ph) * 0.5 + np.sin(ph * 2) * 0.15
+    env = np.minimum(1.0, np.exp(-t * 6) + 0.3)
+    fade = min(int(SR * 0.01), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.32)
+
+SND_SELECT = synth_ui_select()
+SND_CONFIRM = synth_ui_confirm()
 SND_EXPLOSION = synth_explosion(1.0)
 SND_EXPLOSION_BIG = synth_explosion(2.0)
 SND_WIN = synth_fanfarria_win()
+
+def sfx_select():
+    SND_SELECT.set_volume(0.4 * config["volumen"])
+    SND_SELECT.play()
+
+def sfx_confirm():
+    SND_CONFIRM.set_volume(0.45 * config["volumen"])
+    SND_CONFIRM.play()
 
 INSTRUMENTOS_JUGADOR = {
     "SQUARE":    "square",
@@ -4104,6 +4140,7 @@ def aplicar_resolucion():
 def cambiar_audio_device(idx):
     """Reinicializa el mixer con el dispositivo seleccionado."""
     global SND_ERROR, SND_EXPLOSION, SND_EXPLOSION_BIG, SND_WIN
+    global SND_SELECT, SND_CONFIRM
     global cache_por_instrumento, cache_largas_por_instrumento
     config["audio_idx"] = idx
     try:
@@ -4119,6 +4156,8 @@ def cambiar_audio_device(idx):
         SND_EXPLOSION = synth_explosion(1.0)
         SND_EXPLOSION_BIG = synth_explosion(2.0)
         SND_WIN = synth_fanfarria_win()
+        SND_SELECT = synth_ui_select()
+        SND_CONFIRM = synth_ui_confirm()
         cache_por_instrumento.clear()
         cache_largas_por_instrumento.clear()
     except Exception as e:
@@ -4162,18 +4201,22 @@ while corriendo:
                     cargando_seed = True
                 if evento.key == pygame.K_RETURN and seed_acumulada > 0:
                     # arrancar un RUN de stages
+                    sfx_confirm()
                     run_actual = crear_run(int(seed_acumulada))
                     ESTADO = "run_overview"
                 if evento.key == pygame.K_m and seed_acumulada > 0:
                     # modo libre de mods (sin stages)
+                    sfx_confirm()
                     mods_opcion = 0
                     ESTADO = "mods"
                 if evento.key == pygame.K_r:
                     seed_acumulada = 0.0
                     cargando_seed  = False
                 if evento.key == pygame.K_l:
+                    sfx_confirm()
                     ESTADO = "leaderboard"
                 if evento.key == pygame.K_c:
+                    sfx_confirm()
                     config_opcion = 0
                     ESTADO = "config"
             if evento.type == pygame.KEYUP:
@@ -4186,7 +4229,8 @@ while corriendo:
                     run_actual = None
                     ESTADO = "menu"
                     nueva_musica_menu_aleatoria()
-                elif evento.key == pygame.K_SPACE:
+                elif evento.key in (pygame.K_SPACE, pygame.K_RETURN):
+                    sfx_confirm()
                     detener_musica_menu()
                     pygame.mixer.stop()
                     idx = run_actual["stage"] - 1
@@ -4204,7 +4248,8 @@ while corriendo:
                 # solo avanzar cuando la animacion termino
                 dado_elapsed = pygame.time.get_ticks() - dado_inicio
                 if dado_elapsed >= DADO_DURACION:
-                    if evento.key == pygame.K_SPACE:
+                    if evento.key in (pygame.K_SPACE, pygame.K_RETURN):
+                        sfx_confirm()
                         ESTADO = "run_overview"
                         nueva_musica_menu_aleatoria()
                     elif evento.key == pygame.K_ESCAPE:
@@ -4243,8 +4288,10 @@ while corriendo:
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
                     mods_opcion = (mods_opcion - 1) % len(MODIFICADORES)
+                    sfx_select()
                 elif evento.key == pygame.K_DOWN:
                     mods_opcion = (mods_opcion + 1) % len(MODIFICADORES)
+                    sfx_select()
                 elif evento.key == pygame.K_SPACE:
                     mid = MODIFICADORES[mods_opcion]["id"]
                     if mid in mods_activos:
@@ -4271,8 +4318,10 @@ while corriendo:
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
                     config_opcion = (config_opcion - 1) % 5
+                    sfx_select()
                 elif evento.key == pygame.K_DOWN:
                     config_opcion = (config_opcion + 1) % 5
+                    sfx_select()
                 elif evento.key == pygame.K_LEFT:
                     if config_opcion == 0:
                         config["brillo"] = max(0.3, round(config["brillo"] - 0.1, 1))
@@ -4333,8 +4382,10 @@ while corriendo:
                     ESTADO = "jugando"
                 elif evento.key == pygame.K_UP:
                     pausa_opcion = (pausa_opcion - 1) % 5
+                    sfx_select()
                 elif evento.key == pygame.K_DOWN:
                     pausa_opcion = (pausa_opcion + 1) % 5
+                    sfx_select()
                 elif evento.key == pygame.K_LEFT and pausa_opcion == 1:
                     config["volumen"] = max(0.0, round(config["volumen"] - 0.1, 1))
                 elif evento.key == pygame.K_RIGHT and pausa_opcion == 1:
@@ -4387,9 +4438,10 @@ while corriendo:
         elif ESTADO == "jugando":
             zy_p = partida.get("zona_y", ZONA_Y)
             if evento.type == pygame.KEYDOWN:
-                if evento.key in (pygame.K_ESCAPE, pygame.K_SPACE):
+                if evento.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
                         # FIN / GAME OVER
+                        sfx_confirm()
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
                         canal_hold.clear()
