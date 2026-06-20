@@ -19,6 +19,23 @@ pygame.mixer.set_num_channels(32)
 
 ANCHO, ALTO = 720, 640
 
+# --- dispositivos de audio ---
+def listar_dispositivos_audio():
+    """Lista los dispositivos de salida de audio disponibles."""
+    dispositivos = ["Default"]
+    try:
+        n = pygame.mixer.get_num_audio_devices(False)
+        for i in range(n):
+            nombre = pygame.mixer.get_audio_device_name(i, False)
+            if isinstance(nombre, bytes):
+                nombre = nombre.decode("utf-8", errors="replace")
+            dispositivos.append(nombre)
+    except Exception:
+        pass
+    return dispositivos
+
+AUDIO_DEVICES = listar_dispositivos_audio()
+
 # --- configuracion ajustable ---
 RESOLUCIONES = [(720, 640), (900, 800), (1080, 960), (1280, 1138)]
 config = {
@@ -26,6 +43,7 @@ config = {
     "volumen": 1.0,     # 0.0 a 1.0
     "vol_menu": 0.5,    # 0.0 a 1.0 (volumen de la musica del menu)
     "res_idx": 2,       # indice en RESOLUCIONES (1080x960)
+    "audio_idx": 0,     # 0 = default, 1+ = dispositivo especifico
 }
 
 # la ventana real puede cambiar de tamaño; el juego siempre dibuja en 720x640 y se escala
@@ -3144,7 +3162,7 @@ def dibujar_menu(seed_actual, cargando):
     lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG", True, GRIS)
     pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 512))
 
-config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion
+config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion, 4=audio
 pausa_opcion = 0   # 0=continuar, 1=reiniciar, 2=salir
 mods_opcion = 0    # opcion seleccionada en pantalla de modificadores
 
@@ -3466,34 +3484,42 @@ def dibujar_config():
         ("VOLUMEN", config["volumen"], "barra"),
         ("VOL. MENU", config["vol_menu"], "barra"),
         ("RESOLUCION", config["res_idx"], "res"),
+        ("AUDIO", config["audio_idx"], "audio"),
     ]
-    y0 = 180
+    y0 = 160
     for i, (nombre, valor, tipo) in enumerate(opciones):
-        y = y0 + i * 70
+        y = y0 + i * 60
         sel = (i == config_opcion)
         marca = "> " if sel else "  "
         color = BLANCO if sel else GRIS_MED
         etq = fuente.render(f"{marca}{nombre}", True, color)
-        pantalla.blit(etq, (100, y))
+        pantalla.blit(etq, (80, y))
 
         if tipo == "barra":
-            barra_w = 300
-            barra_x = ANCHO - barra_w - 100
+            barra_w = 250
+            barra_x = ANCHO - barra_w - 80
             pygame.draw.rect(pantalla, GRIS, (barra_x, y + 4, barra_w, 16))
             relleno = int(barra_w * valor)
             pygame.draw.rect(pantalla, color, (barra_x, y + 4, relleno, 16))
             pygame.draw.rect(pantalla, BLANCO, (barra_x, y + 4, barra_w, 16), 1)
             pct = fuente_chica.render(f"{int(valor * 100)}%", True, color)
             pantalla.blit(pct, (barra_x + barra_w + 12, y + 4))
-        else:
+        elif tipo == "res":
             w, h = RESOLUCIONES[valor]
             res_txt = fuente.render(f"{w}x{h}", True, color)
             pantalla.blit(res_txt, (ANCHO - 300, y))
+        elif tipo == "audio":
+            dev_name = AUDIO_DEVICES[valor] if valor < len(AUDIO_DEVICES) else "Default"
+            # truncar nombre largo
+            if len(dev_name) > 24:
+                dev_name = dev_name[:22] + ".."
+            dev_txt = fuente_chica.render(dev_name, True, color)
+            pantalla.blit(dev_txt, (ANCHO - 300, y + 6))
 
     ayuda1 = fuente_chica.render("FLECHAS ARRIBA/ABAJO = ELEGIR", True, GRIS)
-    pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 480))
+    pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 490))
     ayuda2 = fuente_chica.render("FLECHAS IZQ/DER = AJUSTAR", True, GRIS)
-    pantalla.blit(ayuda2, (ANCHO // 2 - ayuda2.get_width() // 2, 505))
+    pantalla.blit(ayuda2, (ANCHO // 2 - ayuda2.get_width() // 2, 515))
     ayuda3 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
     pantalla.blit(ayuda3, (ANCHO // 2 - ayuda3.get_width() // 2, 540))
 
@@ -3501,6 +3527,30 @@ def aplicar_resolucion():
     global ventana
     w, h = RESOLUCIONES[config["res_idx"]]
     ventana = pygame.display.set_mode((w, h))
+
+def cambiar_audio_device(idx):
+    """Reinicializa el mixer con el dispositivo seleccionado."""
+    global SND_ERROR, cache_por_instrumento, cache_largas_por_instrumento
+    config["audio_idx"] = idx
+    try:
+        pygame.mixer.quit()
+        if idx == 0:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        else:
+            nombre = AUDIO_DEVICES[idx]
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512, devicename=nombre)
+        pygame.mixer.set_num_channels(32)
+        # reconstruir sonidos globales
+        SND_ERROR = synth_error()
+        # limpiar caches de instrumentos (se re-renderizan al jugar)
+        cache_por_instrumento.clear()
+        cache_largas_por_instrumento.clear()
+    except Exception as e:
+        print(f"Error cambiando audio: {e}")
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        pygame.mixer.set_num_channels(32)
+        SND_ERROR = synth_error()
+        config["audio_idx"] = 0
 
 ESTADO         = "menu"
 partida        = None
@@ -3636,9 +3686,9 @@ while corriendo:
                 if evento.key == pygame.K_ESCAPE:
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
-                    config_opcion = (config_opcion - 1) % 4
+                    config_opcion = (config_opcion - 1) % 5
                 elif evento.key == pygame.K_DOWN:
-                    config_opcion = (config_opcion + 1) % 4
+                    config_opcion = (config_opcion + 1) % 5
                 elif evento.key == pygame.K_LEFT:
                     if config_opcion == 0:
                         config["brillo"] = max(0.3, round(config["brillo"] - 0.1, 1))
@@ -3649,6 +3699,10 @@ while corriendo:
                     elif config_opcion == 3:
                         config["res_idx"] = max(0, config["res_idx"] - 1)
                         aplicar_resolucion()
+                    elif config_opcion == 4:
+                        nuevo = max(0, config["audio_idx"] - 1)
+                        if nuevo != config["audio_idx"]:
+                            cambiar_audio_device(nuevo)
                 elif evento.key == pygame.K_RIGHT:
                     if config_opcion == 0:
                         config["brillo"] = min(1.0, round(config["brillo"] + 0.1, 1))
@@ -3659,6 +3713,10 @@ while corriendo:
                     elif config_opcion == 3:
                         config["res_idx"] = min(len(RESOLUCIONES) - 1, config["res_idx"] + 1)
                         aplicar_resolucion()
+                    elif config_opcion == 4:
+                        nuevo = min(len(AUDIO_DEVICES) - 1, config["audio_idx"] + 1)
+                        if nuevo != config["audio_idx"]:
+                            cambiar_audio_device(nuevo)
 
         elif ESTADO == "input_nombre":
             if evento.type == pygame.KEYDOWN:
