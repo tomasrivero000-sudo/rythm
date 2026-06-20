@@ -142,10 +142,14 @@ fuente_chica  = pygame.font.SysFont("courier", 14, bold=True)
 
 SR = 44100
 
-def np_to_sound(samples_mono, vol=0.8, pan=0.0):
+def np_to_sound(samples_mono, vol=0.7, pan=0.0):
     """Convierte array numpy mono a pygame.Sound stereo.
     pan: -1.0 = todo izquierda, 0 = centro, 1.0 = todo derecha"""
-    base = np.clip(samples_mono * vol * 32767, -32768, 32767)
+    scaled = samples_mono * vol
+    # soft clipping con tanh: comprime picos suavemente en vez de cortarlos
+    # esto previene distorsion cuando varios sonidos se superponen en el mixer
+    scaled = np.tanh(scaled * 1.5) * 0.75
+    base = scaled * 32767
     # ganancia por canal con ley de paneo de potencia constante
     ang = (pan + 1) * 0.25 * np.pi  # 0..pi/2
     gL = np.cos(ang)
@@ -808,24 +812,24 @@ def synth_nota(tipo, freq, duracion, rng_params):
     if peak > 0:
         wave = wave / peak
     vol_tipo = {
-        "square": 0.65, "saw": 0.65, "chiptune": 0.6,
-        "organ": 0.7, "fm_bell": 0.75,
-        "sine": 0.8, "triangle": 0.75, "pluck": 0.75,
-        "supersaw": 0.6, "acid": 0.65, "bitcrush": 0.65, "lead": 0.65,
-        "wobble": 0.65, "glass": 0.75, "pad": 0.7,
-        "metallic": 0.65, "bass": 0.65, "flute": 0.7,
-        "reso": 0.65, "choir": 0.7,
-        "vibraphone": 0.7, "sitar": 0.65, "kalimba": 0.7,
-        "trumpet": 0.65, "harp": 0.7, "synthbass": 0.65,
-        "bellpad": 0.65, "detune": 0.65,
-        "pwm_lead": 0.65, "fm_ep": 0.75, "formant": 0.65,
-        "hoover": 0.6, "bell_fm": 0.7, "growl": 0.65,
-        "saw_stack": 0.6, "fm_3op": 0.7, "ring_mod": 0.65,
-        "sync_lead": 0.65, "pluck_soft": 0.75, "vox_pad": 0.65,
-        "dist_gtr": 0.6, "wavefold": 0.65, "phase_pad": 0.7,
-        "fm_brass": 0.7, "glass_harm": 0.7, "sub_pluck": 0.7,
-        "noise_pitch": 0.65, "organ_full": 0.65,
-        "alien": 0.6, "broken": 0.6,
+        "square": 0.6, "saw": 0.6, "chiptune": 0.55,
+        "organ": 0.65, "fm_bell": 0.7,
+        "sine": 0.75, "triangle": 0.7, "pluck": 0.7,
+        "supersaw": 0.55, "acid": 0.6, "bitcrush": 0.6, "lead": 0.6,
+        "wobble": 0.6, "glass": 0.7, "pad": 0.65,
+        "metallic": 0.6, "bass": 0.6, "flute": 0.65,
+        "reso": 0.6, "choir": 0.65,
+        "vibraphone": 0.65, "sitar": 0.6, "kalimba": 0.65,
+        "trumpet": 0.6, "harp": 0.65, "synthbass": 0.6,
+        "bellpad": 0.6, "detune": 0.6,
+        "pwm_lead": 0.6, "fm_ep": 0.7, "formant": 0.6,
+        "hoover": 0.55, "bell_fm": 0.65, "growl": 0.6,
+        "saw_stack": 0.55, "fm_3op": 0.65, "ring_mod": 0.6,
+        "sync_lead": 0.6, "pluck_soft": 0.7, "vox_pad": 0.6,
+        "dist_gtr": 0.55, "wavefold": 0.6, "phase_pad": 0.65,
+        "fm_brass": 0.65, "glass_harm": 0.65, "sub_pluck": 0.65,
+        "noise_pitch": 0.6, "organ_full": 0.6,
+        "alien": 0.55, "broken": 0.55,
     }
     
     return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
