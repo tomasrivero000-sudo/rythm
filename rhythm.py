@@ -4,7 +4,14 @@ import numpy as np
 import json
 import wave
 import os
+import sys
 import threading
+
+# directorio base: donde esta el .exe (compilado) o el .py (desarrollo)
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 pygame.init()
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -1573,7 +1580,7 @@ def midi_a_nombre(midi):
     return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
 
 # --- leaderboard ---
-LEADERBOARD_FILE = "F:\\VIDEOGAMEEE\\leaderboard.json"
+LEADERBOARD_FILE = os.path.join(BASE_DIR, "leaderboard.json")
 TOP_SCORES = 10
 
 def cargar_leaderboard():
@@ -2535,7 +2542,7 @@ def exportar_cancion(partida):
         if pico > 0:
             buffer = buffer / pico * 0.95
         salida = np.clip(buffer * 32767, -32768, 32767).astype(np.int16)
-        carpeta = "F:\\VIDEOGAMEEE\\export"
+        carpeta = os.path.join(BASE_DIR, "export")
         try:
             os.makedirs(carpeta, exist_ok=True)
         except Exception:
