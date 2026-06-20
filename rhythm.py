@@ -2231,14 +2231,14 @@ def dibujar_input_nombre(nombre_actual):
 
 def get_dificultad(seed):
     if seed <= 0:
-        return DIFICULTADES[1]
+        d = dict(DIFICULTADES[1]); d["nivel"] = 1; return d
     # mas tramos (y mas anchos) en la zona facil/normal/intermedia
     tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
               7100, 7800, 8400, 9000, 9500, 9999]
     for i, tope in enumerate(tramos):
         if seed <= tope:
-            return DIFICULTADES[i + 1]
-    return DIFICULTADES[15]
+            d = dict(DIFICULTADES[i + 1]); d["nivel"] = i + 1; return d
+    d = dict(DIFICULTADES[15]); d["nivel"] = 15; return d
 
 def elegir_kit(rng):
     return sintetizar_kit(rng)
@@ -2684,10 +2684,29 @@ def generar_cancion(seed, dif):
             instrumento = rng.choice([p for p in pool if p != "RESO"])
 
     # --- CAPA 1: estructura variable por seed ---
-    C_INTRO     = rng.choice([2, 4, 4, 6])
-    num_reps    = rng.choice([4, 5, 6, 6, 7, 8])   # repeticiones de 4 compases en el nudo
-    C_NUDO      = num_reps * 4
-    C_DESENLACE = rng.choice([2, 4, 4, 6])
+    # la duracion TOTAL escala con la dificultad: facil 30-45s, chaos ~120s
+    nivel_dif = dif.get("nivel", 5)
+    # duracion total objetivo en segundos (interpolada por nivel 1-15)
+    dur_total_min, dur_total_max = 26.0, 115.0
+    dur_total_obj = dur_total_min + (nivel_dif - 1) / 14 * (dur_total_max - dur_total_min)
+    # algo de variacion aleatoria (+-12%)
+    dur_total_obj *= rng.uniform(0.88, 1.12)
+    # intro y desenlace mas cortos en niveles bajos
+    if nivel_dif <= 3:
+        C_INTRO     = rng.choice([2, 2, 4])
+        C_DESENLACE = rng.choice([2, 2, 4])
+    else:
+        C_INTRO     = rng.choice([2, 4, 4, 6])
+        C_DESENLACE = rng.choice([2, 4, 4, 6])
+    seg_por_compas = (4 * beat) / 1000.0
+    seg_extra = (C_INTRO + C_DESENLACE) * seg_por_compas
+    # el nudo cubre el resto de la duracion objetivo
+    dur_nudo_obj = max(seg_por_compas * 4, dur_total_obj - seg_extra)
+    seg_por_rep = 4 * seg_por_compas   # 1 rep = 4 compases
+    # minimo 1 rep en niveles faciles (canciones cortas), 2 en el resto
+    piso_reps = 1 if nivel_dif <= 3 else 2
+    num_reps = max(piso_reps, round(dur_nudo_obj / seg_por_rep))
+    C_NUDO   = num_reps * 4
     t_intro_fin     = C_INTRO * 4 * beat
     t_nudo_fin      = t_intro_fin + C_NUDO * 4 * beat
     t_desenlace_fin = t_nudo_fin + C_DESENLACE * 4 * beat
