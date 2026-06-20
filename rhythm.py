@@ -161,9 +161,17 @@ fuente_chica  = pygame.font.SysFont("courier", 14, bold=True)
 
 SR = 44100
 
-def np_to_sound(samples_mono, vol=0.7, pan=0.0):
+def np_to_sound(samples_mono, vol=0.7, pan=0.0, lpf=False):
     """Convierte array numpy mono a pygame.Sound stereo.
-    pan: -1.0 = todo izquierda, 0 = centro, 1.0 = todo derecha"""
+    pan: -1.0 = todo izquierda, 0 = centro, 1.0 = todo derecha
+    lpf: aplica filtro pasa-bajos para domar agudos"""
+    if lpf:
+        n = len(samples_mono)
+        if n > 64:
+            fft = np.fft.rfft(samples_mono)
+            freqs = np.fft.rfftfreq(n, 1.0 / SR)
+            mask = 1.0 / (1.0 + (freqs / 8000.0) ** 4)
+            samples_mono = np.fft.irfft(fft * mask, n)
     scaled = samples_mono * vol
     # soft clipping con tanh: comprime picos suavemente en vez de cortarlos
     # esto previene distorsion cuando varios sonidos se superponen en el mixer
@@ -1231,13 +1239,13 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
-        c_cortas[midi] = np_to_sound(aplicar_eq(arr[:, 0], inst_eq, inst_eq_int))
+        c_cortas[midi] = np_to_sound(aplicar_eq(arr[:, 0], inst_eq, inst_eq_int), lpf=True)
         params_hold = dict(params)
         params_hold["vibrato"] = params.get("vibrato", 0) + 0.4
         params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
         snd_l = synth_nota(tipo, freq, 2.0, params_hold)
         arr_l = pygame.sndarray.array(snd_l).astype(np.float64) / 32767
-        c_largas[midi] = np_to_sound(aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int))
+        c_largas[midi] = np_to_sound(aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int), lpf=True)
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
     print(f"  {nombre} OK (EQ: {inst_eq} {inst_eq_int:.1f})")
@@ -2155,7 +2163,7 @@ def generar_cancion(seed, dif):
     notas_columnas = [nota_midi(tonica + 12, escala, i * 2) for i in range(num_columnas)]
     kit = elegir_kit(rng)
     # instrumento: 6% raro, si no del pool del genero (con fallback a la lista global)
-    if rng.random() < 0.06:
+    if rng.random() < 0.02:
         instrumento = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
     else:
         pool = [i for i in gdef.get("instrumentos", []) if i in INSTRUMENTOS_JUGADOR]
@@ -2884,30 +2892,13 @@ def dibujar_juego(partida, ahora):
 
     # linea de hit (se mueve con inverso)
     pygame.draw.line(pantalla, col_nota, (sx, zy + sy), (ANCHO + sx, zy + sy), 2)
-    # borde inferior de las etiquetas del jugador
-    pygame.draw.line(pantalla, BLANCO, (sx, zy + 54 + sy), (ANCHO + sx, zy + 54 + sy), 1)
 
-    # con espejo, cada columna se activa con otra tecla: invertir el mapa
-    mt = partida.get("mapa_teclas", {})
-    inv_teclas = {}
-    for tecla_pos, col_dest in mt.items():
-        inv_teclas[col_dest] = tecla_pos
-
-    for i in range(num_cols):
-        x = i * ancho_col + sx
-        if i in teclas_sostenidas:
-            pygame.draw.rect(pantalla, GRIS, (x + 2, zy + 2 + sy, ancho_col - 4, 50))
-        col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
-        tecla_idx = inv_teclas.get(i, i)
-        label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
-        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, zy + 10 + sy))
-
-    # limite donde se cortan las notas (no entran al area de labels)
+    # CLIP: las notas se cortan justo en la linea de hit (zy)
     clip_anterior = pantalla.get_clip()
     if es_inv:
-        pantalla.set_clip(pygame.Rect(0, zy + 54, ANCHO, ALTO - zy - 54))
+        pantalla.set_clip(pygame.Rect(0, zy + 2, ANCHO, ALTO - zy))
     else:
-        pantalla.set_clip(pygame.Rect(0, 0, ANCHO, zy + 54))
+        pantalla.set_clip(pygame.Rect(0, 0, ANCHO, zy))
 
     es_invisible = "invisible" in partida.get("mods", set())
     for grupo in partida["notas_cayendo"]:
@@ -2930,7 +2921,7 @@ def dibujar_juego(partida, ahora):
                 if es_inv:
                     bar_y = gy + 28   # barra se extiende hacia abajo
                     # recortar: no dibujar por encima de la zona de labels
-                    limite_sup = zy + 54
+                    limite_sup = zy + 2
                     bar_end = bar_y + hold_h
                     if bar_y < limite_sup:
                         bar_y = limite_sup
@@ -2968,6 +2959,21 @@ def dibujar_juego(partida, ahora):
             pygame.draw.line(pantalla, col_nota, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
 
     pantalla.set_clip(clip_anterior)
+
+    # labels del jugador (encima de las notas)
+    pygame.draw.line(pantalla, BLANCO, (sx, zy + 34 + sy), (ANCHO + sx, zy + 34 + sy), 1)
+    mt = partida.get("mapa_teclas", {})
+    inv_teclas = {}
+    for tecla_pos, col_dest in mt.items():
+        inv_teclas[col_dest] = tecla_pos
+    for i in range(num_cols):
+        x = i * ancho_col + sx
+        if i in teclas_sostenidas:
+            pygame.draw.rect(pantalla, GRIS, (x + 2, zy + 2 + sy, ancho_col - 4, 32))
+        col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
+        tecla_idx = inv_teclas.get(i, i)
+        label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
+        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, zy + 8 + sy))
 
     pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
@@ -3297,10 +3303,54 @@ def dibujar_dado():
         cont = fuente_chica.render("ENTER = CONTINUAR", True, GRIS)
         pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
+run_completado_inicio = 0
+run_completado_particulas = []
+
+def _spawn_notas_celebracion(col_g):
+    """Genera particulas de notas musicales para la celebracion."""
+    run_completado_particulas.clear()
+    for _ in range(80):
+        ang = random.uniform(0, 2 * math.pi)
+        vel = random.uniform(1, 6)
+        run_completado_particulas.append({
+            "x": ANCHO // 2, "y": ALTO // 2,
+            "vx": math.cos(ang) * vel, "vy": math.sin(ang) * vel - 2,
+            "vida": random.uniform(2.0, 5.0),
+            "t": 0,
+            "color": col_g if random.random() > 0.3 else BLANCO,
+            "nota": random.choice([".", ".", ".", "+"]),
+            "tam": random.randint(3, 8),
+        })
+
 def dibujar_run_completado():
-    """Pantalla de run completado."""
+    """Pantalla de run completado con particulas celebratorias."""
+    global run_completado_inicio
     pantalla.fill(NEGRO)
     col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+    ahora = pygame.time.get_ticks()
+    dt = 1.0 / 60
+
+    # actualizar y dibujar particulas
+    vivas = []
+    for p in run_completado_particulas:
+        p["t"] += dt
+        if p["t"] < p["vida"]:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += 0.1  # gravedad suave
+            alpha = max(0, 1.0 - p["t"] / p["vida"])
+            c = tuple(int(v * alpha) for v in p["color"])
+            pygame.draw.rect(pantalla, c,
+                (int(p["x"]) - p["tam"]//2, int(p["y"]) - p["tam"]//2,
+                 p["tam"], p["tam"]))
+            # cola de la nota musical
+            if p["tam"] > 4:
+                pygame.draw.line(pantalla, c,
+                    (int(p["x"]) + p["tam"]//2, int(p["y"]) - p["tam"]//2),
+                    (int(p["x"]) + p["tam"]//2, int(p["y"]) - p["tam"] - 6), 1)
+            vivas.append(p)
+    run_completado_particulas[:] = vivas
+
     titulo = fuente_grande.render("RUN COMPLETO!", True, col_g)
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
     dif_nom = DIFICULTADES[run_actual["nivel"]]["nombre"]
@@ -3308,7 +3358,7 @@ def dibujar_run_completado():
     pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 240))
     pts = fuente.render(f"PUNTOS TOTALES: {run_actual['puntos_total']}", True, GRIS_MED)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 300))
-    cont = fuente_chica.render("ENTER = VOLVER AL MENU", True, GRIS)
+    cont = fuente_chica.render("ENTER = CONTINUAR", True, GRIS)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
 def dibujar_run_fallido():
@@ -3532,15 +3582,26 @@ while corriendo:
         elif ESTADO == "run_completado":
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                    pts_run = run_actual.get("puntos_total", 0)
+                    if not score_guardado and pts_run > 0 and es_highscore(pts_run):
+                        nombre_input = ""
+                        ESTADO = "input_nombre"
+                    else:
+                        ESTADO = "leaderboard"
                     run_actual = None
-                    ESTADO = "menu"
                     nueva_musica_menu_aleatoria()
 
         elif ESTADO == "run_fallido":
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                    pts_run = run_actual.get("puntos_total", 0) + partida.get("puntos", 0)
+                    if not score_guardado and pts_run > 0 and es_highscore(pts_run):
+                        partida["puntos"] = pts_run
+                        nombre_input = ""
+                        ESTADO = "input_nombre"
+                    else:
+                        ESTADO = "leaderboard"
                     run_actual = None
-                    ESTADO = "menu"
                     nueva_musica_menu_aleatoria()
 
         elif ESTADO == "mods":
@@ -3691,6 +3752,8 @@ while corriendo:
                                 if run_actual["stage"] >= NUM_STAGES:
                                     # run completo!
                                     marcar_completado(run_actual["genero"], run_actual["nivel"])
+                                    col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+                                    _spawn_notas_celebracion(col_g)
                                     ESTADO = "run_completado"
                                     nueva_musica_menu_aleatoria()
                                 else:
