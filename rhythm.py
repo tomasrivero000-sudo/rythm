@@ -3377,30 +3377,72 @@ def dibujar_dado():
 
 run_completado_inicio = 0
 run_completado_particulas = []
+run_completado_fuegos = []
 
 def _spawn_notas_celebracion(col_g):
-    """Genera particulas de notas musicales para la celebracion."""
+    """Genera la primera oleada de particulas."""
     run_completado_particulas.clear()
-    for _ in range(80):
+    run_completado_fuegos.clear()
+    global run_completado_inicio
+    run_completado_inicio = pygame.time.get_ticks()
+    # explosion central grande
+    for _ in range(120):
+        ang = random.uniform(0, 2 * math.pi)
+        vel = random.uniform(2, 10)
+        run_completado_particulas.append({
+            "x": ANCHO // 2, "y": ALTO // 2 - 40,
+            "vx": math.cos(ang) * vel, "vy": math.sin(ang) * vel - 3,
+            "vida": random.uniform(2.5, 6.0), "t": 0,
+            "color": col_g if random.random() > 0.25 else BLANCO,
+            "tam": random.randint(3, 10),
+        })
+
+def _spawn_fuego(col_g):
+    """Spawns un fuego artificial en posicion aleatoria."""
+    fx = random.randint(60, ANCHO - 60)
+    fy = random.randint(80, ALTO // 2)
+    n = random.randint(25, 50)
+    for _ in range(n):
         ang = random.uniform(0, 2 * math.pi)
         vel = random.uniform(1, 6)
         run_completado_particulas.append({
-            "x": ANCHO // 2, "y": ALTO // 2,
+            "x": fx, "y": fy,
             "vx": math.cos(ang) * vel, "vy": math.sin(ang) * vel - 2,
-            "vida": random.uniform(2.0, 5.0),
-            "t": 0,
+            "vida": random.uniform(1.5, 4.0), "t": 0,
             "color": col_g if random.random() > 0.3 else BLANCO,
-            "nota": random.choice([".", ".", ".", "+"]),
-            "tam": random.randint(3, 8),
+            "tam": random.randint(2, 7),
         })
 
 def dibujar_run_completado():
-    """Pantalla de run completado con particulas celebratorias."""
-    global run_completado_inicio
+    """Pantalla de run completado con fuegos artificiales."""
     pantalla.fill(NEGRO)
     col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
     ahora = pygame.time.get_ticks()
+    t_total = (ahora - run_completado_inicio) / 1000.0
     dt = 1.0 / 60
+
+    # spawns periodicos de fuegos artificiales
+    if t_total < 8.0 and random.random() < 0.08:
+        _spawn_fuego(col_g)
+
+    # lluvia de chispas desde arriba
+    if t_total < 6.0 and random.random() < 0.3:
+        run_completado_particulas.append({
+            "x": random.randint(0, ANCHO), "y": -5,
+            "vx": random.uniform(-0.5, 0.5), "vy": random.uniform(1, 3),
+            "vida": random.uniform(3.0, 6.0), "t": 0,
+            "color": col_g if random.random() > 0.5 else BLANCO,
+            "tam": random.randint(1, 4),
+        })
+
+    # barras de fondo pulsantes
+    pulso = math.sin(t_total * 4) * 0.5 + 0.5
+    for i in range(0, ANCHO, 60):
+        alpha = int(12 * pulso)
+        bar = pygame.Surface((30, ALTO))
+        bar.fill(col_g)
+        bar.set_alpha(alpha)
+        pantalla.blit(bar, (i, 0))
 
     # actualizar y dibujar particulas
     vivas = []
@@ -3409,27 +3451,50 @@ def dibujar_run_completado():
         if p["t"] < p["vida"]:
             p["x"] += p["vx"]
             p["y"] += p["vy"]
-            p["vy"] += 0.1  # gravedad suave
+            p["vy"] += 0.08
+            p["vx"] *= 0.995
             alpha = max(0, 1.0 - p["t"] / p["vida"])
-            c = tuple(int(v * alpha) for v in p["color"])
-            pygame.draw.rect(pantalla, c,
-                (int(p["x"]) - p["tam"]//2, int(p["y"]) - p["tam"]//2,
-                 p["tam"], p["tam"]))
-            # cola de la nota musical
-            if p["tam"] > 4:
+            c = tuple(min(255, int(v * alpha)) for v in p["color"])
+            tam = max(1, int(p["tam"] * (0.5 + alpha * 0.5)))
+            px, py = int(p["x"]), int(p["y"])
+            pygame.draw.rect(pantalla, c, (px - tam//2, py - tam//2, tam, tam))
+            # cola (estela)
+            if tam > 2:
+                trail_c = tuple(min(255, int(v * alpha * 0.4)) for v in p["color"])
+                pygame.draw.line(pantalla, trail_c,
+                    (px, py), (px - int(p["vx"] * 3), py - int(p["vy"] * 3)), max(1, tam // 2))
+            # nota musical decorativa en particulas grandes
+            if p["tam"] >= 7 and alpha > 0.5:
                 pygame.draw.line(pantalla, c,
-                    (int(p["x"]) + p["tam"]//2, int(p["y"]) - p["tam"]//2),
-                    (int(p["x"]) + p["tam"]//2, int(p["y"]) - p["tam"] - 6), 1)
+                    (px + tam//2, py - tam//2), (px + tam//2, py - tam - 8), 1)
             vivas.append(p)
     run_completado_particulas[:] = vivas
 
-    titulo = fuente_grande.render("RUN COMPLETO!", True, col_g)
-    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
+    # titulo con efecto de escala pulsante
+    escala_t = 1.0 + math.sin(t_total * 3) * 0.05
+    titulo_txt = "RUN COMPLETO!"
+    titulo = fuente_grande.render(titulo_txt, True, col_g)
+    tw, th = titulo.get_size()
+    scaled = pygame.transform.scale(titulo, (int(tw * escala_t), int(th * escala_t)))
+    pantalla.blit(scaled, (ANCHO // 2 - scaled.get_width() // 2, 140 - (scaled.get_height() - th) // 2))
+
+    # lineas decorativas
+    line_w = int(200 + pulso * 80)
+    pygame.draw.line(pantalla, col_g, (ANCHO//2 - line_w, 200), (ANCHO//2 + line_w, 200), 2)
+
     dif_nom = DIFICULTADES[run_actual["nivel"]]["nombre"]
     sub = fuente.render(f"{run_actual['genero']}  {dif_nom}", True, BLANCO)
-    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 240))
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 230))
     pts = fuente.render(f"PUNTOS TOTALES: {run_actual['puntos_total']}", True, GRIS_MED)
-    pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 300))
+    pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 290))
+
+    # stages completados
+    y_st = 340
+    for i in range(NUM_STAGES):
+        st_col = col_g if t_total > 0.5 + i * 0.4 else GRIS
+        st = fuente_chica.render(f"STAGE {i+1}  [OK]", True, st_col)
+        pantalla.blit(st, (ANCHO // 2 - st.get_width() // 2, y_st + i * 22))
+
     cont = fuente_chica.render("ENTER = CONTINUAR", True, GRIS)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
