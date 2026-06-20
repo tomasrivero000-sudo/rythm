@@ -114,21 +114,21 @@ PROGRESIONES = [
 ]
 
 DIFICULTADES = {
-    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.70},
-    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.85},
-    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 1.00},
-    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.80},
-    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.95},
-    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 1.10},
-    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 1.25},
-    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 1.00},
-    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.20},
-    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.10},
-    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.30},
-    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.20},
-    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.40},
-    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.60},
-    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.70},
+    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.30, "bpm_mult": 0.75},
+    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.40, "bpm_mult": 0.80},
+    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.50, "bpm_mult": 0.85},
+    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.45, "bpm_mult": 0.85},
+    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.55, "bpm_mult": 0.90},
+    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.65, "bpm_mult": 0.90},
+    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.80, "bpm_mult": 0.95},
+    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 0.85, "bpm_mult": 1.0},
+    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0},
+    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0},
+    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.15, "bpm_mult": 1.0},
+    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.10, "bpm_mult": 1.0},
+    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.25, "bpm_mult": 1.0},
+    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.40, "bpm_mult": 1.0},
+    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.60, "bpm_mult": 1.0},
 }
 
 SEED_MAX       = 9999
@@ -2131,7 +2131,9 @@ def generar_cancion(seed, dif):
     gdef         = GENEROS[genero]
 
     bpm_min, bpm_max = gdef["bpm"]
-    BPM          = rng.randint(bpm_min, bpm_max)
+    bpm_mult = dif.get("bpm_mult", 1.0)
+    BPM          = int(rng.randint(bpm_min, bpm_max) * bpm_mult)
+    BPM          = max(50, BPM)   # piso minimo
     beat         = 60000 // BPM
     paso16       = beat // 4
     tonica       = rng.choice([36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55])
@@ -2858,6 +2860,7 @@ def dibujar_juego(partida, ahora):
     sx, sy    = shake_dx, shake_dy
     col_nota  = color_genero(partida)   # color de acento del genero
     zy        = partida.get("zona_y", ZONA_Y)  # zona de golpe (arriba si inverso)
+    es_inv    = partida.get("es_inverso", False)
 
     # fondo procedural (figura de lissajous tenue)
     if not partida.get("game_over"):
@@ -2876,8 +2879,13 @@ def dibujar_juego(partida, ahora):
         flash_surf.fill(col_nota)
         pantalla.blit(flash_surf, (col_x, 0))
 
+    # linea de hit (se mueve con inverso)
     pygame.draw.line(pantalla, col_nota, (sx, zy + sy), (ANCHO + sx, zy + sy), 2)
+    # borde inferior de las etiquetas del jugador (junto al hit)
     pygame.draw.line(pantalla, BLANCO, (sx, zy + 54 + sy), (ANCHO + sx, zy + 54 + sy), 1)
+    # borde del mini teclado (siempre abajo)
+    if es_inv:
+        pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + 54 + sy), (ANCHO + sx, ZONA_Y + 54 + sy), 1)
 
     # nota actual de cada columna (puede cambiar de octava en el desenlace)
     notas_label = list(partida["cancion"]["notas_columnas"])
@@ -2907,14 +2915,10 @@ def dibujar_juego(partida, ahora):
             nota_txt = fuente_chica.render(nota_name, True, col_activa)
             pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, zy + 28 + sy))
 
-    # limite donde se cortan las notas (no entran al area del teclado)
-    es_inv = partida.get("es_inverso", False)
-    limite_notas = zy + 54
+    # limite donde se cortan las notas (no entran al area del teclado de abajo)
+    limite_notas = ZONA_Y + 54
     clip_anterior = pantalla.get_clip()
-    if es_inv:
-        pantalla.set_clip(pygame.Rect(0, limite_notas + sy, ANCHO, ALTO - limite_notas))
-    else:
-        pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
+    pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
 
     es_invisible = "invisible" in partida.get("mods", set())
     for grupo in partida["notas_cayendo"]:
@@ -3028,7 +3032,7 @@ def dibujar_juego(partida, ahora):
                 if idx_c < len(grupo.get("midis", [])) and c < len(notas_actuales):
                     notas_actuales[c] = grupo["midis"][idx_c]
     notas_cols = notas_actuales
-    tecl_y = zy + 56 + sy
+    tecl_y = ZONA_Y + 56 + sy
     tecl_h = ALTO - tecl_y - 4
     if tecl_h > 8:
         tecl_h = min(tecl_h, 28)
@@ -3077,7 +3081,8 @@ def dibujar_juego(partida, ahora):
     if hit and pygame.time.get_ticks() - hit["tiempo"] < 500:
         color = BLANCO if hit["texto"] in ["PERFECTO", "BIEN"] else GRIS_MED
         hit_txt = fuente.render(hit["texto"], True, color)
-        pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, zy - 60))
+        hit_y = zy + 10 if es_inv else zy - 60
+        pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, hit_y))
 
     if partida.get("game_over"):
         go_txt = fuente_grande.render("GAME OVER", True, BLANCO)
