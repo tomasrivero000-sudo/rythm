@@ -141,13 +141,13 @@ MODIFICADORES = [
     {"id": "espejo",     "nombre": "ESPEJO",      "desc": "columnas invertidas",    "mult": 1.2},
     {"id": "veloz",      "nombre": "VELOCIDAD x2", "desc": "notas el doble de rapido", "mult": 1.5},
     {"id": "invisible",  "nombre": "INVISIBLES",  "desc": "notas desaparecen al caer", "mult": 1.8},
-    {"id": "aleatorio",  "nombre": "ALEATORIO",   "desc": "columnas mezcladas",      "mult": 1.3},
+    {"id": "inverso",    "nombre": "INVERSO",     "desc": "notas suben en vez de caer", "mult": 1.4},
     {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
 ]
 mods_activos = set()   # ids de modificadores seleccionados (modo libre)
 
 # mods "faciles" que pueden salir en el dado de los stages 2 y 3
-MODS_FACILES = ["espejo", "aleatorio", "veloz"]
+MODS_FACILES = ["espejo", "inverso", "veloz"]
 
 # --- modo STAGES (tipo roguelike): completar generos en cada dificultad ---
 # cada run son 4 stages del mismo genero+dificultad:
@@ -2562,18 +2562,10 @@ def iniciar_partida(seed, mods=None, stage_info=None):
 
     # --- aplicar modificadores de columnas ---
     num_cols_p = dif["columnas"]
-    # ALEATORIO: remapea las notas a columnas mezcladas
-    if "aleatorio" in mods_partida:
-        mapa_cols = list(range(num_cols_p))
-        random.Random(int(seed) + 777).shuffle(mapa_cols)
-        for n in cancion["notas_jugador"]:
-            n["cols"] = [mapa_cols[c] for c in n["cols"]]
-    # ESPEJO: invierte el mapeo de teclas (tecla izquierda -> columna derecha)
-    # se guarda mapa_teclas y se aplica al leer input; asi el reto es real
+    # ESPEJO: invierte el mapeo de teclas
+    mapa_teclas = {c: c for c in range(num_cols_p)}
     if "espejo" in mods_partida:
         mapa_teclas = {c: (num_cols_p - 1 - c) for c in range(num_cols_p)}
-    else:
-        mapa_teclas = {c: c for c in range(num_cols_p)}
 
     mult_mods = 1.0
     for m in MODIFICADORES:
@@ -2604,6 +2596,7 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         "velocidad":      VELOCIDAD * (2.0 if "veloz" in mods_partida else 1.0),
         "stage_info":     stage_info,
         "mapa_teclas":    mapa_teclas,
+        "es_inverso":     "inverso" in mods_partida,
     }
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
@@ -2918,10 +2911,14 @@ def dibujar_juego(partida, ahora):
     pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
 
     es_invisible = "invisible" in partida.get("mods", set())
+    es_inv = partida.get("es_inverso", False)
     for grupo in partida["notas_cayendo"]:
-        # modificador INVISIBLE: las notas desaparecen en la mitad inferior
-        if es_invisible and grupo["y"] > ZONA_Y * 0.45:
-            continue
+        # modificador INVISIBLE: las notas desaparecen cerca de la zona
+        if es_invisible:
+            if es_inv and grupo["y"] < ZONA_Y * 0.55:
+                continue
+            elif not es_inv and grupo["y"] > ZONA_Y * 0.45:
+                continue
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
         cols_hold_activo = [c for c in grupo["cols"] if c in partida["holds_activos"]]
         cols_a_dibujar = list(set(pendientes + cols_hold_activo))
@@ -2932,7 +2929,10 @@ def dibujar_juego(partida, ahora):
             x = col * ancho_col + sx
             if hold_h > 0:
                 bar_x = x + ancho_col // 2 - 6
-                bar_y = gy - hold_h
+                if es_inv:
+                    bar_y = gy + 28   # barra se extiende hacia abajo
+                else:
+                    bar_y = gy - hold_h  # barra se extiende hacia arriba
                 bar_h = hold_h
                 if col in partida["holds_activos"]:
                     # barra que oscila: dibujada por segmentos con desplazamiento senoidal
@@ -2943,7 +2943,6 @@ def dibujar_juego(partida, ahora):
                     for k in range(pasos):
                         yy = bar_y + k * seg
                         prog = k / pasos
-                        # mas amplitud arriba (lejos de la zona), se calma al llegar
                         amp = 7 * prog
                         ox = math.sin(fase + k * 0.5) * amp
                         pygame.draw.rect(pantalla, GRIS_MED, (int(cx_bar + ox - 8), yy, 16, seg + 1))
@@ -2989,7 +2988,7 @@ def dibujar_juego(partida, ahora):
     si = partida.get("stage_info")
     if si:
         st_txt = fuente_chica.render(f"STAGE {si['n']}/{NUM_STAGES}", True, col_nota)
-        pantalla.blit(st_txt, (10, ALTO - 38))
+        pantalla.blit(st_txt, (10, 46))
     parte_txt = fuente_chica.render(parte, True, GRIS)
     pantalla.blit(parte_txt, (10, 28))
     # CAPA 3: mostrar evento activo
@@ -3996,7 +3995,11 @@ while corriendo:
 
             vel_p = partida.get("velocidad", VELOCIDAD)
             PIXELES_POR_MS = vel_p / (1000 / 60)
-            ANTICIPACION   = (ZONA_Y + 40) / PIXELES_POR_MS
+            es_inv = partida.get("es_inverso", False)
+            if es_inv:
+                ANTICIPACION = (ALTO - ZONA_Y + 40) / PIXELES_POR_MS
+            else:
+                ANTICIPACION = (ZONA_Y + 40) / PIXELES_POR_MS
 
             if not partida["terminada"]:
                 while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
@@ -4015,11 +4018,16 @@ while corriendo:
 
             for grupo in partida["notas_cayendo"]:
                 ms_hasta = grupo["tiempo_ms"] - ahora
-                grupo["y"] = ZONA_Y - (ms_hasta * PIXELES_POR_MS)
+                if es_inv:
+                    grupo["y"] = ZONA_Y + (ms_hasta * PIXELES_POR_MS)
+                else:
+                    grupo["y"] = ZONA_Y - (ms_hasta * PIXELES_POR_MS)
 
             notas_vivas = []
             for n in partida["notas_cayendo"]:
-                if n["y"] >= ALTO + 50:
+                # MISS: la nota se fue de la pantalla
+                nota_perdida = n["y"] <= -50 if es_inv else n["y"] >= ALTO + 50
+                if nota_perdida:
                     es_hold_activo = any(c in partida["holds_activos"] for c in n["cols"])
                     if not es_hold_activo:
                         partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
