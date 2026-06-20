@@ -2945,7 +2945,7 @@ def dibujar_juego(partida, ahora):
                     fase = pygame.time.get_ticks() * 0.012
                     seg = 6
                     cx_bar = x + ancho_col // 2
-                    pasos = max(2, bar_h // seg)
+                    pasos = max(2, int(bar_h) // seg)
                     for k in range(pasos):
                         yy = bar_y + k * seg
                         prog = k / pasos
