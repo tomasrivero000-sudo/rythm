@@ -3265,15 +3265,89 @@ def dibujar_run_overview():
             color = GRIS
         linea = fuente.render(f"{estado}  STAGE {st}: {nombres_stage[i]}", True, color)
         pantalla.blit(linea, (120, y))
-        # mostrar mods del stage
+        # mostrar mods solo de stages completados o el actual (ocultar futuros)
         mods_st = run_actual["mods"][i]
-        if mods_st:
+        if mods_st and (completado or actual):
             nombres = [m["nombre"] for m in MODIFICADORES if m["id"] in mods_st]
             mod_txt = fuente_chica.render("+ " + ", ".join(nombres), True, color)
+            pantalla.blit(mod_txt, (160, y + 28))
+        elif mods_st and not completado and not actual:
+            mod_txt = fuente_chica.render("+ ???", True, GRIS)
             pantalla.blit(mod_txt, (160, y + 28))
 
     cont = fuente_chica.render("ENTER = JUGAR STAGE     ESC = ABANDONAR RUN", True, GRIS_MED)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
+
+# --- animacion de dado para revelar el mod del siguiente stage ---
+dado_inicio = 0
+DADO_DURACION = 2500  # ms que dura la animacion del dado
+
+def dibujar_dado():
+    """Animacion de dado que revela el mod del siguiente stage."""
+    pantalla.fill(NEGRO)
+    col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+    ahora = pygame.time.get_ticks() - dado_inicio
+    progreso = min(ahora / DADO_DURACION, 1.0)
+    idx_stage = run_actual["stage"] - 1   # stage actual (el que se va a jugar)
+    mod_real = run_actual["mods"][idx_stage]
+
+    titulo = fuente_grande.render(f"STAGE {run_actual['stage']}", True, col_g)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 100))
+
+    # subtitulo
+    sub = fuente.render("TIRANDO DADO...", True, GRIS_MED)
+    if progreso >= 1.0:
+        sub = fuente.render("MOD REVELADO!", True, BLANCO)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 180))
+
+    # dado girando: cicla entre mods cada vez mas lento
+    if progreso < 1.0:
+        # velocidad decrece exponencialmente: rapido al inicio, lento al final
+        freq = 20.0 * (1.0 - progreso * 0.9)  # ciclos por segundo
+        fase = int(ahora * freq / 1000)
+        # elegir un mod del pool para mostrar (cycling)
+        todos_mods = MODS_FACILES + ["sudden"]
+        mod_mostrar = todos_mods[fase % len(todos_mods)]
+    else:
+        # parado en el mod real
+        mod_mostrar = list(mod_real)[0] if mod_real else ""
+
+    # dibujar el "dado" (cuadro grande con el nombre del mod)
+    dado_w, dado_h = 400, 120
+    dado_x = ANCHO // 2 - dado_w // 2
+    dado_y = 240
+    # temblor mientras gira
+    if progreso < 1.0:
+        shake = int((1.0 - progreso) * 6)
+        dado_x += random.randint(-shake, shake)
+        dado_y += random.randint(-shake, shake)
+    # borde
+    borde_color = col_g if progreso >= 1.0 else BLANCO
+    pygame.draw.rect(pantalla, borde_color, (dado_x, dado_y, dado_w, dado_h), 3)
+    # puntos decorativos en las esquinas (como un dado)
+    for dx, dy in [(20, 20), (dado_w - 20, 20), (20, dado_h - 20), (dado_w - 20, dado_h - 20)]:
+        pygame.draw.circle(pantalla, GRIS, (dado_x + dx, dado_y + dy), 5)
+    # nombre del mod
+    nombre_mod = ""
+    for m in MODIFICADORES:
+        if m["id"] == mod_mostrar:
+            nombre_mod = m["nombre"]
+            break
+    color_mod = col_g if progreso >= 1.0 else BLANCO
+    mod_txt = fuente_grande.render(nombre_mod, True, color_mod)
+    pantalla.blit(mod_txt, (ANCHO // 2 - mod_txt.get_width() // 2, dado_y + dado_h // 2 - mod_txt.get_height() // 2))
+
+    # descripcion del mod (solo cuando se revelo)
+    if progreso >= 1.0:
+        for m in MODIFICADORES:
+            if m["id"] == mod_mostrar:
+                desc = fuente_chica.render(m["desc"], True, GRIS_MED)
+                pantalla.blit(desc, (ANCHO // 2 - desc.get_width() // 2, dado_y + dado_h + 20))
+                mult = fuente_chica.render(f"MULTIPLICADOR: x{m['mult']}", True, GRIS_MED)
+                pantalla.blit(mult, (ANCHO // 2 - mult.get_width() // 2, dado_y + dado_h + 45))
+                break
+        cont = fuente_chica.render("ENTER = CONTINUAR", True, GRIS)
+        pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
 def dibujar_run_completado():
     """Pantalla de run completado."""
@@ -3482,6 +3556,18 @@ while corriendo:
                     score_guardado = False
                     ESTADO = "jugando"
 
+        elif ESTADO == "run_dado":
+            if evento.type == pygame.KEYDOWN:
+                # solo avanzar cuando la animacion termino
+                dado_elapsed = pygame.time.get_ticks() - dado_inicio
+                if dado_elapsed >= DADO_DURACION:
+                    if evento.key == pygame.K_RETURN:
+                        ESTADO = "run_overview"
+                    elif evento.key == pygame.K_ESCAPE:
+                        run_actual = None
+                        ESTADO = "menu"
+                        nueva_musica_menu_aleatoria()
+
         elif ESTADO == "run_completado":
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
@@ -3643,7 +3729,13 @@ while corriendo:
                                     nueva_musica_menu_aleatoria()
                                 else:
                                     run_actual["stage"] += 1
-                                    ESTADO = "run_overview"
+                                    idx_next = run_actual["stage"] - 1
+                                    if run_actual["mods"][idx_next]:
+                                        # tiene mods -> animacion de dado
+                                        dado_inicio = pygame.time.get_ticks()
+                                        ESTADO = "run_dado"
+                                    else:
+                                        ESTADO = "run_overview"
                                     nueva_musica_menu_aleatoria()
                         else:
                             # modo libre normal
@@ -3863,6 +3955,10 @@ while corriendo:
     elif ESTADO == "run_overview":
         tick_musica_menu()
         dibujar_run_overview()
+
+    elif ESTADO == "run_dado":
+        tick_musica_menu()
+        dibujar_dado()
 
     elif ESTADO == "run_completado":
         tick_musica_menu()
