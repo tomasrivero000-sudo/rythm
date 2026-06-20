@@ -803,25 +803,29 @@ def synth_nota(tipo, freq, duracion, rng_params):
         wave = np.sin(phase)
 
     wave = wave * env * 0.7
+    # normalizar al pico para que todos los instrumentos arranquen igual
+    peak = np.max(np.abs(wave))
+    if peak > 0:
+        wave = wave / peak
     vol_tipo = {
-        "square": 0.5, "saw": 0.5, "chiptune": 0.45,
-        "organ": 0.6, "fm_bell": 0.65,
-        "sine": 0.75, "triangle": 0.7, "pluck": 0.7,
-        "supersaw": 0.45, "acid": 0.55, "bitcrush": 0.5, "lead": 0.5,
-        "wobble": 0.55, "glass": 0.65, "pad": 0.6,
-        "metallic": 0.55, "bass": 0.55, "flute": 0.65,
-        "reso": 0.5, "choir": 0.6,
-        "vibraphone": 0.6, "sitar": 0.5, "kalimba": 0.65,
-        "trumpet": 0.55, "harp": 0.65, "synthbass": 0.5,
-        "bellpad": 0.55, "detune": 0.5,
-        "pwm_lead": 0.5, "fm_ep": 0.7, "formant": 0.55,
-        "hoover": 0.4, "bell_fm": 0.6, "growl": 0.5,
-        "saw_stack": 0.4, "fm_3op": 0.6, "ring_mod": 0.55,
-        "sync_lead": 0.5, "pluck_soft": 0.7, "vox_pad": 0.55,
-        "dist_gtr": 0.45, "wavefold": 0.55, "phase_pad": 0.6,
-        "fm_brass": 0.6, "glass_harm": 0.6, "sub_pluck": 0.6,
-        "noise_pitch": 0.5, "organ_full": 0.55,
-        "alien": 0.5, "broken": 0.45,
+        "square": 0.65, "saw": 0.65, "chiptune": 0.6,
+        "organ": 0.7, "fm_bell": 0.75,
+        "sine": 0.8, "triangle": 0.75, "pluck": 0.75,
+        "supersaw": 0.6, "acid": 0.65, "bitcrush": 0.65, "lead": 0.65,
+        "wobble": 0.65, "glass": 0.75, "pad": 0.7,
+        "metallic": 0.65, "bass": 0.65, "flute": 0.7,
+        "reso": 0.65, "choir": 0.7,
+        "vibraphone": 0.7, "sitar": 0.65, "kalimba": 0.7,
+        "trumpet": 0.65, "harp": 0.7, "synthbass": 0.65,
+        "bellpad": 0.65, "detune": 0.65,
+        "pwm_lead": 0.65, "fm_ep": 0.75, "formant": 0.65,
+        "hoover": 0.6, "bell_fm": 0.7, "growl": 0.65,
+        "saw_stack": 0.6, "fm_3op": 0.7, "ring_mod": 0.65,
+        "sync_lead": 0.65, "pluck_soft": 0.75, "vox_pad": 0.65,
+        "dist_gtr": 0.6, "wavefold": 0.65, "phase_pad": 0.7,
+        "fm_brass": 0.7, "glass_harm": 0.7, "sub_pluck": 0.7,
+        "noise_pitch": 0.65, "organ_full": 0.65,
+        "alien": 0.6, "broken": 0.6,
     }
     
     return np_to_sound(wave, vol=vol_tipo.get(tipo, 0.5))
