@@ -3751,10 +3751,18 @@ def mods_de_stage(n, rng):
     """Devuelve el set de mods para el stage n (1..4)."""
     if n == 1:
         return set()
-    elif n in (2, 3):
+    elif n == 2:
+        # stage 2: mod facil suave (sin velocidad x2 ni espejo; inverso si)
+        opciones = [m for m in MODS_FACILES if m not in ("veloz", "espejo")]
+        return {rng.choice(opciones)}
+    elif n == 3:
+        # stage 3: cualquier mod facil (ya puede salir inverso)
         return {rng.choice(MODS_FACILES)}
-    else:  # stage 4
-        return {"sudden"}
+    else:  # stage 4: todos los mods de movimiento + sudden death con 10%
+        mods = {"espejo", "inverso", "veloz", "acelerando"}
+        if rng.random() < 0.10:
+            mods.add("sudden")
+        return mods
 
 def crear_run(seed_inicial):
     """Crea un run de stages a partir de la seed cargada."""
@@ -3839,57 +3847,70 @@ def dibujar_dado():
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 100))
 
     # subtitulo
-    sub = fuente.render("TIRANDO DADO...", True, GRIS_MED)
-    if progreso >= 1.0:
-        sub = fuente.render("MOD REVELADO!", True, BLANCO)
+    es_multi = len(mod_real) > 1
+    sub = fuente.render("TIRANDO DADO..." if progreso < 1.0 else
+                        ("MODS REVELADOS!" if es_multi else "MOD REVELADO!"),
+                        True, GRIS_MED if progreso < 1.0 else BLANCO)
     pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 180))
 
     # dado girando: cicla entre mods cada vez mas lento
     if progreso < 1.0:
-        # velocidad decrece exponencialmente: rapido al inicio, lento al final
-        freq = 20.0 * (1.0 - progreso * 0.9)  # ciclos por segundo
+        freq = 20.0 * (1.0 - progreso * 0.9)
         fase = int(ahora * freq / 1000)
-        # elegir un mod del pool para mostrar (cycling)
         todos_mods = MODS_FACILES + ["sudden"]
         mod_mostrar = todos_mods[fase % len(todos_mods)]
     else:
-        # parado en el mod real
         mod_mostrar = list(mod_real)[0] if mod_real else ""
 
-    # dibujar el "dado" (cuadro grande con el nombre del mod)
-    dado_w, dado_h = 400, 120
+    # dibujar el "dado"
+    dado_w = 400
+    dado_h = 160 if es_multi else 120
     dado_x = ANCHO // 2 - dado_w // 2
     dado_y = 240
-    # temblor mientras gira
     if progreso < 1.0:
         shake = int((1.0 - progreso) * 6)
         dado_x += random.randint(-shake, shake)
         dado_y += random.randint(-shake, shake)
-    # borde
     borde_color = col_g if progreso >= 1.0 else BLANCO
     pygame.draw.rect(pantalla, borde_color, (dado_x, dado_y, dado_w, dado_h), 3)
-    # puntos decorativos en las esquinas (como un dado)
     for dx, dy in [(20, 20), (dado_w - 20, 20), (20, dado_h - 20), (dado_w - 20, dado_h - 20)]:
         pygame.draw.circle(pantalla, GRIS, (dado_x + dx, dado_y + dy), 5)
-    # nombre del mod
-    nombre_mod = ""
-    for m in MODIFICADORES:
-        if m["id"] == mod_mostrar:
-            nombre_mod = m["nombre"]
-            break
-    color_mod = col_g if progreso >= 1.0 else BLANCO
-    mod_txt = fuente_grande.render(nombre_mod, True, color_mod)
-    pantalla.blit(mod_txt, (ANCHO // 2 - mod_txt.get_width() // 2, dado_y + dado_h // 2 - mod_txt.get_height() // 2))
 
-    # descripcion del mod (solo cuando se revelo)
-    if progreso >= 1.0:
+    if progreso < 1.0 or not es_multi:
+        # un solo mod: nombre grande centrado
+        nombre_mod = ""
         for m in MODIFICADORES:
             if m["id"] == mod_mostrar:
-                desc = fuente_chica.render(m["desc"], True, GRIS_MED)
-                pantalla.blit(desc, (ANCHO // 2 - desc.get_width() // 2, dado_y + dado_h + 20))
-                mult = fuente_chica.render(f"MULTIPLICADOR: x{m['mult']}", True, GRIS_MED)
-                pantalla.blit(mult, (ANCHO // 2 - mult.get_width() // 2, dado_y + dado_h + 45))
+                nombre_mod = m["nombre"]
                 break
+        color_mod = col_g if progreso >= 1.0 else BLANCO
+        mod_txt = fuente_grande.render(nombre_mod, True, color_mod)
+        pantalla.blit(mod_txt, (ANCHO // 2 - mod_txt.get_width() // 2, dado_y + dado_h // 2 - mod_txt.get_height() // 2))
+        if progreso >= 1.0 and not es_multi:
+            for m in MODIFICADORES:
+                if m["id"] == mod_mostrar:
+                    desc = fuente_chica.render(m["desc"], True, GRIS_MED)
+                    pantalla.blit(desc, (ANCHO // 2 - desc.get_width() // 2, dado_y + dado_h + 20))
+                    mult = fuente_chica.render(f"MULTIPLICADOR: x{m['mult']}", True, GRIS_MED)
+                    pantalla.blit(mult, (ANCHO // 2 - mult.get_width() // 2, dado_y + dado_h + 45))
+                    break
+    else:
+        # multiples mods: listarlos dentro del dado
+        nombres = [m["nombre"] for m in MODIFICADORES if m["id"] in mod_real]
+        mult_total = 1.0
+        for m in MODIFICADORES:
+            if m["id"] in mod_real:
+                mult_total *= m["mult"]
+        n_mods = len(nombres)
+        y_start = dado_y + dado_h // 2 - (n_mods * 14)
+        for i, nom in enumerate(nombres):
+            color_m = col_g if "SUDDEN" not in nom else (255, 80, 80)
+            mt = fuente.render(nom, True, color_m)
+            pantalla.blit(mt, (ANCHO // 2 - mt.get_width() // 2, y_start + i * 28))
+        mult = fuente_chica.render(f"MULTIPLICADOR TOTAL: x{mult_total:.2f}", True, GRIS_MED)
+        pantalla.blit(mult, (ANCHO // 2 - mult.get_width() // 2, dado_y + dado_h + 25))
+
+    if progreso >= 1.0:
         cont = fuente_chica.render("ESPACIO = CONTINUAR", True, GRIS)
         pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
