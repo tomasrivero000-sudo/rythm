@@ -1595,7 +1595,8 @@ def dibujar_particulas():
         txt = f.render(t["texto"], True, color)
         pantalla.blit(txt, (int(t["x"]) - txt.get_width() // 2 + shake_dx, int(t["y"]) + shake_dy))
 def nota_midi(tonica, escala, grado):
-    return tonica + escala[grado % len(escala)]
+    octava = grado // len(escala)
+    return tonica + escala[grado % len(escala)] + octava * 12
 
 NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 def midi_a_nombre(midi):
@@ -2149,7 +2150,9 @@ def generar_cancion(seed, dif):
     densidad = gdef.get("densidad", 1.0) * dif.get("dens", 1.0)
     swing    = gdef.get("swing", 0.0)
 
-    notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
+    # notas por columna: saltar de a 2 grados para cubrir acordes y rango amplio
+    # 3 cols → root, 3ra, 5ta (triada) | 4 cols → +7ma | 5+ cols → octava+
+    notas_columnas = [nota_midi(tonica + 12, escala, i * 2) for i in range(num_columnas)]
     kit = elegir_kit(rng)
     # instrumento: 6% raro, si no del pool del genero (con fallback a la lista global)
     if rng.random() < 0.06:
@@ -2884,14 +2887,6 @@ def dibujar_juego(partida, ahora):
     # borde inferior de las etiquetas del jugador
     pygame.draw.line(pantalla, BLANCO, (sx, zy + 54 + sy), (ANCHO + sx, zy + 54 + sy), 1)
 
-    # nota actual de cada columna (puede cambiar de octava en el desenlace)
-    notas_label = list(partida["cancion"]["notas_columnas"])
-    for grupo in partida["notas_cayendo"]:
-        if abs(grupo["y"] - zy) < 200:
-            for idx_c, c in enumerate(grupo["cols"]):
-                if idx_c < len(grupo.get("midis", [])) and c < len(notas_label):
-                    notas_label[c] = grupo["midis"][idx_c]
-
     # con espejo, cada columna se activa con otra tecla: invertir el mapa
     mt = partida.get("mapa_teclas", {})
     inv_teclas = {}
@@ -2903,14 +2898,9 @@ def dibujar_juego(partida, ahora):
         if i in teclas_sostenidas:
             pygame.draw.rect(pantalla, GRIS, (x + 2, zy + 2 + sy, ancho_col - 4, 50))
         col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
-        # que tecla activa esta columna
         tecla_idx = inv_teclas.get(i, i)
         label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
         pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, zy + 10 + sy))
-        if i < len(notas_label):
-            nota_name = midi_a_nombre(notas_label[i])
-            nota_txt = fuente_chica.render(nota_name, True, col_activa)
-            pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, zy + 28 + sy))
 
     # limite donde se cortan las notas (no entran al area de labels)
     clip_anterior = pantalla.get_clip()
