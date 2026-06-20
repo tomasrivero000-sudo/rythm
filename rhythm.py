@@ -3222,7 +3222,6 @@ def dibujar_juego(partida, ahora):
     col_nota  = color_genero(partida)   # color de acento del genero
     zy        = partida.get("zona_y", ZONA_Y)  # zona de golpe (arriba si inverso)
     es_inv    = partida.get("es_inverso", False)
-    forma_nota = forma_de_instrumento(partida["cancion"].get("instrumento", ""))
 
     # fondo procedural (figura de lissajous tenue)
     if not partida.get("game_over"):
@@ -3299,17 +3298,12 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
             if col in pendientes:
-                nota_cx = x + ancho_col // 2
-                nota_cy = gy + 14
                 if grupo.get("es_acorde"):
                     pygame.draw.rect(pantalla, col_nota, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
                     pygame.draw.rect(pantalla, col_nota, (x + 11, gy + 5, ancho_col - 22, 18))
                 else:
                     pygame.draw.rect(pantalla, col_nota, (x + 6, gy, ancho_col - 12, 28))
-                    # icono del instrumento dibujado en negro sobre la nota
-                    if ancho_col >= 60:
-                        dibujar_icono_inst(pantalla, forma_nota, nota_cx, nota_cy, 9, NEGRO)
             xs.append(x + ancho_col // 2)
         if len(xs) > 1:
             pygame.draw.line(pantalla, col_nota, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
@@ -3369,12 +3363,13 @@ def dibujar_juego(partida, ahora):
         }
         ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
         pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
-    info = fuente_chica.render(f"{partida['cancion'].get('genero','')}  {partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
-    pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
-    # icono del instrumento a la izquierda del texto
+    # info del instrumento (mas grande, sin escala)
+    info = fuente.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['bpm']}BPM", True, GRIS_MED)
+    pantalla.blit(info, (ANCHO - info.get_width() - 10, 8))
+    # icono del instrumento a la izquierda del texto (mas grande)
     forma_inst = forma_de_instrumento(partida['cancion']['instrumento'])
-    icono_x = ANCHO - info.get_width() - 28
-    dibujar_icono_inst(pantalla, forma_inst, icono_x, 16, 7, col_nota)
+    icono_x = ANCHO - info.get_width() - 34
+    dibujar_icono_inst(pantalla, forma_inst, icono_x, 18, 12, col_nota)
     # multiplicador de mods activos
     if partida.get("mult_mods", 1.0) > 1.0:
         mult_txt = fuente_chica.render(f"MODS x{partida['mult_mods']:.2f}", True, col_nota)
