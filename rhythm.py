@@ -3080,6 +3080,9 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 50))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
+    if dev_mode:
+        dev_txt = fuente_chica.render("DEV x2  |  NO DMG", True, BLANCO)
+        pantalla.blit(dev_txt, (ANCHO // 2 - dev_txt.get_width() // 2, ALTO - 20))
 
     hit = partida.get("ultimo_hit")
     if hit and pygame.time.get_ticks() - hit["tiempo"] < 500:
@@ -3611,6 +3614,7 @@ teclas_sostenidas = set()
 nombre_input   = ""
 score_guardado = False
 run_actual     = None
+dev_mode       = False
 
 # arrancar la musica del menu con una seed aleatoria (DIFICIL+)
 dibujar_pantalla_carga(1.0, "MUSICA", 1, 1)
@@ -3624,6 +3628,11 @@ while corriendo:
     for evento in pygame.event.get():
         if evento.type == pygame.QUIT:
             corriendo = False
+
+        # F12: toggle modo desarrollador
+        if evento.type == pygame.KEYDOWN and evento.key == pygame.K_F12:
+            dev_mode = not dev_mode
+            print(f"[DEV MODE] {'ON' if dev_mode else 'OFF'}")
 
         if ESTADO == "menu":
             if evento.type == pygame.KEYDOWN:
@@ -4120,6 +4129,9 @@ while corriendo:
 
     elif ESTADO == "jugando":
         zy_p = partida.get("zona_y", ZONA_Y)
+        # dev mode: x2 speed (avanzar inicio hacia atras = tiempo pasa el doble)
+        if dev_mode:
+            partida["inicio"] -= 1000 // 60
         ahora = ahora_ms - partida["inicio"]
 
         if not partida.get("game_over"):
@@ -4176,9 +4188,10 @@ while corriendo:
                         partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
                         partida["combo"] = 0
                         partida["puntos"] = max(0, partida["puntos"] - 5)
-                        partida["vida"] = max(0, partida["vida"] - 2)
-                        if "sudden" in partida.get("mods", set()):
-                            partida["vida"] = 0
+                        if not dev_mode:
+                            partida["vida"] = max(0, partida["vida"] - 2)
+                            if "sudden" in partida.get("mods", set()):
+                                partida["vida"] = 0
                         num_cols = partida["dificultad"]["columnas"]
                         ancho_col = ANCHO // num_cols
                         miss_x = n["cols"][0] * ancho_col + ancho_col // 2
@@ -4187,7 +4200,7 @@ while corriendo:
                         crear_shake(4)
                         SND_ERROR.set_volume(0.3 * config["volumen"])
                         SND_ERROR.play()
-                        if partida["vida"] <= 0:
+                        if not dev_mode and partida["vida"] <= 0:
                             partida["game_over"] = True
                             pygame.mixer.stop()
                             crear_shake(15)
