@@ -2560,16 +2560,20 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         cache_bajo[mb] = np_to_sound(wave_b, vol=0.3, pan=0.0)
     cancion["cache_bajo"] = cache_bajo
 
-    # --- aplicar modificadores de columnas (espejo / aleatorio) ---
+    # --- aplicar modificadores de columnas ---
     num_cols_p = dif["columnas"]
-    mapa_cols = list(range(num_cols_p))
-    if "espejo" in mods_partida:
-        mapa_cols = mapa_cols[::-1]
+    # ALEATORIO: remapea las notas a columnas mezcladas
     if "aleatorio" in mods_partida:
+        mapa_cols = list(range(num_cols_p))
         random.Random(int(seed) + 777).shuffle(mapa_cols)
-    if "espejo" in mods_partida or "aleatorio" in mods_partida:
         for n in cancion["notas_jugador"]:
             n["cols"] = [mapa_cols[c] for c in n["cols"]]
+    # ESPEJO: invierte el mapeo de teclas (tecla izquierda -> columna derecha)
+    # se guarda mapa_teclas y se aplica al leer input; asi el reto es real
+    if "espejo" in mods_partida:
+        mapa_teclas = {c: (num_cols_p - 1 - c) for c in range(num_cols_p)}
+    else:
+        mapa_teclas = {c: c for c in range(num_cols_p)}
 
     mult_mods = 1.0
     for m in MODIFICADORES:
@@ -2599,6 +2603,7 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         "mult_mods":      mult_mods,
         "velocidad":      VELOCIDAD * (2.0 if "veloz" in mods_partida else 1.0),
         "stage_info":     stage_info,
+        "mapa_teclas":    mapa_teclas,
     }
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
@@ -2887,12 +2892,20 @@ def dibujar_juego(partida, ahora):
                 if idx_c < len(grupo.get("midis", [])) and c < len(notas_label):
                     notas_label[c] = grupo["midis"][idx_c]
 
+    # con espejo, cada columna se activa con otra tecla: invertir el mapa
+    mt = partida.get("mapa_teclas", {})
+    inv_teclas = {}
+    for tecla_pos, col_dest in mt.items():
+        inv_teclas[col_dest] = tecla_pos
+
     for i in range(num_cols):
         x = i * ancho_col + sx
         if i in teclas_sostenidas:
             pygame.draw.rect(pantalla, GRIS, (x + 2, ZONA_Y + 2 + sy, ancho_col - 4, 50))
         col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
-        label = fuente_chica.render(LABELS[i], True, col_activa)
+        # que tecla activa esta columna
+        tecla_idx = inv_teclas.get(i, i)
+        label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
         pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 10 + sy))
         if i < len(notas_label):
             nota_name = midi_a_nombre(notas_label[i])
@@ -3661,6 +3674,8 @@ while corriendo:
                         partida["export_ruta"] = ruta
                 elif evento.key in COLUMNAS:
                     col = COLUMNAS[evento.key]
+                    # ESPEJO: la tecla fisica se mapea a otra columna
+                    col = partida.get("mapa_teclas", {}).get(col, col)
                     if col < partida["dificultad"]["columnas"]:
                         teclas_sostenidas.add(col)
                         midi_fijo = partida["cancion"]["notas_columnas"][col]
@@ -3809,6 +3824,7 @@ while corriendo:
             if evento.type == pygame.KEYUP:
                 if evento.key in COLUMNAS:
                     col = COLUMNAS[evento.key]
+                    col = partida.get("mapa_teclas", {}).get(col, col)
                     teclas_sostenidas.discard(col)
                     if col in partida.get("holds_activos", {}):
                         if col in canal_hold:
