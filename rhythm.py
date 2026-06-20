@@ -523,6 +523,12 @@ INSTRUMENTOS_JUGADOR = {
     "SUB PLUCK":  "sub_pluck",
     "NOISE PITCH":"noise_pitch",
     "ORGAN FULL": "organ_full",
+    "SHIMMER":    "shimmer",
+    "ATMOS NOISE":"atmos_noise",
+    "FROZEN STR": "frozen_strings",
+    "DREAM PAD":  "dream_pad",
+    "SPACE CHOIR":"space_choir",
+    "ANALOG STR": "analog_string",
 }
 
 # instrumentos raros: baja probabilidad de aparecer
@@ -538,6 +544,7 @@ INST_SUSTAIN = {
     "VOX PAD", "PHASE PAD", "BELLPAD", "PWM LEAD", "LEAD", "WOBBLE",
     "ORGAN FULL", "FM BRASS", "DETUNE", "SINE", "TRIANGLE", "GROWL",
     "SYNTHBASS", "DIST GTR",
+    "SHIMMER", "ATMOS NOISE", "FROZEN STR", "DREAM PAD", "SPACE CHOIR", "ANALOG STR",
 }
 # hold maximo para instrumentos percusivos (ms)
 HOLD_MAX_PERCUSIVO = 800
@@ -907,6 +914,112 @@ def synth_nota(tipo, freq, duracion, rng_params):
         wave /= 2.5
         click = np.exp(-t * 100) * 0.3
         wave += click
+    elif tipo == "shimmer":
+        # pad con chorus de altisimas voces que se mueven lentamente
+        num_v = rng_params.get("num_voices", 8)
+        wave = np.zeros(n)
+        for v in range(num_v):
+            d = (v - num_v / 2) * rng_params.get("detune_wide", 0.012)
+            spd = rng_params.get("lfo_spd", 0.4) + v * 0.17
+            ph_off = v * 0.73
+            p = 2 * np.pi * freq * (1 + d) * t + np.sin(2 * np.pi * spd * t + ph_off) * 0.08
+            # armonicos superiores suaves para el brillo
+            wave += np.sin(p) * 0.25 + np.sin(p * 2) * 0.08 + np.sin(p * 3) * 0.03
+        # filtro pasa-bajos en tiempo real (IIR simple)
+        cutoff = rng_params.get("cutoff_lp", 0.04)
+        filtered = np.zeros(n)
+        prev = 0.0
+        for i in range(n):
+            prev = prev + cutoff * (wave[i] - prev)
+            filtered[i] = prev
+        wave = filtered
+    elif tipo == "atmos_noise":
+        # ruido filtrado que evoluciona con un LFO lento (viento / espacio)
+        np_rng2 = np.random.RandomState(int(freq * 100) % 999999)
+        noise = np_rng2.uniform(-1, 1, n).astype(np.float64)
+        # filtro pasa-banda alrededor de la frecuencia
+        bw = rng_params.get("bandwidth", 0.008)
+        center = min(freq / SR, 0.49)
+        wave = np.zeros(n)
+        bp = 0.0; lp_n = 0.0
+        for i in range(n):
+            hp = noise[i] - lp_n - bp
+            bp += bw * hp * 6
+            lp_n += bw * bp * 6
+            wave[i] = bp
+        # trémolo con LFO lento y sinusoide tonal mezclada
+        lfo_mod = 0.6 + 0.4 * np.sin(2 * np.pi * rng_params.get("lfo_spd", 0.3) * t)
+        tonal = np.sin(phase) * 0.3
+        wave = wave * lfo_mod * 0.7 + tonal
+    elif tipo == "frozen_strings":
+        # cuerdas "congeladas": muchos armonicos con ataque lentísimo y movimiento leve
+        num_v = rng_params.get("num_voices", 6)
+        wave = np.zeros(n)
+        for v in range(num_v):
+            d = (v - num_v / 2) * rng_params.get("detune", 0.007)
+            # leve flutter por voz
+            flutter_spd = 3.0 + v * 0.9
+            flutter_d = 0.003 * np.sin(2 * np.pi * flutter_spd * t + v)
+            p = 2 * np.pi * freq * (1 + d + flutter_d) * t
+            h_wave = np.sin(p) * 0.6 + np.sin(p * 2) * 0.25 + np.sin(p * 3) * 0.1 + np.sin(p * 4) * 0.05
+            wave += h_wave
+        wave /= num_v
+        # filtro low-pass suave
+        co = rng_params.get("cutoff_lp", 0.06)
+        sm = np.zeros(n); s = 0.0
+        for i in range(n):
+            s += co * (wave[i] - s)
+            sm[i] = s
+        wave = sm
+    elif tipo == "dream_pad":
+        # pad onírico: sines con desfase que crean interferencias lentas
+        num_v = rng_params.get("num_voices", 6)
+        wave = np.zeros(n)
+        for v in range(num_v):
+            ratio = 1.0 + (v - num_v / 2) * rng_params.get("detune", 0.005)
+            slow_mod = np.sin(2 * np.pi * rng_params.get("lfo_spd", 0.15) * t + v * 1.1)
+            freq_mod = freq * ratio * (1 + 0.004 * slow_mod)
+            wave += np.sin(2 * np.pi * np.cumsum(freq_mod / SR) + v * 0.9)
+            # armonico superior tenue
+            wave += np.sin(4 * np.pi * np.cumsum(freq_mod / SR) + v) * 0.15
+        wave /= num_v
+    elif tipo == "space_choir":
+        # coro espacial: voces formánticas desafinadas con reverb sintética
+        num_v = rng_params.get("num_voices", 7)
+        wave = np.zeros(n)
+        for v in range(num_v):
+            d = (v - num_v / 2) * rng_params.get("detune", 0.006)
+            vib_spd = 2.5 + v * 0.4
+            vib_d = rng_params.get("vibrato", 0.25) * np.sin(2 * np.pi * vib_spd * t + v * 1.3)
+            p = 2 * np.pi * freq * (1 + d) * t + vib_d
+            # formantes simuladas con armonicos ponderados
+            fo = np.sin(p) * 0.6 + np.sin(p * 2) * 0.25 + np.sin(p * 3) * 0.1
+            wave += fo * (0.5 + 0.5 * np.sin(2 * np.pi * 0.1 * t + v))  # amplitude breathing
+        wave /= num_v
+        # "reverb" simulada: ecos ponderados
+        eco_ms = rng_params.get("eco_ms", 80)
+        eco_samples = int(SR * eco_ms / 1000)
+        if eco_samples < n:
+            wave[eco_samples:] += wave[:-eco_samples] * 0.35
+            wave[eco_samples*2:] += wave[:-eco_samples*2] * 0.15 if eco_samples*2 < n else 0
+    elif tipo == "analog_string":
+        # cuerdas analógicas estilo string machine vintage
+        wave = np.zeros(n)
+        saw1 = 2.0 * (t * freq % 1) - 1.0
+        saw2 = 2.0 * (t * freq * (1 + rng_params.get("detune", 0.012)) % 1) - 1.0
+        saw3 = 2.0 * (t * freq * (1 - rng_params.get("detune", 0.012) * 0.7) % 1) - 1.0
+        wave = saw1 * 0.5 + saw2 * 0.3 + saw3 * 0.2
+        # filtro pasa-bajos suave para el sonido vintage
+        co = rng_params.get("cutoff_lp", 0.05)
+        sm = np.zeros(n); s = 0.0
+        for i in range(n):
+            s += co * (wave[i] - s)
+            sm[i] = s
+        wave = sm
+        # chorus leve
+        chorus_d = int(SR * 0.015)
+        if chorus_d < n:
+            wave[chorus_d:] += wave[:-chorus_d] * 0.4
     # --- instrumentos raros (baja probabilidad) ---
     elif tipo == "alien":
         # barrido inarmonico con modulacion caotica
@@ -952,6 +1065,8 @@ def synth_nota(tipo, freq, duracion, rng_params):
         "dist_gtr": 0.55, "wavefold": 0.6, "phase_pad": 0.65,
         "fm_brass": 0.65, "glass_harm": 0.65, "sub_pluck": 0.65,
         "noise_pitch": 0.6, "organ_full": 0.6,
+        "shimmer": 0.65, "atmos_noise": 0.55, "frozen_strings": 0.65,
+        "dream_pad": 0.65, "space_choir": 0.60, "analog_string": 0.62,
         "alien": 0.55, "broken": 0.55,
     }
     
@@ -1200,6 +1315,36 @@ def generar_params_instrumento(rng, tipo):
     elif tipo == "alien":
         params["attack"] = rng.uniform(0.01, 0.05); params["decay"] = rng.uniform(2, 5)
         params["sustain"] = rng.uniform(0.3, 0.6)
+    elif tipo == "shimmer":
+        params["attack"] = rng.uniform(0.1, 0.4); params["decay"] = rng.uniform(0.8, 2)
+        params["sustain"] = rng.uniform(0.7, 0.95)
+        params["num_voices"] = rng.randint(6, 10); params["detune_wide"] = rng.uniform(0.008, 0.018)
+        params["lfo_spd"] = rng.uniform(0.2, 0.7); params["cutoff_lp"] = rng.uniform(0.03, 0.07)
+        params["vibrato"] = rng.uniform(0, 0.1)
+    elif tipo == "atmos_noise":
+        params["attack"] = rng.uniform(0.15, 0.5); params["decay"] = rng.uniform(0.5, 1.5)
+        params["sustain"] = rng.uniform(0.7, 0.95)
+        params["bandwidth"] = rng.uniform(0.004, 0.012); params["lfo_spd"] = rng.uniform(0.2, 0.6)
+    elif tipo == "frozen_strings":
+        params["attack"] = rng.uniform(0.15, 0.5); params["decay"] = rng.uniform(0.5, 1.5)
+        params["sustain"] = rng.uniform(0.75, 0.95)
+        params["num_voices"] = rng.randint(5, 8); params["detune"] = rng.uniform(0.004, 0.012)
+        params["cutoff_lp"] = rng.uniform(0.04, 0.09)
+    elif tipo == "dream_pad":
+        params["attack"] = rng.uniform(0.2, 0.6); params["decay"] = rng.uniform(0.5, 1.5)
+        params["sustain"] = rng.uniform(0.8, 0.98)
+        params["num_voices"] = rng.randint(5, 7); params["detune"] = rng.uniform(0.003, 0.009)
+        params["lfo_spd"] = rng.uniform(0.1, 0.3)
+    elif tipo == "space_choir":
+        params["attack"] = rng.uniform(0.1, 0.4); params["decay"] = rng.uniform(0.6, 1.5)
+        params["sustain"] = rng.uniform(0.75, 0.95)
+        params["num_voices"] = rng.randint(6, 9); params["detune"] = rng.uniform(0.004, 0.01)
+        params["vibrato"] = rng.uniform(0.15, 0.4); params["eco_ms"] = rng.randint(60, 120)
+    elif tipo == "analog_string":
+        params["attack"] = rng.uniform(0.05, 0.2); params["decay"] = rng.uniform(0.8, 2)
+        params["sustain"] = rng.uniform(0.7, 0.92)
+        params["detune"] = rng.uniform(0.007, 0.018); params["cutoff_lp"] = rng.uniform(0.04, 0.08)
+        params["vibrato"] = rng.uniform(0.1, 0.3); params["vib_speed"] = rng.uniform(3, 5)
     elif tipo == "broken":
         params["attack"] = rng.uniform(0.001, 0.01); params["decay"] = rng.uniform(3, 6)
         params["sustain"] = rng.uniform(0.3, 0.6); params["sh_freq"] = rng.uniform(400, 1500)
@@ -1877,7 +2022,8 @@ GENEROS = {
         "bajo_patrones": [[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
                           [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
         "instrumentos": ["FM EP", "BASS", "SYNTHBASS", "SUB PLUCK", "ORGAN",
-                         "VIBRAPHONE", "PLUCK SOFT", "RING MOD", "DIST GTR"],
+                         "VIBRAPHONE", "PLUCK SOFT", "RING MOD", "DIST GTR",
+                         "ANALOG STR", "DREAM PAD"],
         "tempo_mod": {"half": 0.20, "double": 0.05},
         "densidad": 0.75,
         "swing": 0.12,
@@ -1918,7 +2064,8 @@ GENEROS = {
         "bajo_patrones": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
                           [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0]],
         "instrumentos": ["SUPERSAW", "PAD", "PWM LEAD", "DETUNE", "FM BRASS",
-                         "PHASE PAD", "LEAD", "BELLPAD", "SAW", "VOX PAD"],
+                         "PHASE PAD", "LEAD", "BELLPAD", "SAW", "VOX PAD",
+                         "SHIMMER", "ANALOG STR", "DREAM PAD"],
         "tempo_mod": {"half": 0.10, "double": 0.10},
         "densidad": 0.95,
         "swing": 0.0,
@@ -1941,7 +2088,8 @@ GENEROS = {
         "bajo_patrones": [[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
                           [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
         "instrumentos": ["PAD", "PHASE PAD", "VOX PAD", "GLASS", "BELLPAD",
-                         "CHOIR", "GLASS HARM", "FLUTE", "HARP", "BELL FM"],
+                         "CHOIR", "GLASS HARM", "FLUTE", "HARP", "BELL FM",
+                         "SHIMMER", "ATMOS NOISE", "FROZEN STR", "DREAM PAD", "SPACE CHOIR"],
         "tempo_mod": {"half": 0.40, "double": 0.0},
         "densidad": 0.4,
         "swing": 0.0,
