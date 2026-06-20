@@ -541,6 +541,7 @@ INST_SUSTAIN = {
 }
 # hold maximo para instrumentos percusivos (ms)
 HOLD_MAX_PERCUSIVO = 800
+HOLD_MAX = 4000  # maximo absoluto (= duracion del sample largo)
 
 def midi_a_freq(midi):
     return 440.0 * (2.0 ** ((midi - 69) / 12.0))
@@ -1338,9 +1339,17 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
         params_hold = dict(params)
         params_hold["vibrato"] = params.get("vibrato", 0) + 0.4
         params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
-        snd_l = synth_nota(tipo, freq, 2.0, params_hold)
+        params_hold["sustain"] = max(params.get("sustain", 0.6), 0.5)
+        params_hold["decay"] = min(params.get("decay", 5.0), 1.5)
+        snd_l = synth_nota(tipo, freq, 4.0, params_hold)
         arr_l = pygame.sndarray.array(snd_l).astype(np.float64) / 32767
-        c_largas[midi] = np_to_sound(aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int), lpf=True)
+        mono_l = aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int)
+        # crossfade para loop suave: mezclar final con inicio
+        cf = min(4000, len(mono_l) // 4)
+        fade_out = np.linspace(1, 0, cf)
+        fade_in  = np.linspace(0, 1, cf)
+        mono_l[-cf:] = mono_l[-cf:] * fade_out + mono_l[:cf] * fade_in
+        c_largas[midi] = np_to_sound(mono_l, lpf=True)
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
     print(f"  {nombre} OK (EQ: {inst_eq} {inst_eq_int:.1f})")
@@ -2634,11 +2643,11 @@ def iniciar_partida(seed, mods=None, stage_info=None):
     dif     = get_dificultad(seed)
     cancion = generar_cancion(int(seed * 23819), dif)
     inst = cancion["instrumento"]
-    # instrumentos percusivos: acortar holds para evitar repeticion del loop
-    if inst not in INST_SUSTAIN:
-        for n in cancion["notas_jugador"]:
-            if n.get("hold", 0) > HOLD_MAX_PERCUSIVO:
-                n["hold"] = HOLD_MAX_PERCUSIVO
+    # limitar holds: percusivos max 800ms, todos max 4s (duracion del sample)
+    hold_max = HOLD_MAX_PERCUSIVO if inst not in INST_SUSTAIN else HOLD_MAX
+    for n in cancion["notas_jugador"]:
+        if n.get("hold", 0) > hold_max:
+            n["hold"] = hold_max
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
@@ -4145,9 +4154,7 @@ while corriendo:
                                         combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
-                                                inst_nombre = partida["cancion"].get("instrumento", "")
-                                                puede_loop = inst_nombre in INST_SUSTAIN
-                                                ch = cache_notas_largas[midi_fijo].play(loops=-1 if puede_loop else 0)
+                                                ch = cache_notas_largas[midi_fijo].play()
                                                 if ch:
                                                     ch.set_volume(config["volumen"])
                                                     canal_hold[col] = ch
