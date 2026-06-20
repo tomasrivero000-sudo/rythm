@@ -475,6 +475,60 @@ def synth_error():
 
 SND_ERROR = synth_error()
 
+def synth_explosion(potencia=1.0):
+    """Sonido de explosion: ruido filtrado con boom grave y cola."""
+    dur = 0.5 + potencia * 0.3
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    f_boom = (90 + potencia * 30) * np.exp(-t * 4)
+    ph = np.cumsum(f_boom / SR) * 2 * np.pi
+    boom = np.sin(ph) * np.exp(-t * 5)
+    np_rng = np.random.RandomState(int(potencia * 1000) % 99999)
+    noise = np_rng.uniform(-1, 1, n)
+    lp = np.zeros(n); s = 0.0
+    co = 0.08
+    for i in range(n):
+        s += co * (noise[i] - s)
+        lp[i] = s
+    noise_env = np.exp(-t * 7)
+    wave = boom * 0.7 + lp * noise_env * 0.5
+    fade = min(int(SR * 0.02), n)
+    wave[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave, vol=0.5)
+
+def synth_fanfarria_win():
+    """Fanfarria de victoria: arpegio ascendente mayor + acorde final brillante."""
+    notas_arp = [523, 659, 784, 1047]  # C5 E5 G5 C6
+    dur_nota = 0.12
+    dur_final = 0.9
+    partes = []
+    for f in notas_arp:
+        n = int(SR * dur_nota)
+        t = np.linspace(0, dur_nota, n)
+        ph = 2 * np.pi * f * t
+        w = np.sin(ph) * 0.5 + np.sin(ph * 2) * 0.25 + np.sin(ph * 3) * 0.12
+        env = np.minimum(1.0, np.exp(-t * 2) + 0.5)
+        partes.append(w * env)
+    n_f = int(SR * dur_final)
+    t_f = np.linspace(0, dur_final, n_f)
+    acorde = np.zeros(n_f)
+    for f in [523, 659, 784, 1047]:
+        ph = 2 * np.pi * f * t_f
+        acorde += np.sin(ph) * 0.4 + np.sin(ph * 2) * 0.15 + np.sin(ph * 3) * 0.06
+    acorde /= 4
+    vib = 1 + 0.01 * np.sin(2 * np.pi * 5 * t_f)
+    acorde *= vib
+    env_f = np.minimum(1.0, np.exp(-t_f * 1.2) + 0.4)
+    fade = min(int(SR * 0.05), n_f)
+    env_f[-fade:] *= np.linspace(1, 0, fade)
+    partes.append(acorde * env_f)
+    wave = np.concatenate(partes)
+    return np_to_sound(wave, vol=0.45)
+
+SND_EXPLOSION = synth_explosion(1.0)
+SND_EXPLOSION_BIG = synth_explosion(2.0)
+SND_WIN = synth_fanfarria_win()
+
 INSTRUMENTOS_JUGADOR = {
     "SQUARE":    "square",
     "SAW":       "saw",
@@ -3085,6 +3139,10 @@ def tick_background(partida, ahora):
 
     if ahora >= c["duracion_loop"] and not partida["terminada"]:
         partida["terminada"] = True
+        # si es el ultimo stage del run, el enemigo (figura) explota
+        si = partida.get("stage_info")
+        if si and si["n"] >= NUM_STAGES:
+            _explotar_figura(partida)
 
     # paneo por tipo de elemento de percusión
     pan_perc = {
@@ -3129,6 +3187,34 @@ def tick_background(partida, ahora):
                 ch_b.set_volume(min(1.0, config["volumen"] * vol_bajo))
         partida["indice_bajo"] += 1
 
+def _explotar_figura(partida):
+    """Genera una explosion de particulas a partir de la figura de fondo."""
+    liss = partida["cancion"].get("lissajous")
+    if not liss:
+        return
+    col = color_genero(partida)
+    cx_c = ANCHO / 2
+    cy_c = (ZONA_Y) / 2 + 20
+    rx = ANCHO * 0.42
+    ry = ZONA_Y * 0.40
+    tipo = liss.get("tipo", "lissajous")
+    puntos = _curva_fondo(tipo, liss, liss["puntos"], 0, cx_c, cy_c, rx, ry)
+    # emitir particulas desde puntos de la figura
+    for px, py in puntos[::2]:
+        ang = math.atan2(py - cy_c, px - cx_c)
+        vel = random.uniform(3, 9)
+        particulas.append({
+            "x": float(px), "y": float(py),
+            "dx": math.cos(ang) * vel + random.uniform(-2, 2),
+            "dy": math.sin(ang) * vel + random.uniform(-2, 2),
+            "vida": random.randint(40, 90), "vida_max": 90,
+            "tam": random.randint(2, 5), "color": col,
+            "forma": "rect", "spin": random.uniform(-0.3, 0.3),
+        })
+    crear_shake(20)
+    SND_EXPLOSION_BIG.set_volume(0.6 * config["volumen"])
+    SND_EXPLOSION_BIG.play()
+
 def get_parte(partida, ahora):
     e = partida["cancion"]["estructura"]
     if ahora < e["intro_fin"]:       return "INTRO"
@@ -3170,7 +3256,8 @@ def _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, fase_extra=0.0, j
     return pts
 
 def dibujar_fondo_lissajous(partida, ahora):
-    """Dibuja la figura procedural de fondo. Late con el kick y las notas, vibra en holds."""
+    """Dibuja la figura procedural de fondo (el 'enemigo').
+    Late con el kick y las notas, vibra en holds, y se desmorona por stage."""
     liss = partida["cancion"].get("lissajous")
     if not liss:
         return
@@ -3185,17 +3272,28 @@ def dibujar_fondo_lissajous(partida, ahora):
     pulso = max(pulso_beat * 0.7, pulso_jug)
     escala = 0.92 + pulso * 0.12
 
-    # vibracion extra mientras hay holds activos
+    # --- DAÑO DEL ENEMIGO segun el stage del run ---
+    # stage 1 = intacto, stage 4 = casi destruido
+    si = partida.get("stage_info")
+    stage_n = si["n"] if si else 1
+    dano = (stage_n - 1) / max(1, NUM_STAGES - 1)  # 0.0 a 1.0
+    # progreso dentro del stage actual: el daño aumenta a medida que se juega
+    dur_total = partida["cancion"].get("duracion_loop", 1)
+    prog_stage = min(ahora / max(1, dur_total), 1.0)
+    # daño efectivo: base del stage + algo de progreso del stage actual
+    dano_ef = min(1.0, dano + prog_stage * (1.0 / max(1, NUM_STAGES - 1)) * 0.8)
+
+    # vibracion extra mientras hay holds activos + temblor por daño
     hay_hold = len(partida.get("holds_activos", {})) > 0
     jitter = 0.0
     if hay_hold:
-        # mas holds = mas vibracion
         jitter = 2.0 + len(partida["holds_activos"]) * 1.5
+    # el enemigo dañado tiembla mas
+    jitter += dano_ef * 6.0
 
     # brillo extra segun el combo: la figura se ilumina con la racha
     combo = partida.get("combo", 0)
-    brillo_combo = min(combo / 30.0, 1.0)   # 0 a 1 entre combo 0 y 30
-    # un pulso de fondo constante crece con el combo
+    brillo_combo = min(combo / 30.0, 1.0)
     pulso = max(pulso, brillo_combo * 0.5)
 
     cx_c = ANCHO / 2
@@ -3203,13 +3301,13 @@ def dibujar_fondo_lissajous(partida, ahora):
     rx = (ANCHO * 0.42) * escala
     ry = (ZONA_Y * 0.40) * escala
 
-    # techo de brillo y boost suben con el combo
-    techo = int(140 + brillo_combo * 90)        # hasta 230 con combo alto
+    techo = int(140 + brillo_combo * 90)
     boost = 50 + (30 if hay_hold else 0) + int(brillo_combo * 80)
-    color = (min(techo, int(GRIS_FONDO[0] + pulso * boost)),
-             min(techo, int(GRIS_FONDO[1] + pulso * boost)),
-             min(techo, int(GRIS_FONDO[2] + pulso * boost)))
-    # color de la segunda figura tambien se aviva con el combo
+    # el enemigo dañado vira hacia el rojo
+    rojo_dano = int(dano_ef * 80)
+    color = (min(techo + rojo_dano, int(GRIS_FONDO[0] + pulso * boost) + rojo_dano),
+             min(techo, max(0, int(GRIS_FONDO[1] + pulso * boost) - int(dano_ef * 20))),
+             min(techo, max(0, int(GRIS_FONDO[2] + pulso * boost) - int(dano_ef * 20))))
     base2 = int(GRIS_FONDO[0] + brillo_combo * 40)
     color2 = (base2, base2, base2)
 
@@ -3217,12 +3315,42 @@ def dibujar_fondo_lissajous(partida, ahora):
     clip_ant = pantalla.get_clip()
     pantalla.set_clip(pygame.Rect(0, 0, ANCHO, ZONA_Y + 54))
     if len(puntos) > 1:
-        # con combo muy alto, la linea se engrosa
         grosor = 2 if brillo_combo >= 0.8 else 1
-        pygame.draw.lines(pantalla, color, False, puntos, grosor)
-        puntos2 = _curva_fondo(tipo, liss, npts, -t_anim * 0.6,
-                               cx_c, cy_c, rx * 0.7, ry * 0.7, fase_extra=1.0, jitter=jitter)
-        pygame.draw.lines(pantalla, color2, False, puntos2, 1)
+        if dano_ef < 0.15:
+            # intacto: linea continua
+            pygame.draw.lines(pantalla, color, False, puntos, grosor)
+        else:
+            # dañado: la linea se fragmenta, faltan segmentos (huecos crecientes)
+            seg = max(2, int(8 - dano_ef * 6))   # segmentos mas cortos con mas daño
+            i = 0
+            rng_frag = random.Random(int(ahora / 80))  # fragmentacion que titila
+            while i < len(puntos) - 1:
+                # probabilidad de dibujar el segmento baja con el daño
+                if rng_frag.random() > dano_ef * 0.55:
+                    fin = min(i + seg, len(puntos))
+                    if fin - i > 1:
+                        pygame.draw.lines(pantalla, color, False, puntos[i:fin], grosor)
+                i += seg
+            # esquirlas que se desprenden con daño alto
+            if dano_ef > 0.5:
+                n_esquirlas = int(dano_ef * 12)
+                for _ in range(n_esquirlas):
+                    idx_p = rng_frag.randint(0, len(puntos) - 1)
+                    px, py = puntos[idx_p]
+                    off = int(dano_ef * 30)
+                    ex = px + rng_frag.randint(-off, off)
+                    ey = py + rng_frag.randint(-off, off)
+                    pygame.draw.circle(pantalla, color, (ex, ey), 1)
+        # figura interior (se rompe primero)
+        if dano_ef < 0.6:
+            puntos2 = _curva_fondo(tipo, liss, npts, -t_anim * 0.6,
+                                   cx_c, cy_c, rx * 0.7, ry * 0.7, fase_extra=1.0, jitter=jitter)
+            if dano_ef < 0.3:
+                pygame.draw.lines(pantalla, color2, False, puntos2, 1)
+            else:
+                # interior fragmentado
+                for i in range(0, len(puntos2) - 4, 6):
+                    pygame.draw.lines(pantalla, color2, False, puntos2[i:i+4], 1)
     pantalla.set_clip(clip_ant)
 
 def dibujar_juego(partida, ahora):
@@ -3234,8 +3362,10 @@ def dibujar_juego(partida, ahora):
     zy        = partida.get("zona_y", ZONA_Y)  # zona de golpe (arriba si inverso)
     es_inv    = partida.get("es_inverso", False)
 
-    # fondo procedural (figura de lissajous tenue)
-    if not partida.get("game_over"):
+    # fondo procedural (figura de lissajous tenue) - el "enemigo"
+    si_fondo = partida.get("stage_info")
+    figura_explotada = (si_fondo and si_fondo["n"] >= NUM_STAGES and partida.get("terminada"))
+    if not partida.get("game_over") and not figura_explotada:
         dibujar_fondo_lissajous(partida, ahora)
 
     for i in range(1, num_cols):
@@ -3381,10 +3511,13 @@ def dibujar_juego(partida, ahora):
     forma_inst = forma_de_instrumento(partida['cancion']['instrumento'])
     icono_x = ANCHO - info.get_width() - 34
     dibujar_icono_inst(pantalla, forma_inst, icono_x, 18, 12, col_nota)
+    # genero debajo
+    gen_txt = fuente_chica.render(partida['cancion'].get('genero', ''), True, col_nota)
+    pantalla.blit(gen_txt, (ANCHO - gen_txt.get_width() - 10, 34))
     # multiplicador de mods activos
     if partida.get("mult_mods", 1.0) > 1.0:
         mult_txt = fuente_chica.render(f"MODS x{partida['mult_mods']:.2f}", True, col_nota)
-        pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 50))
+        pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 56))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
     if dev_mode:
@@ -3692,6 +3825,9 @@ def _spawn_notas_celebracion(col_g):
     run_completado_fuegos.clear()
     global run_completado_inicio
     run_completado_inicio = pygame.time.get_ticks()
+    # fanfarria de victoria
+    SND_WIN.set_volume(0.6 * config["volumen"])
+    SND_WIN.play()
     # explosion central grande
     for _ in range(120):
         ang = random.uniform(0, 2 * math.pi)
@@ -3731,6 +3867,8 @@ def dibujar_run_completado():
     # spawns periodicos de fuegos artificiales
     if t_total < 8.0 and random.random() < 0.08:
         _spawn_fuego(col_g)
+        SND_EXPLOSION.set_volume(0.3 * config["volumen"])
+        SND_EXPLOSION.play()
 
     # lluvia de chispas desde arriba
     if t_total < 6.0 and random.random() < 0.3:
@@ -3965,7 +4103,8 @@ def aplicar_resolucion():
 
 def cambiar_audio_device(idx):
     """Reinicializa el mixer con el dispositivo seleccionado."""
-    global SND_ERROR, cache_por_instrumento, cache_largas_por_instrumento
+    global SND_ERROR, SND_EXPLOSION, SND_EXPLOSION_BIG, SND_WIN
+    global cache_por_instrumento, cache_largas_por_instrumento
     config["audio_idx"] = idx
     try:
         pygame.mixer.quit()
@@ -3977,7 +4116,9 @@ def cambiar_audio_device(idx):
         pygame.mixer.set_num_channels(32)
         # reconstruir sonidos globales
         SND_ERROR = synth_error()
-        # limpiar caches de instrumentos (se re-renderizan al jugar)
+        SND_EXPLOSION = synth_explosion(1.0)
+        SND_EXPLOSION_BIG = synth_explosion(2.0)
+        SND_WIN = synth_fanfarria_win()
         cache_por_instrumento.clear()
         cache_largas_por_instrumento.clear()
     except Exception as e:
