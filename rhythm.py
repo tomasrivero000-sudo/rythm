@@ -3425,10 +3425,11 @@ def dibujar_fondo_lissajous(partida, ahora):
     boost = 50 + (30 if hay_hold else 0) + int(brillo_combo * 80)
     # el enemigo dañado vira hacia el rojo
     rojo_dano = int(dano_ef * 80)
-    color = (min(techo + rojo_dano, int(GRIS_FONDO[0] + pulso * boost) + rojo_dano),
-             min(techo, max(0, int(GRIS_FONDO[1] + pulso * boost) - int(dano_ef * 20))),
-             min(techo, max(0, int(GRIS_FONDO[2] + pulso * boost) - int(dano_ef * 20))))
-    base2 = int(GRIS_FONDO[0] + brillo_combo * 40)
+    r = min(255, min(techo + rojo_dano, int(GRIS_FONDO[0] + pulso * boost) + rojo_dano))
+    g = min(255, min(techo, max(0, int(GRIS_FONDO[1] + pulso * boost) - int(dano_ef * 20))))
+    b = min(255, min(techo, max(0, int(GRIS_FONDO[2] + pulso * boost) - int(dano_ef * 20))))
+    color = (max(0, r), max(0, g), max(0, b))
+    base2 = min(255, max(0, int(GRIS_FONDO[0] + brillo_combo * 40)))
     color2 = (base2, base2, base2)
 
     puntos = _curva_fondo(tipo, liss, npts, t_anim, cx_c, cy_c, rx, ry, jitter=jitter)
