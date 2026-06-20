@@ -531,6 +531,17 @@ INSTRUMENTOS_RAROS = {
     "BROKEN":     "broken",
 }
 
+# instrumentos que sostienen bien (se pueden loopear en holds)
+# los demas tienen decay natural y se cortan antes de repetirse
+INST_SUSTAIN = {
+    "SAW", "ORGAN", "PAD", "SUPERSAW", "CHOIR", "SAW STACK", "HOOVER",
+    "VOX PAD", "PHASE PAD", "BELLPAD", "PWM LEAD", "LEAD", "WOBBLE",
+    "ORGAN FULL", "FM BRASS", "DETUNE", "SINE", "TRIANGLE", "GROWL",
+    "SYNTHBASS", "DIST GTR",
+}
+# hold maximo para instrumentos percusivos (ms)
+HOLD_MAX_PERCUSIVO = 800
+
 def midi_a_freq(midi):
     return 440.0 * (2.0 ** ((midi - 69) / 12.0))
 
@@ -2623,6 +2634,11 @@ def iniciar_partida(seed, mods=None, stage_info=None):
     dif     = get_dificultad(seed)
     cancion = generar_cancion(int(seed * 23819), dif)
     inst = cancion["instrumento"]
+    # instrumentos percusivos: acortar holds para evitar repeticion del loop
+    if inst not in INST_SUSTAIN:
+        for n in cancion["notas_jugador"]:
+            if n.get("hold", 0) > HOLD_MAX_PERCUSIVO:
+                n["hold"] = HOLD_MAX_PERCUSIVO
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
@@ -4129,7 +4145,9 @@ while corriendo:
                                         combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
-                                                ch = cache_notas_largas[midi_fijo].play(loops=-1)
+                                                inst_nombre = partida["cancion"].get("instrumento", "")
+                                                puede_loop = inst_nombre in INST_SUSTAIN
+                                                ch = cache_notas_largas[midi_fijo].play(loops=-1 if puede_loop else 0)
                                                 if ch:
                                                     ch.set_volume(config["volumen"])
                                                     canal_hold[col] = ch
