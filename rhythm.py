@@ -551,11 +551,39 @@ def synth_ui_confirm():
     env[-fade:] *= np.linspace(1, 0, fade)
     return np_to_sound(wave * env, vol=0.32)
 
+def synth_game_over():
+    """Sonido de game over: acorde menor descendente, sombrio."""
+    notas = [392, 311, 233]  # G4 Eb4 Bb3 descendente
+    dur_nota = 0.28
+    dur_final = 1.2
+    partes = []
+    for f in notas:
+        n = int(SR * dur_nota)
+        t = np.linspace(0, dur_nota, n)
+        ph = 2 * np.pi * f * t
+        w = np.sin(ph) * 0.5 + np.sin(ph * 1.005) * 0.3 + np.sin(ph * 2) * 0.1
+        env = np.minimum(1.0, np.exp(-t * 3) + 0.4)
+        partes.append(w * env)
+    n_f = int(SR * dur_final)
+    t_f = np.linspace(0, dur_final, n_f)
+    acorde = np.zeros(n_f)
+    for f in [233, 277, 349]:  # acorde grave menor
+        ph = 2 * np.pi * f * t_f
+        acorde += np.sin(ph) * 0.4 + np.sin(ph * 1.006) * 0.2
+    acorde /= 3
+    env_f = np.exp(-t_f * 1.5)
+    fade = min(int(SR * 0.05), n_f)
+    env_f[-fade:] *= np.linspace(1, 0, fade)
+    partes.append(acorde * env_f)
+    wave = np.concatenate(partes)
+    return np_to_sound(wave, vol=0.42)
+
 SND_SELECT = synth_ui_select()
 SND_CONFIRM = synth_ui_confirm()
 SND_EXPLOSION = synth_explosion(1.0)
 SND_EXPLOSION_BIG = synth_explosion(2.0)
 SND_WIN = synth_fanfarria_win()
+SND_GAMEOVER = synth_game_over()
 
 def sfx_select():
     SND_SELECT.set_volume(0.4 * config["volumen"])
@@ -4140,7 +4168,7 @@ def aplicar_resolucion():
 def cambiar_audio_device(idx):
     """Reinicializa el mixer con el dispositivo seleccionado."""
     global SND_ERROR, SND_EXPLOSION, SND_EXPLOSION_BIG, SND_WIN
-    global SND_SELECT, SND_CONFIRM
+    global SND_SELECT, SND_CONFIRM, SND_GAMEOVER
     global cache_por_instrumento, cache_largas_por_instrumento
     config["audio_idx"] = idx
     try:
@@ -4158,6 +4186,7 @@ def cambiar_audio_device(idx):
         SND_WIN = synth_fanfarria_win()
         SND_SELECT = synth_ui_select()
         SND_CONFIRM = synth_ui_confirm()
+        SND_GAMEOVER = synth_game_over()
         cache_por_instrumento.clear()
         cache_largas_por_instrumento.clear()
     except Exception as e:
@@ -4795,6 +4824,8 @@ while corriendo:
                             partida["game_over"] = True
                             pygame.mixer.stop()
                             crear_shake(15)
+                            SND_GAMEOVER.set_volume(0.6 * config["volumen"])
+                            SND_GAMEOVER.play()
                     else:
                         notas_vivas.append(n)
                 else:
