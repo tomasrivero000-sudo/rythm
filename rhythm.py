@@ -84,6 +84,33 @@ config = {
     "audio_idx": 0,     # 0 = default, 1+ = dispositivo especifico
 }
 
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+
+def guardar_config():
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass
+
+def cargar_config():
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            guardado = json.load(f)
+        for k, v in guardado.items():
+            if k in config:
+                config[k] = v
+        # validar rangos
+        config["brillo"] = max(0.3, min(1.0, config["brillo"]))
+        config["volumen"] = max(0.0, min(1.0, config["volumen"]))
+        config["vol_menu"] = max(0.0, min(1.0, config["vol_menu"]))
+        config["res_idx"] = max(0, min(len(RESOLUCIONES) - 1, config["res_idx"]))
+        config["audio_idx"] = max(0, min(len(AUDIO_DEVICES) - 1, config["audio_idx"]))
+    except Exception:
+        pass
+
+cargar_config()
+
 # la ventana real puede cambiar de tamaño; el juego siempre dibuja en 720x640 y se escala
 _w, _h = RESOLUCIONES[config["res_idx"]]
 ventana = pygame.display.set_mode((_w, _h))
@@ -3566,25 +3593,34 @@ def dibujar_pausa(partida):
         f"{partida['cancion']['bpm']}BPM  SEED {int(partida['seed'])}",
         True, GRIS_MED)
     pantalla.blit(info, (ANCHO // 2 - info.get_width() // 2, 240))
-    # opciones: 0=continuar, 1=volumen, 2=reiniciar, 3=salir
-    opciones = ["CONTINUAR", "VOLUMEN", "REINICIAR", "SALIR"]
+    # opciones: 0=continuar, 1=volumen, 2=audio, 3=reiniciar, 4=salir
+    opciones = ["CONTINUAR", "VOLUMEN", "AUDIO", "REINICIAR", "SALIR"]
     for i, txt in enumerate(opciones):
-        y = 290 + i * 48
+        y = 275 + i * 42
         sel = (i == pausa_opcion)
         marca = "> " if sel else "  "
         color = BLANCO if sel else GRIS_MED
         if i == 1:
             # barra de volumen
             t = fuente.render(f"{marca}{txt}", True, color)
-            pantalla.blit(t, (140, y))
-            barra_w = 180
-            barra_x = 400
+            pantalla.blit(t, (100, y))
+            barra_w = 160
+            barra_x = 390
             pygame.draw.rect(pantalla, GRIS, (barra_x, y + 6, barra_w, 14))
             relleno = int(barra_w * config["volumen"])
             pygame.draw.rect(pantalla, color, (barra_x, y + 6, relleno, 14))
             pygame.draw.rect(pantalla, BLANCO, (barra_x, y + 6, barra_w, 14), 1)
             pct = fuente_chica.render(f"{int(config['volumen'] * 100)}%", True, color)
             pantalla.blit(pct, (barra_x + barra_w + 10, y + 6))
+        elif i == 2:
+            # selector de dispositivo de audio
+            t = fuente.render(f"{marca}{txt}", True, color)
+            pantalla.blit(t, (100, y))
+            dev_name = AUDIO_DEVICES[config["audio_idx"]] if config["audio_idx"] < len(AUDIO_DEVICES) else "Default"
+            if len(dev_name) > 20:
+                dev_name = dev_name[:18] + ".."
+            dev_txt = fuente_chica.render(dev_name, True, color)
+            pantalla.blit(dev_txt, (390, y + 6))
         else:
             t = fuente.render(f"{marca}{txt}", True, color)
             pantalla.blit(t, (ANCHO // 2 - t.get_width() // 2, y))
@@ -3810,6 +3846,7 @@ while corriendo:
         elif ESTADO == "config":
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
+                    guardar_config()
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
                     config_opcion = (config_opcion - 1) % 5
@@ -3871,17 +3908,28 @@ while corriendo:
                     pausa_dur = pygame.time.get_ticks() - partida["pausa_inicio"]
                     partida["inicio"] += pausa_dur
                     del partida["pausa_inicio"]
+                    guardar_config()
                     ESTADO = "jugando"
                 elif evento.key == pygame.K_UP:
-                    pausa_opcion = (pausa_opcion - 1) % 4
+                    pausa_opcion = (pausa_opcion - 1) % 5
                 elif evento.key == pygame.K_DOWN:
-                    pausa_opcion = (pausa_opcion + 1) % 4
+                    pausa_opcion = (pausa_opcion + 1) % 5
                 elif evento.key == pygame.K_LEFT and pausa_opcion == 1:
                     config["volumen"] = max(0.0, round(config["volumen"] - 0.1, 1))
                 elif evento.key == pygame.K_RIGHT and pausa_opcion == 1:
                     config["volumen"] = min(1.0, round(config["volumen"] + 0.1, 1))
+                elif evento.key == pygame.K_LEFT and pausa_opcion == 2:
+                    nuevo = max(0, config["audio_idx"] - 1)
+                    if nuevo != config["audio_idx"]:
+                        cambiar_audio_device(nuevo)
+                        guardar_config()
+                elif evento.key == pygame.K_RIGHT and pausa_opcion == 2:
+                    nuevo = min(len(AUDIO_DEVICES) - 1, config["audio_idx"] + 1)
+                    if nuevo != config["audio_idx"]:
+                        cambiar_audio_device(nuevo)
+                        guardar_config()
                 elif evento.key == pygame.K_RETURN:
-                    if pausa_opcion == 2:
+                    if pausa_opcion == 3:
                         # REINICIAR stage actual
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
@@ -3897,7 +3945,7 @@ while corriendo:
                         score_guardado = False
                         pausa_opcion = 0
                         ESTADO = "jugando"
-                    elif pausa_opcion == 3:
+                    elif pausa_opcion == 4:
                         # SALIR
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
