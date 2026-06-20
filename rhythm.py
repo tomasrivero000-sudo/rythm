@@ -2597,6 +2597,7 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         "stage_info":     stage_info,
         "mapa_teclas":    mapa_teclas,
         "es_inverso":     "inverso" in mods_partida,
+        "zona_y":         90 if "inverso" in mods_partida else ZONA_Y,
     }
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
@@ -2856,6 +2857,7 @@ def dibujar_juego(partida, ahora):
     parte     = get_parte(partida, ahora)
     sx, sy    = shake_dx, shake_dy
     col_nota  = color_genero(partida)   # color de acento del genero
+    zy        = partida.get("zona_y", ZONA_Y)  # zona de golpe (arriba si inverso)
 
     # fondo procedural (figura de lissajous tenue)
     if not partida.get("game_over"):
@@ -2874,13 +2876,13 @@ def dibujar_juego(partida, ahora):
         flash_surf.fill(col_nota)
         pantalla.blit(flash_surf, (col_x, 0))
 
-    pygame.draw.line(pantalla, col_nota, (sx, ZONA_Y + sy), (ANCHO + sx, ZONA_Y + sy), 2)
-    pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + 54 + sy), (ANCHO + sx, ZONA_Y + 54 + sy), 1)
+    pygame.draw.line(pantalla, col_nota, (sx, zy + sy), (ANCHO + sx, zy + sy), 2)
+    pygame.draw.line(pantalla, BLANCO, (sx, zy + 54 + sy), (ANCHO + sx, zy + 54 + sy), 1)
 
     # nota actual de cada columna (puede cambiar de octava en el desenlace)
     notas_label = list(partida["cancion"]["notas_columnas"])
     for grupo in partida["notas_cayendo"]:
-        if abs(grupo["y"] - ZONA_Y) < 200:
+        if abs(grupo["y"] - zy) < 200:
             for idx_c, c in enumerate(grupo["cols"]):
                 if idx_c < len(grupo.get("midis", [])) and c < len(notas_label):
                     notas_label[c] = grupo["midis"][idx_c]
@@ -2894,30 +2896,33 @@ def dibujar_juego(partida, ahora):
     for i in range(num_cols):
         x = i * ancho_col + sx
         if i in teclas_sostenidas:
-            pygame.draw.rect(pantalla, GRIS, (x + 2, ZONA_Y + 2 + sy, ancho_col - 4, 50))
+            pygame.draw.rect(pantalla, GRIS, (x + 2, zy + 2 + sy, ancho_col - 4, 50))
         col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
         # que tecla activa esta columna
         tecla_idx = inv_teclas.get(i, i)
         label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
-        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, ZONA_Y + 10 + sy))
+        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, zy + 10 + sy))
         if i < len(notas_label):
             nota_name = midi_a_nombre(notas_label[i])
             nota_txt = fuente_chica.render(nota_name, True, col_activa)
-            pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, ZONA_Y + 28 + sy))
+            pantalla.blit(nota_txt, (x + ancho_col // 2 - nota_txt.get_width() // 2, zy + 28 + sy))
 
-    # limite inferior donde se cortan las notas (justo encima del teclado)
-    limite_notas = ZONA_Y + 54
+    # limite donde se cortan las notas (no entran al area del teclado)
+    es_inv = partida.get("es_inverso", False)
+    limite_notas = zy + 54
     clip_anterior = pantalla.get_clip()
-    pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
+    if es_inv:
+        pantalla.set_clip(pygame.Rect(0, limite_notas + sy, ANCHO, ALTO - limite_notas))
+    else:
+        pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
 
     es_invisible = "invisible" in partida.get("mods", set())
-    es_inv = partida.get("es_inverso", False)
     for grupo in partida["notas_cayendo"]:
         # modificador INVISIBLE: las notas desaparecen cerca de la zona
         if es_invisible:
-            if es_inv and grupo["y"] < ZONA_Y * 0.55:
+            if es_inv and grupo["y"] < zy + (ALTO - zy) * 0.45:
                 continue
-            elif not es_inv and grupo["y"] > ZONA_Y * 0.45:
+            elif not es_inv and grupo["y"] > zy * 0.45:
                 continue
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
         cols_hold_activo = [c for c in grupo["cols"] if c in partida["holds_activos"]]
@@ -3018,12 +3023,12 @@ def dibujar_juego(partida, ahora):
     notas_actuales = list(notas_base)
     for grupo in partida["notas_cayendo"]:
         # notas cerca de la zona de golpe definen la tonalidad actual
-        if abs(grupo["y"] - ZONA_Y) < 200:
+        if abs(grupo["y"] - zy) < 200:
             for idx_c, c in enumerate(grupo["cols"]):
                 if idx_c < len(grupo.get("midis", [])) and c < len(notas_actuales):
                     notas_actuales[c] = grupo["midis"][idx_c]
     notas_cols = notas_actuales
-    tecl_y = ZONA_Y + 56 + sy
+    tecl_y = zy + 56 + sy
     tecl_h = ALTO - tecl_y - 4
     if tecl_h > 8:
         tecl_h = min(tecl_h, 28)
@@ -3072,7 +3077,7 @@ def dibujar_juego(partida, ahora):
     if hit and pygame.time.get_ticks() - hit["tiempo"] < 500:
         color = BLANCO if hit["texto"] in ["PERFECTO", "BIEN"] else GRIS_MED
         hit_txt = fuente.render(hit["texto"], True, color)
-        pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, ZONA_Y - 60))
+        pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, zy - 60))
 
     if partida.get("game_over"):
         go_txt = fuente_grande.render("GAME OVER", True, BLANCO)
@@ -3705,6 +3710,7 @@ while corriendo:
                         pausa_opcion = 0
 
         elif ESTADO == "jugando":
+            zy_p = partida.get("zona_y", ZONA_Y)
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
@@ -3830,11 +3836,11 @@ while corriendo:
                                             pot = min(1.0 + partida["combo"] * 0.03, 1.8)
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
                                             combo_particulas = min(50 + partida["combo"] * 4, 250)
-                                            crear_explosion(cx, ZONA_Y, combo_particulas, color=col_g, potencia=pot)
-                                            crear_onda(cx, ZONA_Y, 0.7)
-                                            crear_onda(cx, ZONA_Y, 0.4, r0=int(4 + partida["combo"] * 0.3))
+                                            crear_explosion(cx, zy_p, combo_particulas, color=col_g, potencia=pot)
+                                            crear_onda(cx, zy_p, 0.7)
+                                            crear_onda(cx, zy_p, 0.4, r0=int(4 + partida["combo"] * 0.3))
                                             if partida["combo"] >= 30:
-                                                crear_onda(cx, ZONA_Y, 0.5, r0=int(15 + partida["combo"] * 0.5))
+                                                crear_onda(cx, zy_p, 0.5, r0=int(15 + partida["combo"] * 0.5))
                                             crear_flash(col, min(0.8, 0.5 + partida["combo"] * 0.01))
                                             crear_shake(min(5 + partida["combo"] * 0.15, 12))
                                         elif distancia < 60:
@@ -3842,22 +3848,22 @@ while corriendo:
                                             partida["combo"] += 1
                                             pot = min(1.0 + partida["combo"] * 0.02, 1.5)
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot)
-                                            crear_onda(cx, ZONA_Y, 0.5)
+                                            crear_explosion(cx, zy_p, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot)
+                                            crear_onda(cx, zy_p, 0.5)
                                             crear_flash(col, 0.4)
                                             crear_shake(min(3 + partida["combo"] * 0.1, 8))
                                         elif distancia < 100:
                                             pts = 1
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 20, color=col_g)
-                                            crear_onda(cx, ZONA_Y, 0.4)
+                                            crear_explosion(cx, zy_p, 20, color=col_g)
+                                            crear_onda(cx, zy_p, 0.4)
                                             crear_flash(col, 0.3)
                                         else:
                                             pts = 0
                                             partida["combo"] = 0
                                             partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 8, GRIS_MED)
+                                            crear_explosion(cx, zy_p, 8, GRIS_MED)
                                             crear_shake(8)
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
@@ -3878,7 +3884,7 @@ while corriendo:
                                                 txt = f"+{total_pts}"
                                                 if combo_mult > 1:
                                                     txt += f" x{combo_mult}"
-                                                crear_texto_flotante(cx, ZONA_Y - 20, txt, BLANCO, combo_mult > 2)
+                                                crear_texto_flotante(cx, zy_p - 20, txt, BLANCO, combo_mult > 2)
                                         else:
                                             if pts > 0:
                                                 total_pts = int(pts * len(grupo["cols"]) * combo_mult * partida.get("mult_mods", 1.0))
@@ -3886,13 +3892,13 @@ while corriendo:
                                                 if combo_mult > 1:
                                                     txt_pts += f" x{combo_mult}"
                                                 es_grande = combo_mult > 2
-                                                crear_texto_flotante(cx, ZONA_Y - 20, txt_pts, BLANCO, es_grande)
+                                                crear_texto_flotante(cx, zy_p - 20, txt_pts, BLANCO, es_grande)
                                                 partida["puntos"] += total_pts
                                             else:
                                                 partida["puntos"] = max(0, partida["puntos"] - 2)
-                                                crear_texto_flotante(cx, ZONA_Y - 20, "-2", GRIS_MED)
+                                                crear_texto_flotante(cx, zy_p - 20, "-2", GRIS_MED)
                                             if partida["combo"] > 0 and partida["combo"] % 5 == 0:
-                                                crear_texto_flotante(ANCHO // 2, ZONA_Y - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
+                                                crear_texto_flotante(ANCHO // 2, zy_p - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
                                                 crear_shake(4)
                                             if grupo["acertadas"] == set(grupo["cols"]):
                                                 partida["notas_cayendo"].remove(grupo)
@@ -3906,8 +3912,8 @@ while corriendo:
                             num_cols = partida["dificultad"]["columnas"]
                             ancho_col = ANCHO // num_cols
                             cx = col * ancho_col + ancho_col // 2
-                            crear_texto_flotante(cx, ZONA_Y - 20, "-1", GRIS_MED)
-                            crear_explosion(cx, ZONA_Y, 6, GRIS_MED)
+                            crear_texto_flotante(cx, zy_p - 20, "-1", GRIS_MED)
+                            crear_explosion(cx, zy_p, 6, GRIS_MED)
                             crear_shake(3)
                             SND_ERROR.set_volume(0.35 * config["volumen"])
                             SND_ERROR.play()
@@ -3928,7 +3934,7 @@ while corriendo:
                         num_cols = partida["dificultad"]["columnas"]
                         ancho_col = ANCHO // num_cols
                         cx = col * ancho_col + ancho_col // 2
-                        crear_texto_flotante(cx, ZONA_Y - 40, "+5", BLANCO)
+                        crear_texto_flotante(cx, zy_p - 40, "+5", BLANCO)
                         if grupo in partida["notas_cayendo"]:
                             partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
@@ -3977,6 +3983,7 @@ while corriendo:
         dibujar_pausa(partida)
 
     elif ESTADO == "jugando":
+        zy_p = partida.get("zona_y", ZONA_Y)
         ahora = ahora_ms - partida["inicio"]
 
         if not partida.get("game_over"):
@@ -3997,9 +4004,9 @@ while corriendo:
             PIXELES_POR_MS = vel_p / (1000 / 60)
             es_inv = partida.get("es_inverso", False)
             if es_inv:
-                ANTICIPACION = (ALTO - ZONA_Y + 40) / PIXELES_POR_MS
+                ANTICIPACION = (ALTO - zy_p + 40) / PIXELES_POR_MS
             else:
-                ANTICIPACION = (ZONA_Y + 40) / PIXELES_POR_MS
+                ANTICIPACION = (zy_p + 40) / PIXELES_POR_MS
 
             if not partida["terminada"]:
                 while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
@@ -4019,9 +4026,9 @@ while corriendo:
             for grupo in partida["notas_cayendo"]:
                 ms_hasta = grupo["tiempo_ms"] - ahora
                 if es_inv:
-                    grupo["y"] = ZONA_Y + (ms_hasta * PIXELES_POR_MS)
+                    grupo["y"] = zy_p + (ms_hasta * PIXELES_POR_MS)
                 else:
-                    grupo["y"] = ZONA_Y - (ms_hasta * PIXELES_POR_MS)
+                    grupo["y"] = zy_p - (ms_hasta * PIXELES_POR_MS)
 
             notas_vivas = []
             for n in partida["notas_cayendo"]:
@@ -4039,7 +4046,8 @@ while corriendo:
                         num_cols = partida["dificultad"]["columnas"]
                         ancho_col = ANCHO // num_cols
                         miss_x = n["cols"][0] * ancho_col + ancho_col // 2
-                        crear_texto_flotante(miss_x, ALTO - 30, "-5", GRIS_MED)
+                        miss_y = 30 if es_inv else ALTO - 30
+                        crear_texto_flotante(miss_x, miss_y, "-5", GRIS_MED)
                         crear_shake(4)
                         SND_ERROR.set_volume(0.3 * config["volumen"])
                         SND_ERROR.play()
