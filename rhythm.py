@@ -550,6 +550,96 @@ INST_SUSTAIN = {
 HOLD_MAX_PERCUSIVO = 800
 HOLD_MAX = 4000  # maximo absoluto (= duracion del sample largo)
 
+# --- identidad visual: cada instrumento tiene una "forma" para su icono y notas ---
+# formas: square, saw, sine, triangle, bell, pluck, pad, metal, noise, glass,
+#         brass, choir, atmos, alien
+INST_FORMA = {
+    "SQUARE": "square", "CHIPTUNE": "square", "BITCRUSH": "square", "PWM LEAD": "square",
+    "SAW": "saw", "SUPERSAW": "saw", "SAW STACK": "saw", "HOOVER": "saw",
+    "ACID": "saw", "SYNC LEAD": "saw", "DETUNE": "saw", "ANALOG STR": "saw",
+    "SINE": "sine", "FM EP": "sine", "SUB PLUCK": "sine", "SYNTHBASS": "sine", "BASS": "sine",
+    "TRIANGLE": "triangle", "LEAD": "triangle", "FLUTE": "triangle",
+    "FM BELL": "bell", "BELL FM": "bell", "BELLPAD": "bell", "VIBRAPHONE": "bell", "KALIMBA": "bell",
+    "PLUCK": "pluck", "PLUCK SOFT": "pluck", "HARP": "pluck", "SITAR": "pluck",
+    "PAD": "pad", "PHASE PAD": "pad", "VOX PAD": "pad", "DREAM PAD": "pad", "FROZEN STR": "pad",
+    "METALLIC": "metal", "RING MOD": "metal", "RESO": "metal", "WAVEFOLD": "metal", "NOISE PITCH": "metal",
+    "GLASS": "glass", "GLASS HARM": "glass",
+    "ORGAN": "organ", "ORGAN FULL": "organ",
+    "TRUMPET": "brass", "FM BRASS": "brass", "GROWL": "brass", "DIST GTR": "brass",
+    "CHOIR": "choir", "SPACE CHOIR": "choir", "FORMANT": "choir",
+    "WOBBLE": "wobble", "FM 3OP": "wobble",
+    "SHIMMER": "atmos", "ATMOS NOISE": "atmos",
+    "ALIEN": "alien", "BROKEN": "alien",
+}
+
+def dibujar_icono_inst(surf, forma, cx, cy, r, color):
+    """Dibuja el icono de un instrumento centrado en (cx, cy) con radio r."""
+    import math as _m
+    if forma == "square":
+        pygame.draw.rect(surf, color, (cx - r, cy - r, r * 2, r * 2), 2)
+        pygame.draw.rect(surf, color, (cx - r//2, cy - r//2, r, r))
+    elif forma == "saw":
+        pts = []
+        for i in range(5):
+            x = cx - r + (i / 4) * 2 * r
+            y = cy + r if i % 2 == 0 else cy - r
+            pts.append((x, y))
+        pygame.draw.lines(surf, color, False, pts, 2)
+    elif forma == "sine":
+        pts = [(cx - r + i, cy - int(_m.sin(i / r * _m.pi * 2) * r)) for i in range(0, 2 * r, 2)]
+        if len(pts) > 1:
+            pygame.draw.lines(surf, color, False, pts, 2)
+    elif forma == "triangle":
+        pygame.draw.polygon(surf, color, [(cx, cy - r), (cx - r, cy + r), (cx + r, cy + r)], 2)
+    elif forma == "bell":
+        pygame.draw.arc(surf, color, (cx - r, cy - r, 2 * r, 2 * r), _m.pi, 2 * _m.pi, 2)
+        pygame.draw.line(surf, color, (cx - r, cy), (cx + r, cy), 2)
+        pygame.draw.circle(surf, color, (cx, cy + r), 2)
+    elif forma == "pluck":
+        pygame.draw.line(surf, color, (cx, cy - r), (cx, cy + r), 2)
+        pygame.draw.circle(surf, color, (cx, cy - r), 3)
+        pygame.draw.arc(surf, color, (cx, cy - r//2, r, r), -_m.pi/2, _m.pi/2, 2)
+    elif forma == "pad":
+        pygame.draw.ellipse(surf, color, (cx - r, cy - r//2, 2 * r, r), 2)
+        pygame.draw.ellipse(surf, color, (cx - r//2, cy - r, r, 2 * r), 1)
+    elif forma == "metal":
+        for a in range(0, 360, 60):
+            x = cx + int(_m.cos(_m.radians(a)) * r)
+            y = cy + int(_m.sin(_m.radians(a)) * r)
+            pygame.draw.line(surf, color, (cx, cy), (x, y), 2)
+        pygame.draw.circle(surf, color, (cx, cy), 3)
+    elif forma == "glass":
+        pygame.draw.polygon(surf, color, [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], 2)
+        pygame.draw.line(surf, color, (cx, cy - r), (cx, cy + r), 1)
+    elif forma == "organ":
+        for i, h in enumerate([r, int(r*1.5), r]):
+            x = cx - r + i * r
+            pygame.draw.line(surf, color, (x, cy + r), (x, cy + r - h), 3)
+    elif forma == "brass":
+        pygame.draw.circle(surf, color, (cx + r//2, cy), r, 2)
+        pygame.draw.line(surf, color, (cx - r, cy), (cx, cy), 2)
+        pygame.draw.line(surf, color, (cx - r, cy - 3), (cx - r, cy + 3), 2)
+    elif forma == "choir":
+        for dx in (-r, 0, r):
+            pygame.draw.arc(surf, color, (cx + dx - r//2, cy - r, r, 2 * r), _m.pi/2, 3*_m.pi/2, 2)
+    elif forma == "wobble":
+        pts = [(cx - r + i, cy - int(_m.sin(i / r * _m.pi * 3) * r * (0.4 + 0.6 * i / (2*r)))) for i in range(0, 2 * r, 2)]
+        if len(pts) > 1:
+            pygame.draw.lines(surf, color, False, pts, 2)
+    elif forma == "atmos":
+        for rad in (r, int(r*0.6), int(r*0.3)):
+            pygame.draw.circle(surf, color, (cx, cy), rad, 1)
+    elif forma == "alien":
+        pygame.draw.ellipse(surf, color, (cx - r, cy - r//2, 2*r, r), 2)
+        pygame.draw.circle(surf, color, (cx - r//3, cy), 2)
+        pygame.draw.circle(surf, color, (cx + r//3, cy), 2)
+    else:
+        pygame.draw.circle(surf, color, (cx, cy), r, 2)
+
+def forma_de_instrumento(inst):
+    return INST_FORMA.get(inst, "sine")
+
+
 def midi_a_freq(midi):
     return 440.0 * (2.0 ** ((midi - 69) / 12.0))
 
@@ -3132,6 +3222,7 @@ def dibujar_juego(partida, ahora):
     col_nota  = color_genero(partida)   # color de acento del genero
     zy        = partida.get("zona_y", ZONA_Y)  # zona de golpe (arriba si inverso)
     es_inv    = partida.get("es_inverso", False)
+    forma_nota = forma_de_instrumento(partida["cancion"].get("instrumento", ""))
 
     # fondo procedural (figura de lissajous tenue)
     if not partida.get("game_over"):
@@ -3208,12 +3299,17 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
             if col in pendientes:
+                nota_cx = x + ancho_col // 2
+                nota_cy = gy + 14
                 if grupo.get("es_acorde"):
                     pygame.draw.rect(pantalla, col_nota, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
                     pygame.draw.rect(pantalla, col_nota, (x + 11, gy + 5, ancho_col - 22, 18))
                 else:
                     pygame.draw.rect(pantalla, col_nota, (x + 6, gy, ancho_col - 12, 28))
+                    # icono del instrumento dibujado en negro sobre la nota
+                    if ancho_col >= 60:
+                        dibujar_icono_inst(pantalla, forma_nota, nota_cx, nota_cy, 9, NEGRO)
             xs.append(x + ancho_col // 2)
         if len(xs) > 1:
             pygame.draw.line(pantalla, col_nota, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
@@ -3275,6 +3371,10 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
     info = fuente_chica.render(f"{partida['cancion'].get('genero','')}  {partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
     pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
+    # icono del instrumento a la izquierda del texto
+    forma_inst = forma_de_instrumento(partida['cancion']['instrumento'])
+    icono_x = ANCHO - info.get_width() - 28
+    dibujar_icono_inst(pantalla, forma_inst, icono_x, 16, 7, col_nota)
     # multiplicador de mods activos
     if partida.get("mult_mods", 1.0) > 1.0:
         mult_txt = fuente_chica.render(f"MODS x{partida['mult_mods']:.2f}", True, col_nota)
