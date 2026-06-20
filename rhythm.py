@@ -14,27 +14,65 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 pygame.init()
+
+# --- dispositivos de audio ---
+def listar_dispositivos_audio():
+    """Lista dispositivos de salida usando SDL2 (nombres compatibles con mixer)."""
+    dispositivos = ["Default"]
+    # buscar SDL2 DLL en el directorio de pygame
+    import ctypes
+    sdl2 = None
+    for ruta in [
+        os.path.join(os.path.dirname(pygame.__file__), "SDL2.dll"),
+        "SDL2.dll", "SDL2",
+    ]:
+        try:
+            sdl2 = ctypes.CDLL(ruta)
+            break
+        except OSError:
+            continue
+    if sdl2 is not None:
+        try:
+            sdl2.SDL_GetNumAudioDevices.restype = ctypes.c_int
+            sdl2.SDL_GetNumAudioDevices.argtypes = [ctypes.c_int]
+            sdl2.SDL_GetAudioDeviceName.restype = ctypes.c_char_p
+            sdl2.SDL_GetAudioDeviceName.argtypes = [ctypes.c_int, ctypes.c_int]
+            n = sdl2.SDL_GetNumAudioDevices(0)
+            for i in range(n):
+                nombre = sdl2.SDL_GetAudioDeviceName(i, 0)
+                if nombre:
+                    dispositivos.append(nombre.decode("utf-8", errors="replace"))
+        except Exception as e:
+            print(f"  SDL2 enum fallo: {e}")
+    # fallback: winmm (solo si SDL2 no encontro nada)
+    if len(dispositivos) <= 1:
+        try:
+            from ctypes import wintypes
+            class WAVEOUTCAPS(ctypes.Structure):
+                _fields_ = [
+                    ("wMid", wintypes.WORD), ("wPid", wintypes.WORD),
+                    ("vDriverVersion", wintypes.UINT),
+                    ("szPname", ctypes.c_wchar * 32),
+                    ("dwFormats", wintypes.DWORD), ("wChannels", wintypes.WORD),
+                    ("wReserved1", wintypes.WORD), ("dwSupport", wintypes.DWORD),
+                ]
+            winmm = ctypes.WinDLL('winmm')
+            n = winmm.waveOutGetNumDevs()
+            for i in range(n):
+                caps = WAVEOUTCAPS()
+                if winmm.waveOutGetDevCapsW(i, ctypes.byref(caps), ctypes.sizeof(caps)) == 0:
+                    dispositivos.append(caps.szPname)
+        except Exception:
+            pass
+    return dispositivos
+
+AUDIO_DEVICES = listar_dispositivos_audio()
+print(f"Dispositivos de audio ({len(AUDIO_DEVICES)}): {AUDIO_DEVICES}")
+
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
 pygame.mixer.set_num_channels(32)
 
 ANCHO, ALTO = 720, 640
-
-# --- dispositivos de audio ---
-def listar_dispositivos_audio():
-    """Lista los dispositivos de salida de audio disponibles."""
-    dispositivos = ["Default"]
-    try:
-        n = pygame.mixer.get_num_audio_devices(False)
-        for i in range(n):
-            nombre = pygame.mixer.get_audio_device_name(i, False)
-            if isinstance(nombre, bytes):
-                nombre = nombre.decode("utf-8", errors="replace")
-            dispositivos.append(nombre)
-    except Exception:
-        pass
-    return dispositivos
-
-AUDIO_DEVICES = listar_dispositivos_audio()
 
 # --- configuracion ajustable ---
 RESOLUCIONES = [(720, 640), (900, 800), (1080, 960), (1280, 1138)]
@@ -2188,6 +2226,9 @@ def generar_cancion(seed, dif):
         if not pool:
             pool = list(INSTRUMENTOS_JUGADOR.keys())
         instrumento = rng.choice(pool)
+        # RESO suena agresivo, re-roll 75% de las veces
+        if instrumento == "RESO" and len(pool) > 1 and rng.random() < 0.75:
+            instrumento = rng.choice([p for p in pool if p != "RESO"])
 
     # --- CAPA 1: estructura variable por seed ---
     C_INTRO     = rng.choice([2, 4, 4, 6])
@@ -3052,7 +3093,10 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(go_txt, (ANCHO // 2 - go_txt.get_width() // 2, ALTO // 2 - 50))
         sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
         pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2 + 10))
-        esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+        if run_actual is not None:
+            esc2 = fuente_chica.render("ESC = RESULTADO DEL RUN", True, GRIS)
+        else:
+            esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 50))
         ruta = partida.get("export_ruta")
         if ruta:
@@ -3070,7 +3114,14 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2 - 40))
         sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
         pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
-        esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+        if run_actual is not None:
+            stage_n = run_actual["stage"]
+            if stage_n < NUM_STAGES:
+                esc2 = fuente_chica.render(f"ESC = SIGUIENTE STAGE ({stage_n + 1}/{NUM_STAGES})", True, GRIS)
+            else:
+                esc2 = fuente_chica.render("ESC = COMPLETAR RUN!", True, GRIS)
+        else:
+            esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
         ruta = partida.get("export_ruta")
         if ruta:
@@ -3817,12 +3868,15 @@ while corriendo:
                                 else:
                                     run_actual["stage"] += 1
                                     idx_next = run_actual["stage"] - 1
+                                    print(f"[DEBUG] Avanzando a stage {run_actual['stage']}, mods[{idx_next}]={run_actual['mods'][idx_next]}")
                                     if run_actual["mods"][idx_next]:
                                         # tiene mods -> animacion de dado
                                         dado_inicio = pygame.time.get_ticks()
                                         ESTADO = "run_dado"
+                                        print(f"[DEBUG] -> run_dado (dado_inicio={dado_inicio})")
                                     else:
                                         ESTADO = "run_overview"
+                                        print("[DEBUG] -> run_overview (sin mods)")
                                     nueva_musica_menu_aleatoria()
                         else:
                             # modo libre normal
