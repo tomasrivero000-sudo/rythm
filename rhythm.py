@@ -136,6 +136,25 @@ SEED_VELOCIDAD = 9.0
 ZONA_Y         = ALTO - 90
 VELOCIDAD      = 5.5
 
+# --- modificadores de partida (suben el multiplicador de puntos) ---
+MODIFICADORES = [
+    {"id": "espejo",     "nombre": "ESPEJO",      "desc": "columnas invertidas",    "mult": 1.2},
+    {"id": "veloz",      "nombre": "VELOCIDAD x2", "desc": "notas el doble de rapido", "mult": 1.5},
+    {"id": "invisible",  "nombre": "INVISIBLES",  "desc": "notas desaparecen al caer", "mult": 1.8},
+    {"id": "aleatorio",  "nombre": "ALEATORIO",   "desc": "columnas mezcladas",      "mult": 1.3},
+    {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
+]
+mods_activos = set()   # ids de modificadores seleccionados (modo libre)
+
+# mods "faciles" que pueden salir en el dado de los stages 2 y 3
+MODS_FACILES = ["espejo", "aleatorio", "veloz"]
+
+# --- modo STAGES (tipo roguelike): completar generos en cada dificultad ---
+# cada run son 4 stages del mismo genero+dificultad:
+#   stage 1: sin mods | stage 2: 1 mod facil | stage 3: 1 mod facil | stage 4: sudden death
+NUM_STAGES = 4
+run_actual = None   # dict con estado del run, o None
+
 fuente_grande = pygame.font.SysFont("courier", 48, bold=True)
 fuente        = pygame.font.SysFont("courier", 24, bold=True)
 fuente_chica  = pygame.font.SysFont("courier", 14, bold=True)
@@ -1591,6 +1610,33 @@ def midi_a_nombre(midi):
 LEADERBOARD_FILE = os.path.join(BASE_DIR, "leaderboard.json")
 TOP_SCORES = 10
 
+# --- progreso de runs completados (genero x dificultad) ---
+PROGRESO_FILE = os.path.join(BASE_DIR, "progreso.json")
+
+def cargar_progreso():
+    """Devuelve un set de claves 'GENERO|nivel' completadas."""
+    try:
+        with open(PROGRESO_FILE, "r") as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def guardar_progreso(completados):
+    try:
+        with open(PROGRESO_FILE, "w") as f:
+            json.dump(sorted(completados), f, indent=2)
+    except Exception as e:
+        print(f"Error guardando progreso: {e}")
+
+def clave_run(genero, nivel):
+    return f"{genero}|{nivel}"
+
+def marcar_completado(genero, nivel):
+    comp = cargar_progreso()
+    comp.add(clave_run(genero, nivel))
+    guardar_progreso(comp)
+    return comp
+
 def cargar_leaderboard():
     try:
         with open(LEADERBOARD_FILE, "r") as f:
@@ -1808,6 +1854,29 @@ GENEROS = {
     },
 }
 
+# paletas de color por genero (color de acento, se mezcla con blanco/gris)
+COLOR_GENERO = {
+    "TECHNO":    (0, 220, 255),    # cyan electrico
+    "HIP HOP":   (255, 160, 40),   # naranja calido
+    "DNB":       (180, 60, 255),   # violeta neon
+    "SYNTHWAVE": (255, 60, 180),   # rosa magenta retro
+    "AMBIENT":   (120, 230, 180),  # verde agua suave
+    "REGGAETON": (255, 220, 40),   # amarillo vibrante
+}
+COLOR_DEFECTO = (255, 255, 255)
+
+def color_genero(partida):
+    g = partida["cancion"].get("genero", "")
+    return COLOR_GENERO.get(g, COLOR_DEFECTO)
+
+def mezclar_color(c, blanco_pct):
+    """Mezcla un color con blanco. blanco_pct=0 -> color puro, 1 -> blanco"""
+    return (
+        int(c[0] + (255 - c[0]) * blanco_pct),
+        int(c[1] + (255 - c[1]) * blanco_pct),
+        int(c[2] + (255 - c[2]) * blanco_pct),
+    )
+
 def elegir_genero(rng):
     # pesos: AMBIENT sale mucho menos (~0.5% vs ~20% cada otro)
     pesos = {
@@ -1824,6 +1893,45 @@ def elegir_genero(rng):
         if r <= acum:
             return g
     return generos[-1]
+
+def genero_de_seed(seed):
+    """Calcula el genero que produciria una seed, sin generar la cancion completa."""
+    return elegir_genero(random.Random(int(seed * 23819)))
+
+def num_dificultad(seed):
+    """Devuelve el numero de nivel (1-15) de una seed."""
+    if seed <= 0:
+        return 1
+    tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
+              7100, 7800, 8400, 9000, 9500, 9999]
+    for i, tope in enumerate(tramos):
+        if seed <= tope:
+            return i + 1
+    return 15
+
+def rango_seeds_dificultad(nivel):
+    """Devuelve (seed_min, seed_max) para un nivel de dificultad."""
+    tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
+              7100, 7800, 8400, 9000, 9500, 9999]
+    lo = 1 if nivel == 1 else tramos[nivel - 2] + 1
+    hi = tramos[nivel - 1]
+    return lo, hi
+
+def buscar_seed_genero(genero, nivel, rng, evitar=None):
+    """Busca una seed que produzca el genero y nivel dados. Devuelve None si no encuentra."""
+    lo, hi = rango_seeds_dificultad(nivel)
+    evitar = evitar or set()
+    for _ in range(400):
+        s = rng.randint(lo, hi)
+        if s in evitar:
+            continue
+        if genero_de_seed(s) == genero:
+            return s
+    # fallback: escaneo lineal
+    for s in range(lo, hi + 1):
+        if s not in evitar and genero_de_seed(s) == genero:
+            return s
+    return None
 
 def generar_patrones_drums(rng, genero=None):
     if genero is not None and genero in GENEROS:
@@ -2408,21 +2516,30 @@ def hold_pixels(hold_ms, vel, fps=60):
         return 0
     return int((hold_ms / (1000 / fps)) * vel)
 
-def iniciar_partida(seed):
+def iniciar_partida(seed, mods=None, stage_info=None):
     global cache_notas, cache_notas_largas
+    # mods: set de ids; si es None usa mods_activos (modo libre)
+    mods_partida = set(mods) if mods is not None else set(mods_activos)
     dif     = get_dificultad(seed)
     cancion = generar_cancion(int(seed * 23819), dif)
     inst = cancion["instrumento"]
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
-    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
-    gen_txt = fuente.render(f"{cancion.get('genero', '')}", True, BLANCO)
-    pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 230))
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 130))
+    if stage_info:
+        st_txt = fuente.render(f"STAGE {stage_info['n']}/{NUM_STAGES}", True, BLANCO)
+        pantalla.blit(st_txt, (ANCHO // 2 - st_txt.get_width() // 2, 195))
+    gen_txt = fuente.render(f"{cancion.get('genero', '')}", True, COLOR_GENERO.get(cancion.get('genero',''), BLANCO))
+    pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 235))
     modo_txt = fuente.render(f"INSTRUMENTO: {inst}", True, GRIS_MED)
-    pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 280))
+    pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 285))
     esc_txt = fuente_chica.render(f"ESCALA: {cancion['escala'].upper()}   {cancion['bpm']} BPM", True, GRIS)
-    pantalla.blit(esc_txt, (ANCHO // 2 - esc_txt.get_width() // 2, 320))
+    pantalla.blit(esc_txt, (ANCHO // 2 - esc_txt.get_width() // 2, 325))
+    if mods_partida:
+        nombres = [m["nombre"] for m in MODIFICADORES if m["id"] in mods_partida]
+        mod_txt = fuente_chica.render("MODS: " + ", ".join(nombres), True, BLANCO)
+        pantalla.blit(mod_txt, (ANCHO // 2 - mod_txt.get_width() // 2, 360))
     presentar()
     pygame.time.delay(900)
 
@@ -2443,6 +2560,22 @@ def iniciar_partida(seed):
         cache_bajo[mb] = np_to_sound(wave_b, vol=0.3, pan=0.0)
     cancion["cache_bajo"] = cache_bajo
 
+    # --- aplicar modificadores de columnas (espejo / aleatorio) ---
+    num_cols_p = dif["columnas"]
+    mapa_cols = list(range(num_cols_p))
+    if "espejo" in mods_partida:
+        mapa_cols = mapa_cols[::-1]
+    if "aleatorio" in mods_partida:
+        random.Random(int(seed) + 777).shuffle(mapa_cols)
+    if "espejo" in mods_partida or "aleatorio" in mods_partida:
+        for n in cancion["notas_jugador"]:
+            n["cols"] = [mapa_cols[c] for c in n["cols"]]
+
+    mult_mods = 1.0
+    for m in MODIFICADORES:
+        if m["id"] in mods_partida:
+            mult_mods *= m["mult"]
+
     return {
         "seed":           seed,
         "dificultad":     dif,
@@ -2462,6 +2595,10 @@ def iniciar_partida(seed):
         "vida_max":       20,
         "game_over":      False,
         "liss_pulso":     0.0,
+        "mods":           set(mods_partida),
+        "mult_mods":      mult_mods,
+        "velocidad":      VELOCIDAD * (2.0 if "veloz" in mods_partida else 1.0),
+        "stage_info":     stage_info,
     }
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
@@ -2720,6 +2857,7 @@ def dibujar_juego(partida, ahora):
     ancho_col = ANCHO // num_cols
     parte     = get_parte(partida, ahora)
     sx, sy    = shake_dx, shake_dy
+    col_nota  = color_genero(partida)   # color de acento del genero
 
     # fondo procedural (figura de lissajous tenue)
     if not partida.get("game_over"):
@@ -2735,10 +2873,10 @@ def dibujar_juego(partida, ahora):
         col_x = f["col"] * ancho_col + sx
         flash_surf = pygame.Surface((ancho_col, ALTO))
         flash_surf.set_alpha(alpha)
-        flash_surf.fill(BLANCO)
+        flash_surf.fill(col_nota)
         pantalla.blit(flash_surf, (col_x, 0))
 
-    pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + sy), (ANCHO + sx, ZONA_Y + sy), 2)
+    pygame.draw.line(pantalla, col_nota, (sx, ZONA_Y + sy), (ANCHO + sx, ZONA_Y + sy), 2)
     pygame.draw.line(pantalla, BLANCO, (sx, ZONA_Y + 54 + sy), (ANCHO + sx, ZONA_Y + 54 + sy), 1)
 
     # nota actual de cada columna (puede cambiar de octava en el desenlace)
@@ -2766,7 +2904,11 @@ def dibujar_juego(partida, ahora):
     clip_anterior = pantalla.get_clip()
     pantalla.set_clip(pygame.Rect(0, 0, ANCHO, limite_notas + sy))
 
+    es_invisible = "invisible" in partida.get("mods", set())
     for grupo in partida["notas_cayendo"]:
+        # modificador INVISIBLE: las notas desaparecen en la mitad inferior
+        if es_invisible and grupo["y"] > ZONA_Y * 0.45:
+            continue
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
         cols_hold_activo = [c for c in grupo["cols"] if c in partida["holds_activos"]]
         cols_a_dibujar = list(set(pendientes + cols_hold_activo))
@@ -2798,14 +2940,14 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
             if col in pendientes:
                 if grupo.get("es_acorde"):
-                    pygame.draw.rect(pantalla, BLANCO, (x + 6,  gy,     ancho_col - 12, 28))
+                    pygame.draw.rect(pantalla, col_nota, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
-                    pygame.draw.rect(pantalla, BLANCO, (x + 11, gy + 5, ancho_col - 22, 18))
+                    pygame.draw.rect(pantalla, col_nota, (x + 11, gy + 5, ancho_col - 22, 18))
                 else:
-                    pygame.draw.rect(pantalla, BLANCO, (x + 6, gy, ancho_col - 12, 28))
+                    pygame.draw.rect(pantalla, col_nota, (x + 6, gy, ancho_col - 12, 28))
             xs.append(x + ancho_col // 2)
         if len(xs) > 1:
-            pygame.draw.line(pantalla, BLANCO, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
+            pygame.draw.line(pantalla, col_nota, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
 
     pantalla.set_clip(clip_anterior)
 
@@ -2814,7 +2956,7 @@ def dibujar_juego(partida, ahora):
 
     # combo
     if partida["combo"] >= 5:
-        combo_txt = fuente.render(f"{partida['combo']}x COMBO", True, BLANCO)
+        combo_txt = fuente.render(f"{partida['combo']}x COMBO", True, col_nota)
         pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 38))
 
     # barra de vida
@@ -2830,6 +2972,11 @@ def dibujar_juego(partida, ahora):
 
     dif_txt = fuente_chica.render(partida["dificultad"]["nombre"], True, GRIS_MED)
     pantalla.blit(dif_txt, (10, 10))
+    # indicador de stage si estamos en un run
+    si = partida.get("stage_info")
+    if si:
+        st_txt = fuente_chica.render(f"STAGE {si['n']}/{NUM_STAGES}", True, col_nota)
+        pantalla.blit(st_txt, (10, ALTO - 38))
     parte_txt = fuente_chica.render(parte, True, GRIS)
     pantalla.blit(parte_txt, (10, 28))
     # CAPA 3: mostrar evento activo
@@ -2846,6 +2993,10 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
     info = fuente_chica.render(f"{partida['cancion'].get('genero','')}  {partida['cancion']['instrumento']}  {partida['cancion']['escala'].upper()}  {partida['cancion']['bpm']}BPM", True, GRIS)
     pantalla.blit(info, (ANCHO - info.get_width() - 10, 10))
+    # multiplicador de mods activos
+    if partida.get("mult_mods", 1.0) > 1.0:
+        mult_txt = fuente_chica.render(f"MODS x{partida['mult_mods']:.2f}", True, col_nota)
+        pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 50))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
 
@@ -3001,7 +3152,15 @@ def dibujar_menu(seed_actual, cargando):
     pygame.draw.line(pantalla, GRIS, (60, 425), (ANCHO - 60, 425), 1)
 
     if seed_actual > 0:
-        enter = fuente_chica.render("ENTER = JUGAR     R = RESET", True, GRIS_MED)
+        gen_seed = genero_de_seed(int(seed_actual))
+        niv_seed = num_dificultad(int(seed_actual))
+        comp = cargar_progreso()
+        ya = clave_run(gen_seed, niv_seed) in comp
+        marca_ok = "  [COMPLETADO]" if ya else ""
+        col_gs = COLOR_GENERO.get(gen_seed, BLANCO)
+        run_txt = fuente_chica.render(f"{gen_seed} - {DIFICULTADES[niv_seed]['nombre']}{marca_ok}", True, col_gs)
+        pantalla.blit(run_txt, (ANCHO // 2 - run_txt.get_width() // 2, 432))
+        enter = fuente_chica.render("ENTER = RUN     M = MODS LIBRE     R = RESET", True, GRIS_MED)
         pantalla.blit(enter, (ANCHO // 2 - enter.get_width() // 2, 460))
 
     if seed_actual == 0:
@@ -3009,11 +3168,164 @@ def dibujar_menu(seed_actual, cargando):
             coin = fuente.render("INSERT COIN", True, BLANCO)
             pantalla.blit(coin, (ANCHO // 2 - coin.get_width() // 2, 460))
 
+    # contador de progreso global
+    total_runs = len(GENEROS) * len(DIFICULTADES)
+    comp_n = len(cargar_progreso())
+    prog_txt = fuente_chica.render(f"COMPLETADOS: {comp_n}/{total_runs}", True, GRIS_MED)
+    pantalla.blit(prog_txt, (ANCHO // 2 - prog_txt.get_width() // 2, 488))
+
     lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG", True, GRIS)
-    pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 510))
+    pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 512))
 
 config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion
 pausa_opcion = 0   # 0=continuar, 1=reiniciar, 2=salir
+mods_opcion = 0    # opcion seleccionada en pantalla de modificadores
+
+def calcular_mult_mods():
+    """Multiplicador total de puntos segun modificadores activos"""
+    mult = 1.0
+    for m in MODIFICADORES:
+        if m["id"] in mods_activos:
+            mult *= m["mult"]
+    return mult
+
+# ---------------- SISTEMA DE STAGES (modo roguelike) ----------------
+def mods_de_stage(n, rng):
+    """Devuelve el set de mods para el stage n (1..4)."""
+    if n == 1:
+        return set()
+    elif n in (2, 3):
+        return {rng.choice(MODS_FACILES)}
+    else:  # stage 4
+        return {"sudden"}
+
+def crear_run(seed_inicial):
+    """Crea un run de stages a partir de la seed cargada."""
+    nivel = num_dificultad(seed_inicial)
+    genero = genero_de_seed(seed_inicial)
+    rng = random.Random(int(seed_inicial) * 31 + 7)
+    seeds = [int(seed_inicial)]   # stage 1 usa la seed cargada
+    usadas = {int(seed_inicial)}
+    mods_stages = [set()]
+    for n in range(2, NUM_STAGES + 1):
+        s = buscar_seed_genero(genero, nivel, rng, evitar=usadas)
+        if s is None:
+            s = int(seed_inicial)   # fallback: reusar
+        usadas.add(s)
+        seeds.append(s)
+        mods_stages.append(mods_de_stage(n, rng))
+    return {
+        "genero": genero,
+        "nivel": nivel,
+        "stage": 1,            # stage actual (1..4)
+        "seeds": seeds,        # seed por stage
+        "mods": mods_stages,   # set de mods por stage
+        "puntos_total": 0,
+    }
+
+def dibujar_run_overview():
+    """Pantalla entre stages que muestra el progreso del run."""
+    pantalla.fill(NEGRO)
+    col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+    titulo = fuente_grande.render(run_actual["genero"], True, col_g)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 50))
+    dif_nom = DIFICULTADES[run_actual["nivel"]]["nombre"]
+    sub = fuente.render(f"{dif_nom}", True, GRIS_MED)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 110))
+    pygame.draw.line(pantalla, BLANCO, (60, 155), (ANCHO - 60, 155), 2)
+
+    nombres_stage = ["NORMAL", "1 MOD", "1 MOD", "SUDDEN DEATH"]
+    y0 = 190
+    for i in range(NUM_STAGES):
+        y = y0 + i * 70
+        st = i + 1
+        completado = st < run_actual["stage"]
+        actual = st == run_actual["stage"]
+        if completado:
+            estado = "[OK]"
+            color = col_g
+        elif actual:
+            estado = ">>>"
+            color = BLANCO
+        else:
+            estado = "   "
+            color = GRIS
+        linea = fuente.render(f"{estado}  STAGE {st}: {nombres_stage[i]}", True, color)
+        pantalla.blit(linea, (120, y))
+        # mostrar mods del stage
+        mods_st = run_actual["mods"][i]
+        if mods_st:
+            nombres = [m["nombre"] for m in MODIFICADORES if m["id"] in mods_st]
+            mod_txt = fuente_chica.render("+ " + ", ".join(nombres), True, color)
+            pantalla.blit(mod_txt, (160, y + 28))
+
+    cont = fuente_chica.render("ENTER = JUGAR STAGE     ESC = ABANDONAR RUN", True, GRIS_MED)
+    pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
+
+def dibujar_run_completado():
+    """Pantalla de run completado."""
+    pantalla.fill(NEGRO)
+    col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+    titulo = fuente_grande.render("RUN COMPLETO!", True, col_g)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 150))
+    dif_nom = DIFICULTADES[run_actual["nivel"]]["nombre"]
+    sub = fuente.render(f"{run_actual['genero']}  {dif_nom}", True, BLANCO)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 240))
+    pts = fuente.render(f"PUNTOS TOTALES: {run_actual['puntos_total']}", True, GRIS_MED)
+    pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 300))
+    cont = fuente_chica.render("ENTER = VOLVER AL MENU", True, GRIS)
+    pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
+
+def dibujar_run_fallido():
+    """Pantalla cuando perdes un stage."""
+    pantalla.fill(NEGRO)
+    titulo = fuente_grande.render("RUN FALLIDO", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 160))
+    sub = fuente.render(f"CAISTE EN STAGE {run_actual['stage']}/{NUM_STAGES}", True, GRIS_MED)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 250))
+    cont = fuente_chica.render("ENTER = VOLVER AL MENU", True, GRIS)
+    pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
+
+def dibujar_mods():
+    pantalla.fill(NEGRO)
+    titulo = fuente_grande.render("MODIFICADORES", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 40))
+    pygame.draw.line(pantalla, BLANCO, (60, 100), (ANCHO - 60, 100), 2)
+
+    sub = fuente_chica.render("SUBEN EL MULTIPLICADOR DE PUNTOS", True, GRIS_MED)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 115))
+
+    y0 = 160
+    for i, m in enumerate(MODIFICADORES):
+        y = y0 + i * 56
+        sel = (i == mods_opcion)
+        activo = m["id"] in mods_activos
+        # checkbox
+        box_x = 90
+        pygame.draw.rect(pantalla, GRIS, (box_x, y, 22, 22), 2)
+        if activo:
+            pygame.draw.rect(pantalla, BLANCO, (box_x + 4, y + 4, 14, 14))
+        # nombre + descripcion
+        color = BLANCO if sel else GRIS_MED
+        marca = "> " if sel else "  "
+        nom = fuente.render(f"{marca}{m['nombre']}", True, color)
+        pantalla.blit(nom, (box_x + 40, y - 2))
+        desc = fuente_chica.render(m["desc"], True, GRIS)
+        pantalla.blit(desc, (box_x + 40, y + 24))
+        # multiplicador
+        mult_txt = fuente_chica.render(f"x{m['mult']}", True, color)
+        pantalla.blit(mult_txt, (ANCHO - 120, y + 4))
+
+    # multiplicador total
+    mult_total = calcular_mult_mods()
+    pygame.draw.line(pantalla, GRIS, (60, 470), (ANCHO - 60, 470), 1)
+    total_txt = fuente.render(f"MULTIPLICADOR TOTAL: x{mult_total:.2f}", True, BLANCO)
+    pantalla.blit(total_txt, (ANCHO // 2 - total_txt.get_width() // 2, 485))
+
+    ayuda1 = fuente_chica.render("ARRIBA/ABAJO = ELEGIR   ESPACIO = ACTIVAR", True, GRIS)
+    pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 540))
+    ayuda2 = fuente_chica.render("ENTER = JUGAR   ESC = VOLVER", True, GRIS)
+    pantalla.blit(ayuda2, (ANCHO // 2 - ayuda2.get_width() // 2, 565))
 
 def dibujar_pausa(partida):
     """Dibuja overlay de pausa sobre el juego congelado"""
@@ -3099,6 +3411,7 @@ cargando_seed  = False
 teclas_sostenidas = set()
 nombre_input   = ""
 score_guardado = False
+run_actual     = None
 
 # arrancar la musica del menu con una seed aleatoria (DIFICIL+)
 dibujar_pantalla_carga(1.0, "MUSICA", 1, 1)
@@ -3118,12 +3431,13 @@ while corriendo:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = True
                 if evento.key == pygame.K_RETURN and seed_acumulada > 0:
-                    detener_musica_menu()
-                    pygame.mixer.stop()
-                    dibujar_carga_seed(seed_acumulada)
-                    partida = iniciar_partida(int(seed_acumulada))
-                    score_guardado = False
-                    ESTADO  = "jugando"
+                    # arrancar un RUN de stages
+                    run_actual = crear_run(int(seed_acumulada))
+                    ESTADO = "run_overview"
+                if evento.key == pygame.K_m and seed_acumulada > 0:
+                    # modo libre de mods (sin stages)
+                    mods_opcion = 0
+                    ESTADO = "mods"
                 if evento.key == pygame.K_r:
                     seed_acumulada = 0.0
                     cargando_seed  = False
@@ -3135,6 +3449,61 @@ while corriendo:
             if evento.type == pygame.KEYUP:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = False
+
+        elif ESTADO == "run_overview":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    run_actual = None
+                    ESTADO = "menu"
+                    nueva_musica_menu_aleatoria()
+                elif evento.key == pygame.K_RETURN:
+                    detener_musica_menu()
+                    pygame.mixer.stop()
+                    idx = run_actual["stage"] - 1
+                    seed_stage = run_actual["seeds"][idx]
+                    mods_stage = run_actual["mods"][idx]
+                    dibujar_carga_seed(seed_stage)
+                    partida = iniciar_partida(
+                        seed_stage, mods=mods_stage,
+                        stage_info={"n": run_actual["stage"]})
+                    score_guardado = False
+                    ESTADO = "jugando"
+
+        elif ESTADO == "run_completado":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                    run_actual = None
+                    ESTADO = "menu"
+                    nueva_musica_menu_aleatoria()
+
+        elif ESTADO == "run_fallido":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                    run_actual = None
+                    ESTADO = "menu"
+                    nueva_musica_menu_aleatoria()
+
+        elif ESTADO == "mods":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "menu"
+                elif evento.key == pygame.K_UP:
+                    mods_opcion = (mods_opcion - 1) % len(MODIFICADORES)
+                elif evento.key == pygame.K_DOWN:
+                    mods_opcion = (mods_opcion + 1) % len(MODIFICADORES)
+                elif evento.key == pygame.K_SPACE:
+                    mid = MODIFICADORES[mods_opcion]["id"]
+                    if mid in mods_activos:
+                        mods_activos.discard(mid)
+                    else:
+                        mods_activos.add(mid)
+                elif evento.key == pygame.K_RETURN:
+                    detener_musica_menu()
+                    pygame.mixer.stop()
+                    dibujar_carga_seed(seed_acumulada)
+                    partida = iniciar_partida(int(seed_acumulada))
+                    score_guardado = False
+                    ESTADO = "jugando"
 
         elif ESTADO == "leaderboard":
             if evento.type == pygame.KEYDOWN:
@@ -3204,11 +3573,18 @@ while corriendo:
                     pausa_opcion = (pausa_opcion + 1) % 3
                 elif evento.key == pygame.K_RETURN:
                     if pausa_opcion == 1:
-                        # REINICIAR misma seed
+                        # REINICIAR stage actual
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
                         canal_hold.clear()
-                        partida = iniciar_partida(int(seed_acumulada))
+                        if run_actual is not None:
+                            idx = run_actual["stage"] - 1
+                            partida = iniciar_partida(
+                                run_actual["seeds"][idx],
+                                mods=run_actual["mods"][idx],
+                                stage_info={"n": run_actual["stage"]})
+                        else:
+                            partida = iniciar_partida(int(seed_acumulada))
                         score_guardado = False
                         pausa_opcion = 0
                         ESTADO = "jugando"
@@ -3217,28 +3593,53 @@ while corriendo:
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
                         canal_hold.clear()
-                        if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
+                        if run_actual is not None:
+                            # abandonar el run
+                            run_actual = None
+                            ESTADO = "menu"
+                            nueva_musica_menu_aleatoria()
+                        elif not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
                             nombre_input = ""
                             ESTADO = "input_nombre"
                         else:
                             ESTADO = "leaderboard"
-                        nueva_musica_menu_aleatoria()
+                            nueva_musica_menu_aleatoria()
                         pausa_opcion = 0
 
         elif ESTADO == "jugando":
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
-                        # FIN / GAME OVER: salir
+                        # FIN / GAME OVER
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
                         canal_hold.clear()
-                        if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
-                            nombre_input = ""
-                            ESTADO = "input_nombre"
+                        if run_actual is not None:
+                            # --- en modo RUN de stages ---
+                            if partida.get("game_over"):
+                                # perdio el stage -> run fallido
+                                ESTADO = "run_fallido"
+                                nueva_musica_menu_aleatoria()
+                            else:
+                                # paso el stage: sumar puntos y avanzar
+                                run_actual["puntos_total"] += partida["puntos"]
+                                if run_actual["stage"] >= NUM_STAGES:
+                                    # run completo!
+                                    marcar_completado(run_actual["genero"], run_actual["nivel"])
+                                    ESTADO = "run_completado"
+                                    nueva_musica_menu_aleatoria()
+                                else:
+                                    run_actual["stage"] += 1
+                                    ESTADO = "run_overview"
+                                    nueva_musica_menu_aleatoria()
                         else:
-                            ESTADO = "leaderboard"
-                        nueva_musica_menu_aleatoria()
+                            # modo libre normal
+                            if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
+                                nombre_input = ""
+                                ESTADO = "input_nombre"
+                            else:
+                                ESTADO = "leaderboard"
+                            nueva_musica_menu_aleatoria()
                     else:
                         # PAUSAR
                         pygame.mixer.stop()
@@ -3315,34 +3716,35 @@ while corriendo:
                                         num_cols = partida["dificultad"]["columnas"]
                                         ancho_col = ANCHO // num_cols
                                         cx = col * ancho_col + ancho_col // 2
+                                        col_g = COLOR_GENERO.get(partida["cancion"].get("genero",""), BLANCO)
                                         if distancia < 30:
                                             pts = 5
                                             partida["combo"] += 1
                                             # potencia crece con el combo (1.0 a 2.5)
-                                            pot = min(1.0 + partida["combo"] * 0.05, 2.5)
+                                            pot = min(1.0 + partida["combo"] * 0.03, 1.8)
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
-                                            combo_particulas = min(100 + partida["combo"] * 8, 500)
-                                            crear_explosion(cx, ZONA_Y, combo_particulas, potencia=pot)
-                                            crear_onda(cx, ZONA_Y, 1.0)
-                                            crear_onda(cx, ZONA_Y, 0.6, r0=int(4 + partida["combo"] * 0.5))
-                                            if partida["combo"] >= 20:
-                                                crear_onda(cx, ZONA_Y, 0.8, r0=int(20 + partida["combo"]))
-                                            crear_flash(col, min(1.0, 0.7 + partida["combo"] * 0.02))
-                                            crear_shake(min(8 + partida["combo"] * 0.3, 22))
+                                            combo_particulas = min(50 + partida["combo"] * 4, 250)
+                                            crear_explosion(cx, ZONA_Y, combo_particulas, color=col_g, potencia=pot)
+                                            crear_onda(cx, ZONA_Y, 0.7)
+                                            crear_onda(cx, ZONA_Y, 0.4, r0=int(4 + partida["combo"] * 0.3))
+                                            if partida["combo"] >= 30:
+                                                crear_onda(cx, ZONA_Y, 0.5, r0=int(15 + partida["combo"] * 0.5))
+                                            crear_flash(col, min(0.8, 0.5 + partida["combo"] * 0.01))
+                                            crear_shake(min(5 + partida["combo"] * 0.15, 12))
                                         elif distancia < 60:
                                             pts = 3
                                             partida["combo"] += 1
-                                            pot = min(1.0 + partida["combo"] * 0.035, 2.0)
+                                            pot = min(1.0 + partida["combo"] * 0.02, 1.5)
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, min(60 + partida["combo"] * 4, 280), potencia=pot)
-                                            crear_onda(cx, ZONA_Y, 0.7)
-                                            crear_flash(col, 0.6)
-                                            crear_shake(min(4 + partida["combo"] * 0.2, 14))
+                                            crear_explosion(cx, ZONA_Y, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot)
+                                            crear_onda(cx, ZONA_Y, 0.5)
+                                            crear_flash(col, 0.4)
+                                            crear_shake(min(3 + partida["combo"] * 0.1, 8))
                                         elif distancia < 100:
                                             pts = 1
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
-                                            crear_explosion(cx, ZONA_Y, 20)
+                                            crear_explosion(cx, ZONA_Y, 20, color=col_g)
                                             crear_onda(cx, ZONA_Y, 0.4)
                                             crear_flash(col, 0.3)
                                         else:
@@ -3365,7 +3767,7 @@ while corriendo:
                                                 "midi":  midi_fijo,
                                             }
                                             if pts > 0:
-                                                total_pts = pts * combo_mult
+                                                total_pts = int(pts * combo_mult * partida.get("mult_mods", 1.0))
                                                 partida["puntos"] += total_pts
                                                 txt = f"+{total_pts}"
                                                 if combo_mult > 1:
@@ -3373,7 +3775,7 @@ while corriendo:
                                                 crear_texto_flotante(cx, ZONA_Y - 20, txt, BLANCO, combo_mult > 2)
                                         else:
                                             if pts > 0:
-                                                total_pts = pts * len(grupo["cols"]) * combo_mult
+                                                total_pts = int(pts * len(grupo["cols"]) * combo_mult * partida.get("mult_mods", 1.0))
                                                 txt_pts = f"+{total_pts}"
                                                 if combo_mult > 1:
                                                     txt_pts += f" x{combo_mult}"
@@ -3438,6 +3840,22 @@ while corriendo:
         tick_musica_menu()
         dibujar_config()
 
+    elif ESTADO == "mods":
+        tick_musica_menu()
+        dibujar_mods()
+
+    elif ESTADO == "run_overview":
+        tick_musica_menu()
+        dibujar_run_overview()
+
+    elif ESTADO == "run_completado":
+        tick_musica_menu()
+        dibujar_run_completado()
+
+    elif ESTADO == "run_fallido":
+        tick_musica_menu()
+        dibujar_run_fallido()
+
     elif ESTADO == "input_nombre":
         tick_musica_menu()
         dibujar_input_nombre(nombre_input)
@@ -3464,7 +3882,8 @@ while corriendo:
             for col in holds_perdidos:
                 del partida["holds_activos"][col]
 
-            PIXELES_POR_MS = VELOCIDAD / (1000 / 60)
+            vel_p = partida.get("velocidad", VELOCIDAD)
+            PIXELES_POR_MS = vel_p / (1000 / 60)
             ANTICIPACION   = (ZONA_Y + 40) / PIXELES_POR_MS
 
             if not partida["terminada"]:
@@ -3478,7 +3897,7 @@ while corriendo:
                         "acertadas": set(),
                         "es_acorde": n.get("es_acorde", False),
                         "hold":      hold_ms,
-                        "hold_px":   hold_pixels(hold_ms, VELOCIDAD),
+                        "hold_px":   hold_pixels(hold_ms, vel_p),
                     })
                     partida["indice_jugador"] += 1
 
@@ -3495,6 +3914,8 @@ while corriendo:
                         partida["combo"] = 0
                         partida["puntos"] = max(0, partida["puntos"] - 5)
                         partida["vida"] = max(0, partida["vida"] - 2)
+                        if "sudden" in partida.get("mods", set()):
+                            partida["vida"] = 0
                         num_cols = partida["dificultad"]["columnas"]
                         ancho_col = ANCHO // num_cols
                         miss_x = n["cols"][0] * ancho_col + ancho_col // 2
