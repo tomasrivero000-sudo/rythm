@@ -3125,7 +3125,7 @@ def dibujar_juego(partida, ahora):
         sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
         pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2 + 10))
         if run_actual is not None:
-            esc2 = fuente_chica.render("ESC = RESULTADO DEL RUN", True, GRIS)
+            esc2 = fuente_chica.render("ESPACIO = RESULTADO DEL RUN", True, GRIS)
         else:
             esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 50))
@@ -3148,9 +3148,9 @@ def dibujar_juego(partida, ahora):
         if run_actual is not None:
             stage_n = run_actual["stage"]
             if stage_n < NUM_STAGES:
-                esc2 = fuente_chica.render(f"ESC = SIGUIENTE STAGE ({stage_n + 1}/{NUM_STAGES})", True, GRIS)
+                esc2 = fuente_chica.render(f"ESPACIO = SIGUIENTE STAGE ({stage_n + 1}/{NUM_STAGES})", True, GRIS)
             else:
-                esc2 = fuente_chica.render("ESC = COMPLETAR RUN!", True, GRIS)
+                esc2 = fuente_chica.render("ESPACIO = COMPLETAR RUN!", True, GRIS)
         else:
             esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
@@ -3329,7 +3329,7 @@ def dibujar_run_overview():
             mod_txt = fuente_chica.render("+ ???", True, GRIS)
             pantalla.blit(mod_txt, (160, y + 28))
 
-    cont = fuente_chica.render("ENTER = JUGAR STAGE     ESC = ABANDONAR RUN", True, GRIS_MED)
+    cont = fuente_chica.render("ESPACIO = JUGAR STAGE     ESC = ABANDONAR RUN", True, GRIS_MED)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
 # --- animacion de dado para revelar el mod del siguiente stage ---
@@ -3400,7 +3400,7 @@ def dibujar_dado():
                 mult = fuente_chica.render(f"MULTIPLICADOR: x{m['mult']}", True, GRIS_MED)
                 pantalla.blit(mult, (ANCHO // 2 - mult.get_width() // 2, dado_y + dado_h + 45))
                 break
-        cont = fuente_chica.render("ENTER = CONTINUAR", True, GRIS)
+        cont = fuente_chica.render("ESPACIO = CONTINUAR", True, GRIS)
         pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
 run_completado_inicio = 0
@@ -3523,7 +3523,7 @@ def dibujar_run_completado():
         st = fuente_chica.render(f"STAGE {i+1}  [OK]", True, st_col)
         pantalla.blit(st, (ANCHO // 2 - st.get_width() // 2, y_st + i * 22))
 
-    cont = fuente_chica.render("ENTER = CONTINUAR", True, GRIS)
+    cont = fuente_chica.render("ESPACIO = CONTINUAR", True, GRIS)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
 def dibujar_run_fallido():
@@ -3766,7 +3766,7 @@ while corriendo:
                     run_actual = None
                     ESTADO = "menu"
                     nueva_musica_menu_aleatoria()
-                elif evento.key == pygame.K_RETURN:
+                elif evento.key == pygame.K_SPACE:
                     detener_musica_menu()
                     pygame.mixer.stop()
                     idx = run_actual["stage"] - 1
@@ -3784,7 +3784,7 @@ while corriendo:
                 # solo avanzar cuando la animacion termino
                 dado_elapsed = pygame.time.get_ticks() - dado_inicio
                 if dado_elapsed >= DADO_DURACION:
-                    if evento.key == pygame.K_RETURN:
+                    if evento.key == pygame.K_SPACE:
                         ESTADO = "run_overview"
                         nueva_musica_menu_aleatoria()
                     elif evento.key == pygame.K_ESCAPE:
@@ -3794,7 +3794,7 @@ while corriendo:
 
         elif ESTADO == "run_completado":
             if evento.type == pygame.KEYDOWN:
-                if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
                     pts_run = run_actual.get("puntos_total", 0)
                     if not score_guardado and pts_run > 0 and es_highscore(pts_run):
                         nombre_input = ""
@@ -3806,7 +3806,7 @@ while corriendo:
 
         elif ESTADO == "run_fallido":
             if evento.type == pygame.KEYDOWN:
-                if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
                     pts_run = run_actual.get("puntos_total", 0) + partida.get("puntos", 0)
                     if not score_guardado and pts_run > 0 and es_highscore(pts_run):
                         partida["puntos"] = pts_run
@@ -3967,7 +3967,7 @@ while corriendo:
         elif ESTADO == "jugando":
             zy_p = partida.get("zona_y", ZONA_Y)
             if evento.type == pygame.KEYDOWN:
-                if evento.key == pygame.K_ESCAPE:
+                if evento.key in (pygame.K_ESCAPE, pygame.K_SPACE):
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
                         # FIN / GAME OVER
                         pygame.mixer.stop()
@@ -4009,7 +4009,7 @@ while corriendo:
                             else:
                                 ESTADO = "leaderboard"
                             nueva_musica_menu_aleatoria()
-                    else:
+                    elif evento.key == pygame.K_ESCAPE:
                         # PAUSAR
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
