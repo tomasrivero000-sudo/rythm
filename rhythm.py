@@ -4129,7 +4129,7 @@ while corriendo:
                                         combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
-                                                ch = cache_notas_largas[midi_fijo].play()
+                                                ch = cache_notas_largas[midi_fijo].play(loops=-1)
                                                 if ch:
                                                     ch.set_volume(config["volumen"])
                                                     canal_hold[col] = ch
