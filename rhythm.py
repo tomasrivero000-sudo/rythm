@@ -1794,7 +1794,21 @@ GENEROS = {
 }
 
 def elegir_genero(rng):
-    return rng.choice(list(GENEROS.keys()))
+    # pesos: AMBIENT sale mucho menos (~0.5% vs ~20% cada otro)
+    pesos = {
+        "TECHNO": 20, "HIP HOP": 20, "DNB": 20,
+        "SYNTHWAVE": 20, "AMBIENT": 1, "REGGAETON": 20,
+    }
+    generos = list(pesos.keys())
+    weights = [pesos[g] for g in generos]
+    total = sum(weights)
+    r = rng.uniform(0, total)
+    acum = 0
+    for g, w in zip(generos, weights):
+        acum += w
+        if r <= acum:
+            return g
+    return generos[-1]
 
 def generar_patrones_drums(rng, genero=None):
     if genero is not None and genero in GENEROS:
@@ -2983,7 +2997,38 @@ def dibujar_menu(seed_actual, cargando):
     lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG", True, GRIS)
     pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 510))
 
-config_opcion = 0  # 0=brillo, 1=volumen, 2=resolucion
+config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion
+pausa_opcion = 0   # 0=continuar, 1=reiniciar, 2=salir
+
+def dibujar_pausa(partida):
+    """Dibuja overlay de pausa sobre el juego congelado"""
+    # fondo semi-transparente
+    overlay = pygame.Surface((ANCHO, ALTO))
+    overlay.fill(NEGRO)
+    overlay.set_alpha(180)
+    pantalla.blit(overlay, (0, 0))
+    # titulo
+    titulo = fuente_grande.render("PAUSA", True, BLANCO)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 180))
+    pygame.draw.line(pantalla, BLANCO, (200, 240), (ANCHO - 200, 240), 2)
+    # info de partida
+    info = fuente_chica.render(
+        f"{partida['cancion'].get('genero','')}  {partida['cancion']['instrumento']}  "
+        f"{partida['cancion']['bpm']}BPM  SEED {int(partida['seed'])}",
+        True, GRIS_MED)
+    pantalla.blit(info, (ANCHO // 2 - info.get_width() // 2, 260))
+    # opciones
+    opciones = ["CONTINUAR", "REINICIAR", "SALIR"]
+    for i, txt in enumerate(opciones):
+        y = 320 + i * 50
+        sel = (i == pausa_opcion)
+        marca = "> " if sel else "  "
+        color = BLANCO if sel else GRIS_MED
+        t = fuente.render(f"{marca}{txt}", True, color)
+        pantalla.blit(t, (ANCHO // 2 - t.get_width() // 2, y))
+    # ayuda
+    ayuda = fuente_chica.render("ESC = CONTINUAR     FLECHAS + ENTER", True, GRIS)
+    pantalla.blit(ayuda, (ANCHO // 2 - ayuda.get_width() // 2, 500))
 
 def dibujar_config():
     pantalla.fill(NEGRO)
@@ -3130,17 +3175,65 @@ while corriendo:
                     if len(nombre_input) < 10 and evento.unicode.isprintable() and evento.unicode.strip():
                         nombre_input += evento.unicode.upper()
 
+        elif ESTADO == "pausado":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE or (evento.key == pygame.K_RETURN and pausa_opcion == 0):
+                    # CONTINUAR
+                    pausa_dur = pygame.time.get_ticks() - partida["pausa_inicio"]
+                    partida["inicio"] += pausa_dur
+                    del partida["pausa_inicio"]
+                    ESTADO = "jugando"
+                elif evento.key == pygame.K_UP:
+                    pausa_opcion = (pausa_opcion - 1) % 3
+                elif evento.key == pygame.K_DOWN:
+                    pausa_opcion = (pausa_opcion + 1) % 3
+                elif evento.key == pygame.K_RETURN:
+                    if pausa_opcion == 1:
+                        # REINICIAR misma seed
+                        pygame.mixer.stop()
+                        teclas_sostenidas.clear()
+                        canal_hold.clear()
+                        partida = iniciar_partida(int(seed_acumulada))
+                        score_guardado = False
+                        pausa_opcion = 0
+                        ESTADO = "jugando"
+                    elif pausa_opcion == 2:
+                        # SALIR
+                        pygame.mixer.stop()
+                        teclas_sostenidas.clear()
+                        canal_hold.clear()
+                        if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
+                            nombre_input = ""
+                            ESTADO = "input_nombre"
+                        else:
+                            ESTADO = "leaderboard"
+                        nueva_musica_menu_aleatoria()
+                        pausa_opcion = 0
+
         elif ESTADO == "jugando":
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
-                    pygame.mixer.stop()
-                    teclas_sostenidas.clear()
-                    if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
-                        nombre_input = ""
-                        ESTADO = "input_nombre"
+                    if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
+                        # FIN / GAME OVER: salir
+                        pygame.mixer.stop()
+                        teclas_sostenidas.clear()
+                        canal_hold.clear()
+                        if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
+                            nombre_input = ""
+                            ESTADO = "input_nombre"
+                        else:
+                            ESTADO = "leaderboard"
+                        nueva_musica_menu_aleatoria()
                     else:
-                        ESTADO = "leaderboard"
-                    nueva_musica_menu_aleatoria()
+                        # PAUSAR
+                        pygame.mixer.stop()
+                        teclas_sostenidas.clear()
+                        for c in list(canal_hold.keys()):
+                            canal_hold[c].stop()
+                        canal_hold.clear()
+                        partida["pausa_inicio"] = pygame.time.get_ticks()
+                        pausa_opcion = 0
+                        ESTADO = "pausado"
                 elif evento.key == pygame.K_d and (partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"])) and not partida.get("export_ruta") and not partida.get("exportando"):
                     partida["exportando"] = True
                     pantalla.fill(NEGRO)
@@ -3333,6 +3426,11 @@ while corriendo:
     elif ESTADO == "input_nombre":
         tick_musica_menu()
         dibujar_input_nombre(nombre_input)
+
+    elif ESTADO == "pausado":
+        ahora = partida["pausa_inicio"] - partida["inicio"]
+        dibujar_juego(partida, ahora)
+        dibujar_pausa(partida)
 
     elif ESTADO == "jugando":
         ahora = ahora_ms - partida["inicio"]
