@@ -25,7 +25,7 @@ config = {
     "brillo": 1.0,      # 0.3 a 1.0
     "volumen": 1.0,     # 0.0 a 1.0
     "vol_menu": 0.5,    # 0.0 a 1.0 (volumen de la musica del menu)
-    "res_idx": 0,       # indice en RESOLUCIONES
+    "res_idx": 2,       # indice en RESOLUCIONES (1080x960)
 }
 
 # la ventana real puede cambiar de tamaño; el juego siempre dibuja en 720x640 y se escala
@@ -3383,23 +3383,36 @@ def dibujar_pausa(partida):
     pantalla.blit(overlay, (0, 0))
     # titulo
     titulo = fuente_grande.render("PAUSA", True, BLANCO)
-    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 180))
-    pygame.draw.line(pantalla, BLANCO, (200, 240), (ANCHO - 200, 240), 2)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 160))
+    pygame.draw.line(pantalla, BLANCO, (200, 220), (ANCHO - 200, 220), 2)
     # info de partida
     info = fuente_chica.render(
         f"{partida['cancion'].get('genero','')}  {partida['cancion']['instrumento']}  "
         f"{partida['cancion']['bpm']}BPM  SEED {int(partida['seed'])}",
         True, GRIS_MED)
-    pantalla.blit(info, (ANCHO // 2 - info.get_width() // 2, 260))
-    # opciones
-    opciones = ["CONTINUAR", "REINICIAR", "SALIR"]
+    pantalla.blit(info, (ANCHO // 2 - info.get_width() // 2, 240))
+    # opciones: 0=continuar, 1=volumen, 2=reiniciar, 3=salir
+    opciones = ["CONTINUAR", "VOLUMEN", "REINICIAR", "SALIR"]
     for i, txt in enumerate(opciones):
-        y = 320 + i * 50
+        y = 290 + i * 48
         sel = (i == pausa_opcion)
         marca = "> " if sel else "  "
         color = BLANCO if sel else GRIS_MED
-        t = fuente.render(f"{marca}{txt}", True, color)
-        pantalla.blit(t, (ANCHO // 2 - t.get_width() // 2, y))
+        if i == 1:
+            # barra de volumen
+            t = fuente.render(f"{marca}{txt}", True, color)
+            pantalla.blit(t, (140, y))
+            barra_w = 180
+            barra_x = 400
+            pygame.draw.rect(pantalla, GRIS, (barra_x, y + 6, barra_w, 14))
+            relleno = int(barra_w * config["volumen"])
+            pygame.draw.rect(pantalla, color, (barra_x, y + 6, relleno, 14))
+            pygame.draw.rect(pantalla, BLANCO, (barra_x, y + 6, barra_w, 14), 1)
+            pct = fuente_chica.render(f"{int(config['volumen'] * 100)}%", True, color)
+            pantalla.blit(pct, (barra_x + barra_w + 10, y + 6))
+        else:
+            t = fuente.render(f"{marca}{txt}", True, color)
+            pantalla.blit(t, (ANCHO // 2 - t.get_width() // 2, y))
     # ayuda
     ayuda = fuente_chica.render("ESC = CONTINUAR     FLECHAS + ENTER", True, GRIS)
     pantalla.blit(ayuda, (ANCHO // 2 - ayuda.get_width() // 2, 500))
@@ -3627,11 +3640,15 @@ while corriendo:
                     del partida["pausa_inicio"]
                     ESTADO = "jugando"
                 elif evento.key == pygame.K_UP:
-                    pausa_opcion = (pausa_opcion - 1) % 3
+                    pausa_opcion = (pausa_opcion - 1) % 4
                 elif evento.key == pygame.K_DOWN:
-                    pausa_opcion = (pausa_opcion + 1) % 3
+                    pausa_opcion = (pausa_opcion + 1) % 4
+                elif evento.key == pygame.K_LEFT and pausa_opcion == 1:
+                    config["volumen"] = max(0.0, round(config["volumen"] - 0.1, 1))
+                elif evento.key == pygame.K_RIGHT and pausa_opcion == 1:
+                    config["volumen"] = min(1.0, round(config["volumen"] + 0.1, 1))
                 elif evento.key == pygame.K_RETURN:
-                    if pausa_opcion == 1:
+                    if pausa_opcion == 2:
                         # REINICIAR stage actual
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
@@ -3647,7 +3664,7 @@ while corriendo:
                         score_guardado = False
                         pausa_opcion = 0
                         ESTADO = "jugando"
-                    elif pausa_opcion == 2:
+                    elif pausa_opcion == 3:
                         # SALIR
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
