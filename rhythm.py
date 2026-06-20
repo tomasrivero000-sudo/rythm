@@ -225,12 +225,13 @@ MODIFICADORES = [
     {"id": "veloz",      "nombre": "VELOCIDAD x2", "desc": "notas el doble de rapido", "mult": 1.5},
     {"id": "invisible",  "nombre": "INVISIBLES",  "desc": "notas desaparecen al caer", "mult": 1.8},
     {"id": "inverso",    "nombre": "INVERSO",     "desc": "notas suben en vez de caer", "mult": 1.4},
+    {"id": "acelerando", "nombre": "ACELERANDO",  "desc": "velocidad sube gradualmente", "mult": 1.3},
     {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
 ]
 mods_activos = set()   # ids de modificadores seleccionados (modo libre)
 
 # mods "faciles" que pueden salir en el dado de los stages 2 y 3
-MODS_FACILES = ["espejo", "inverso", "veloz"]
+MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando"]
 
 # --- modo STAGES (tipo roguelike): completar generos en cada dificultad ---
 # cada run son 4 stages del mismo genero+dificultad:
@@ -4262,6 +4263,11 @@ while corriendo:
                 del partida["holds_activos"][col]
 
             vel_p = partida.get("velocidad", VELOCIDAD)
+            # ACELERANDO: velocidad sube de 1x a 2x a lo largo de la cancion
+            if "acelerando" in partida.get("mods", set()):
+                duracion = partida["cancion"]["duracion_loop"]
+                progreso = min(ahora / max(1, duracion), 1.0)
+                vel_p *= (1.0 + progreso)  # 1x al inicio, 2x al final
             PIXELES_POR_MS = vel_p / (1000 / 60)
             es_inv = partida.get("es_inverso", False)
             if es_inv:
