@@ -3999,26 +3999,27 @@ def dibujar_juego(partida, ahora):
         else:
             sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
             pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
+        # texto de accion (siguiente stage / volver)
         if run_actual is not None:
             stage_n = run_actual["stage"]
             if stage_n < NUM_STAGES:
                 esc2 = fuente_chica.render(f"ESPACIO = SIGUIENTE STAGE ({stage_n + 1}/{NUM_STAGES})", True, GRIS)
             else:
                 esc2 = fuente_chica.render("ESPACIO = COMPLETAR RUN!", True, GRIS)
-            pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 60))
         else:
             esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
-            pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
+        pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 62))
+        # estado de exportacion (debajo, con margen suficiente)
         ruta = partida.get("export_ruta")
         if ruta:
             ok_txt = fuente_chica.render("GUARDADA EN export/", True, BLANCO)
-            pantalla.blit(ok_txt, (ANCHO // 2 - ok_txt.get_width() // 2, ALTO // 2 + 65))
+            pantalla.blit(ok_txt, (ANCHO // 2 - ok_txt.get_width() // 2, ALTO // 2 + 92))
         elif partida.get("exportando"):
             ex_txt = fuente_chica.render("GUARDANDO...", True, GRIS_MED)
-            pantalla.blit(ex_txt, (ANCHO // 2 - ex_txt.get_width() // 2, ALTO // 2 + 65))
+            pantalla.blit(ex_txt, (ANCHO // 2 - ex_txt.get_width() // 2, ALTO // 2 + 92))
         else:
             dl_txt = fuente_chica.render("D = DESCARGAR CANCION", True, BLANCO)
-            pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 65))
+            pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 92))
 
 # ═══════════════════════════════════════════════════════ >>PANTALLAS<< ═══
 
