@@ -251,19 +251,25 @@ ACORDES_PATRON = {
     "blues":       [[0, 2, 4], [3, 5, 7], [0, 2, 4], [2, 4, 6]],
 }
 
-# progresiones armónicas reales (indices de grado en la escala)
+# progresiones armónicas reales (indices de grado en la escala).
+# Todas resuelven correctamente: terminan en I o preparan el retorno a I.
+# Muchas incluyen la cadencia autentica V->I (la resolucion mas fuerte).
 PROGRESIONES = [
-    [0, 3, 4, 0],    # I - IV - V - I
-    [0, 3, 4, 3],    # I - IV - V - IV
-    [0, 5, 3, 4],    # I - vi - IV - V
-    [0, 4, 5, 3],    # I - V - vi - IV
-    [0, 3, 0, 4],    # I - IV - I - V
-    [0, 2, 3, 4],    # I - iii - IV - V
-    [0, 5, 3, 0],    # I - vi - IV - I
+    [0, 3, 4, 0],    # I - IV - V - I   (cadencia autentica clasica)
+    [0, 5, 3, 4],    # I - vi - IV - V  (progresion pop, semicadencia en V)
+    [0, 4, 5, 3],    # I - V - vi - IV  (pop "axis")
+    [0, 3, 0, 4],    # I - IV - I - V   (blues-ish, abre a dominante)
+    [0, 5, 1, 4],    # I - vi - ii - V  (circulo de quintas, muy fuerte)
+    [0, 1, 4, 0],    # I - ii - V - I   (ii-V-I, el mas jazzistico)
+    [0, 5, 3, 0],    # I - vi - IV - I  (plagal, "amen")
     [0, 3, 5, 4],    # I - IV - vi - V
-    [0, 0, 3, 4],    # I - I - IV - V
-    [0, 4, 3, 3],    # I - V - IV - IV
+    [0, 4, 3, 4],    # I - V - IV - V   (rock, oscilacion)
+    [0, 2, 3, 4],    # I - iii - IV - V (mediante ascendente)
 ]
+
+# grados que funcionan como dominante (crean tension que pide resolver a I).
+# En estos grados, si la escala es menor, se sube la tercera para tener sensible.
+GRADOS_DOMINANTE = {4}   # el V
 
 DIFICULTADES = {
     1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.30, "bpm_mult": 0.75, "vel_mult": 0.60},
@@ -2341,14 +2347,30 @@ def nota_midi(tonica, escala, grado):
     octava = grado // len(escala)
     return tonica + escala[grado % len(escala)] + octava * 12
 
+def _escala_es_menor(escala):
+    """Detecta si una escala es menor: la tercera (grado 2) esta a 3 semitonos."""
+    return len(escala) >= 3 and escala[2] == 3
+
 def tonos_acorde(tonica_midi, escala, grado):
-    """Devuelve los 3 tonos (triada) de un acorde construido sobre 'grado'
-    de la escala: fundamental, tercera y quinta (grados +2 y +4)."""
-    return [
-        nota_midi(tonica_midi, escala, grado),
-        nota_midi(tonica_midi, escala, grado + 2),
-        nota_midi(tonica_midi, escala, grado + 4),
-    ]
+    """Devuelve los 3 tonos (triada) de un acorde sobre 'grado' de la escala:
+    fundamental, tercera y quinta (grados +2 y +4).
+    En escalas menores, el acorde de dominante (V) recibe la tercera mayor
+    (nota sensible) para crear la tension-resolucion caracteristica de la
+    musica tonal: la sensible sube un semitono para resolver a la tonica."""
+    fund = nota_midi(tonica_midi, escala, grado)
+    terc = nota_midi(tonica_midi, escala, grado + 2)
+    quin = nota_midi(tonica_midi, escala, grado + 4)
+    if grado in GRADOS_DOMINANTE and _escala_es_menor(escala):
+        # subir la tercera del V medio tono -> sensible (dominante mayor)
+        terc += 1
+    return [fund, terc, quin]
+
+def tonos_septima(tonica_midi, escala, grado):
+    """Como tonos_acorde pero agrega la septima (grado +6) para acordes de 4 notas.
+    Enriquece la armonia en acordes tocados por el jugador."""
+    base = tonos_acorde(tonica_midi, escala, grado)
+    sept = nota_midi(tonica_midi, escala, grado + 6)
+    return base + [sept]
 
 def ajustar_a_acorde(midi, tonos_ac, escala, tonica_midi, fuerza=1.0):
     """Corrige una nota MIDI hacia el tono de acorde mas cercano.
@@ -2376,6 +2398,24 @@ def ajustar_a_acorde(midi, tonos_ac, escala, tonica_midi, fuerza=1.0):
         if abs(cand - midi) < abs(nuevo - midi):
             nuevo = cand
     return nuevo
+
+def resolver_disonancia(midi, tonos_ac, escala, tonica_midi):
+    """Resuelve una nota disonante por grado conjunto descendente al tono de
+    acorde mas cercano hacia abajo (convencion: las tensiones bajan para
+    resolver). Si ya es tono de acorde, la deja igual."""
+    if not tonos_ac:
+        return midi
+    pc = midi % 12
+    clases_ac = {t % 12 for t in tonos_ac}
+    if pc in clases_ac:
+        return midi  # ya es consonante
+    # buscar el tono de acorde mas cercano hacia abajo (resolucion descendente)
+    for baja in range(1, 4):
+        cand_pc = (pc - baja) % 12
+        if cand_pc in clases_ac:
+            return midi - baja
+    # si no encuentra abajo, usar el ajuste normal
+    return ajustar_a_acorde(midi, tonos_ac, escala, tonica_midi)
 
 NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 def midi_a_nombre(midi):
@@ -3153,16 +3193,24 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                 if densidad < 1.0 and s != 0 and rng.random() > densidad:
                     continue
                 midi_nota = notas_columnas[col] + oct_off
-                # --- melodia consciente del acorde ---
-                # tiempos fuertes (s=0,4,8,12) resuelven al acorde; debiles pueden tensar
-                en_tiempo_fuerte = (s % 4 == 0)
+                # --- melodia consciente del acorde (convenciones tonales) ---
+                # tiempos fuertes resuelven al acorde; el s=8 (mitad, semi-fuerte)
+                # resuelve disonancias por grado conjunto descendente.
+                en_tiempo_fuerte = (s % 8 == 0)     # 1er y 3er tiempo (fuertes)
+                en_semifuerte   = (s % 4 == 0)      # 2do y 4to tiempo
                 if es_cierre and s == 0:
-                    # cierre de seccion: forzar tonica o quinta
+                    # cierre de seccion: forzar tonica o quinta (resolucion final)
                     midi_nota = ajustar_a_acorde(midi_nota, [tonos_ac[0], tonos_ac[2]],
                                                  escala, tonica + 12)
-                elif en_tiempo_fuerte and rng.random() < 0.75:
-                    midi_nota = ajustar_a_acorde(midi_nota, tonos_ac, escala, tonica + 12)
-                # (tiempos debiles quedan libres: dan movimiento y notas de paso)
+                elif en_tiempo_fuerte:
+                    # tiempos fuertes casi siempre caen en tono de acorde
+                    if rng.random() < 0.85:
+                        midi_nota = ajustar_a_acorde(midi_nota, tonos_ac, escala, tonica + 12)
+                elif en_semifuerte:
+                    # semifuertes: resolver disonancias por grado conjunto descendente
+                    if rng.random() < 0.5:
+                        midi_nota = resolver_disonancia(midi_nota, tonos_ac, escala, tonica + 12)
+                # (16avos debiles quedan libres: notas de paso y bordaduras)
                 notas_jugador.append({
                     "cols": [col], "midis": [midi_nota],
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
@@ -3266,15 +3314,39 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     bajo_eventos = []
     # nota fundamental de cada grado de la progresion, una octava abajo de la tonica
     midi_bajo_base = tonica - 12
+    # estilo de bajo mas musical: a veces usa la quinta del acorde y notas de
+    # aproximacion (walking) hacia el acorde del compas siguiente.
+    usar_walking = rng.random() < 0.5
     for c in range(C_NUDO):
         compas_t = t_intro_fin + c * 4 * beat
         grado = progresion[c % len(progresion)]
-        # fundamental del acorde segun el grado en la escala
-        midi_nota = midi_bajo_base + escala[grado % len(escala)]
-        for s in range(16):
-            if pat_bajo[s] == 0:
-                continue
+        grado_sig = progresion[(c + 1) % len(progresion)]
+        # fundamental y quinta del acorde
+        fund = midi_bajo_base + escala[grado % len(escala)]
+        quinta = midi_bajo_base + nota_midi(0, escala, grado + 4) % 12
+        # ajustar quinta a la octava del bajo (cerca de la fundamental)
+        while quinta < fund:
+            quinta += 12
+        if quinta - fund > 7:
+            quinta -= 12
+        # nota fundamental del acorde siguiente (destino de la aproximacion)
+        fund_sig = midi_bajo_base + escala[grado_sig % len(escala)]
+        # posiciones activas del patron en este compas
+        activos = [s for s in range(16) if pat_bajo[s] != 0]
+        for i, s in enumerate(activos):
             t = compas_t + s * paso16
+            midi_nota = fund  # por defecto, la fundamental (lo mas estable)
+            es_ultimo_del_compas = (i == len(activos) - 1)
+            if es_ultimo_del_compas and usar_walking and grado_sig != grado:
+                # nota de aproximacion: un semitono/tono hacia la fundamental
+                # del acorde siguiente (walking bass, convencion del jazz/funk)
+                if fund_sig > fund:
+                    midi_nota = fund_sig - 1   # aproximacion cromatica ascendente
+                else:
+                    midi_nota = fund_sig + 1   # aproximacion descendente
+            elif i > 0 and s % 8 == 4 and rng.random() < 0.35:
+                # en tiempos intermedios, a veces la quinta (da movimiento)
+                midi_nota = quinta
             bajo_eventos.append({
                 "tiempo": t,
                 "midi": midi_nota,
