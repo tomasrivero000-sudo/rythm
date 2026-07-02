@@ -2019,8 +2019,9 @@ def _preparar_en_background():
 
 _prerender_stage_activo = False
 
-def prerender_instrumento_seed(seed):
-    """Renderiza en background el instrumento que usara una seed (proximo stage).
+def prerender_instrumento_seed(seed, instrumento=None):
+    """Renderiza en background un instrumento (proximo stage).
+    Si se pasa 'instrumento', lo usa directo; si no, lo deriva de la seed.
     Asi cuando llegas a ese stage, ya esta en cache y la carga es instantanea."""
     global _prerender_stage_activo
     if _prerender_stage_activo:
@@ -2029,9 +2030,12 @@ def prerender_instrumento_seed(seed):
         global _prerender_stage_activo
         _prerender_stage_activo = True
         try:
-            dif = get_dificultad(seed)
-            cancion = generar_cancion(int(seed * 23819), dif)
-            inst = cancion["instrumento"]
+            if instrumento:
+                inst = instrumento
+            else:
+                dif = get_dificultad(seed)
+                cancion = generar_cancion(int(seed * 23819), dif)
+                inst = cancion["instrumento"]
             if inst not in cache_por_instrumento:
                 tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
                 if tipo:
@@ -2889,7 +2893,7 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
 
 # ═══════════════════════════════════════════════════════ >>MUSIC_GEN<< ═══
 
-def generar_cancion(seed, dif):
+def generar_cancion(seed, dif, instrumento_forzado=None):
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
     rng          = random.Random(seed)
@@ -2921,8 +2925,12 @@ def generar_cancion(seed, dif):
     # 3 cols → root, 3ra, 5ta (triada) | 4 cols → +7ma | 5+ cols → octava+
     notas_columnas = [nota_midi(tonica + 12, escala, i * 2) for i in range(num_columnas)]
     kit = elegir_kit(rng)
-    # instrumento: 6% raro, si no del pool del genero (con fallback a la lista global)
-    if rng.random() < 0.02:
+    # instrumento: si viene forzado (runs, para garantizar variedad) se respeta.
+    # si no: 2% raro, si no del pool del genero (con fallback a la lista global)
+    if instrumento_forzado and (instrumento_forzado in INSTRUMENTOS_JUGADOR
+                                or instrumento_forzado in INSTRUMENTOS_RAROS):
+        instrumento = instrumento_forzado
+    elif rng.random() < 0.02:
         instrumento = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
     else:
         pool = [i for i in gdef.get("instrumentos", []) if i in INSTRUMENTOS_JUGADOR]
@@ -3337,7 +3345,7 @@ def hold_pixels(hold_ms, vel, fps=60):
 
 # ══════════════════════════════════════════════════════ >>GAME_STATE<< ═══
 
-def iniciar_partida(seed, mods=None, stage_info=None):
+def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instrumento_forzado=None):
     global cache_notas, cache_notas_largas
     # limpiar efectos visuales de una partida anterior
     particulas.clear()
@@ -3348,7 +3356,7 @@ def iniciar_partida(seed, mods=None, stage_info=None):
     # mods: set de ids; si es None usa mods_activos (modo libre)
     mods_partida = set(mods) if mods is not None else set(mods_activos)
     dif     = get_dificultad(seed)
-    cancion = generar_cancion(int(seed * 23819), dif)
+    cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado)
     inst = cancion["instrumento"]
     # limitar holds: percusivos max 800ms, todos max 4s (duracion del sample)
     hold_max = HOLD_MAX_PERCUSIVO if inst not in INST_SUSTAIN else HOLD_MAX
@@ -3413,7 +3421,8 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         "indice_bajo":    0,
         "inicio":         pygame.time.get_ticks(),
         "notas_cayendo":  [],
-        "puntos":         0,
+        "puntos":         puntos_iniciales,
+        "puntos_stage_inicio": puntos_iniciales,  # puntos con los que arranco este stage
         "terminada":      False,
         "holds_activos":  {},
         "ultimo_hit":     None,
@@ -3980,17 +3989,26 @@ def dibujar_juego(partida, ahora):
     elif partida["terminada"] and not partida["notas_cayendo"]:
         fin = fuente.render("FIN", True, BLANCO)
         pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2 - 40))
-        sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
-        pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
+        if run_actual is not None:
+            # en run: mostrar lo ganado en el stage y el total acumulado
+            ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
+            sc_txt = fuente.render(f"STAGE: +{ganado}   TOTAL: {partida['puntos']}", True, GRIS_MED)
+            pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
+            cb_txt = fuente_chica.render(f"MAX COMBO: {partida['max_combo']}x", True, GRIS)
+            pantalla.blit(cb_txt, (ANCHO // 2 - cb_txt.get_width() // 2, ALTO // 2 + 30))
+        else:
+            sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
+            pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
         if run_actual is not None:
             stage_n = run_actual["stage"]
             if stage_n < NUM_STAGES:
                 esc2 = fuente_chica.render(f"ESPACIO = SIGUIENTE STAGE ({stage_n + 1}/{NUM_STAGES})", True, GRIS)
             else:
                 esc2 = fuente_chica.render("ESPACIO = COMPLETAR RUN!", True, GRIS)
+            pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 60))
         else:
             esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
-        pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
+            pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 40))
         ruta = partida.get("export_ruta")
         if ruta:
             ok_txt = fuente_chica.render("GUARDADA EN export/", True, BLANCO)
@@ -4116,7 +4134,8 @@ def mods_de_stage(n, rng):
         return mods
 
 def crear_run(seed_inicial):
-    """Crea un run de stages a partir de la seed cargada."""
+    """Crea un run de stages a partir de la seed cargada.
+    Garantiza un instrumento distinto en cada stage para dar variedad."""
     nivel = num_dificultad(seed_inicial)
     genero = genero_de_seed(seed_inicial)
     rng = random.Random(int(seed_inicial) * 31 + 7)
@@ -4130,12 +4149,35 @@ def crear_run(seed_inicial):
         usadas.add(s)
         seeds.append(s)
         mods_stages.append(mods_de_stage(n, rng))
+
+    # --- asignar un instrumento distinto a cada stage ---
+    gdef = GENEROS.get(genero, {})
+    pool = [i for i in gdef.get("instrumentos", []) if i in INSTRUMENTOS_JUGADOR]
+    if not pool:
+        pool = list(INSTRUMENTOS_JUGADOR.keys())
+    # quitar RESO del pool de runs (suena agresivo, se re-rollea siempre)
+    pool_sin_reso = [p for p in pool if p != "RESO"] or pool
+    pool_barajado = pool_sin_reso[:]
+    rng.shuffle(pool_barajado)
+    instrumentos_stage = []
+    for n in range(NUM_STAGES):
+        if n < len(pool_barajado):
+            instrumentos_stage.append(pool_barajado[n])
+        else:
+            # pool mas chico que la cantidad de stages: reusar sin repetir consecutivo
+            instrumentos_stage.append(rng.choice(pool_sin_reso))
+    # 15% de chance de que un stage al azar (no el primero) traiga un instrumento raro
+    if rng.random() < 0.15 and NUM_STAGES > 1:
+        idx_raro = rng.randint(1, NUM_STAGES - 1)
+        instrumentos_stage[idx_raro] = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
+
     return {
         "genero": genero,
         "nivel": nivel,
         "stage": 1,            # stage actual (1..4)
         "seeds": seeds,        # seed por stage
         "mods": mods_stages,   # set de mods por stage
+        "instrumentos": instrumentos_stage,  # instrumento forzado por stage
         "puntos_total": 0,
     }
 
@@ -4672,14 +4714,18 @@ while corriendo:
                     idx = run_actual["stage"] - 1
                     seed_stage = run_actual["seeds"][idx]
                     mods_stage = run_actual["mods"][idx]
+                    inst_stage = run_actual.get("instrumentos", [None]*NUM_STAGES)[idx]
                     dibujar_carga_seed(seed_stage)
                     partida = iniciar_partida(
                         seed_stage, mods=mods_stage,
-                        stage_info={"n": run_actual["stage"]})
+                        stage_info={"n": run_actual["stage"]},
+                        puntos_iniciales=run_actual["puntos_total"],
+                        instrumento_forzado=inst_stage)
                     score_guardado = False
                     # pre-render del instrumento del proximo stage en background
                     if run_actual["stage"] < NUM_STAGES:
-                        prerender_instrumento_seed(run_actual["seeds"][idx + 1])
+                        inst_next = run_actual.get("instrumentos", [None]*NUM_STAGES)[idx + 1]
+                        prerender_instrumento_seed(run_actual["seeds"][idx + 1], instrumento=inst_next)
                     ESTADO = "jugando"
 
         elif ESTADO == "run_dado":
@@ -4711,7 +4757,8 @@ while corriendo:
         elif ESTADO == "run_fallido":
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
-                    pts_run = run_actual.get("puntos_total", 0) + partida.get("puntos", 0)
+                    # partida["puntos"] ya incluye lo acumulado de stages previos
+                    pts_run = partida.get("puntos", 0)
                     if not score_guardado and pts_run > 0 and es_highscore(pts_run):
                         partida["puntos"] = pts_run
                         nombre_input = ""
@@ -4847,10 +4894,13 @@ while corriendo:
                         canal_hold.clear()
                         if run_actual is not None:
                             idx = run_actual["stage"] - 1
+                            inst_stage = run_actual.get("instrumentos", [None]*NUM_STAGES)[idx]
                             partida = iniciar_partida(
                                 run_actual["seeds"][idx],
                                 mods=run_actual["mods"][idx],
-                                stage_info={"n": run_actual["stage"]})
+                                stage_info={"n": run_actual["stage"]},
+                                puntos_iniciales=run_actual["puntos_total"],
+                                instrumento_forzado=inst_stage)
                         else:
                             partida = iniciar_partida(int(seed_acumulada))
                         score_guardado = False
@@ -4891,8 +4941,9 @@ while corriendo:
                                 ESTADO = "run_fallido"
                                 nueva_musica_menu_aleatoria()
                             else:
-                                # paso el stage: sumar puntos y avanzar
-                                run_actual["puntos_total"] += partida["puntos"]
+                                # paso el stage: el total del run es el puntaje final
+                                # de esta partida (que ya arranco desde el acumulado)
+                                run_actual["puntos_total"] = partida["puntos"]
                                 if run_actual["stage"] >= NUM_STAGES:
                                     # run completo!
                                     marcar_completado(run_actual["genero"], run_actual["nivel"])
