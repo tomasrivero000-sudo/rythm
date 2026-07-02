@@ -619,6 +619,54 @@ def synth_dado_tick():
     wave = noise * 0.4 + tono * 0.5
     return np_to_sound(wave, vol=0.25)
 
+def synth_hit(freq_base=900, brillo=1.0):
+    """Ping cristalino ascendente para un acierto perfecto."""
+    dur = 0.14
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    # pitch sube levemente durante la nota (sensacion de 'lift')
+    f = freq_base * (1 + 0.15 * t / dur)
+    ph = np.cumsum(f / SR) * 2 * np.pi
+    # fundamental + armonicos brillantes (campana cristalina)
+    wave = (np.sin(ph) * 0.5
+            + np.sin(ph * 2) * 0.25 * brillo
+            + np.sin(ph * 3) * 0.12 * brillo
+            + np.sin(ph * 4.2) * 0.06 * brillo)
+    env = np.exp(-t * 22)
+    fade = min(int(SR * 0.006), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.3)
+
+def synth_hit_soft(freq_base=600):
+    """Click suave y redondo para un acierto BIEN/OK."""
+    dur = 0.09
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    ph = 2 * np.pi * freq_base * t
+    wave = np.sin(ph) * 0.6 + np.sin(ph * 2) * 0.15
+    env = np.exp(-t * 30)
+    fade = min(int(SR * 0.005), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.25)
+
+def synth_combo(nivel=1):
+    """Arpegio ascendente para un milestone de combo. Sube de tono con el nivel."""
+    # base sube con el nivel de milestone (10x, 20x, ...)
+    semis = min((nivel - 1) * 2, 12)   # cada milestone +2 semitonos, tope +1 octava
+    base = 523 * (2 ** (semis / 12.0))  # desde C5
+    notas = [base, base * 1.26, base * 1.5, base * 2.0]  # mayor + octava
+    dur_nota = 0.07
+    partes = []
+    for f in notas:
+        n = int(SR * dur_nota)
+        t = np.linspace(0, dur_nota, n)
+        ph = 2 * np.pi * f * t
+        w = np.sin(ph) * 0.5 + np.sin(ph * 2) * 0.2
+        env = np.exp(-t * 12)
+        partes.append(w * env)
+    wave = np.concatenate(partes)
+    return np_to_sound(wave, vol=0.35)
+
 SND_SELECT = synth_ui_select()
 SND_CONFIRM = synth_ui_confirm()
 SND_DADO = synth_dado_tick()
@@ -626,6 +674,30 @@ SND_EXPLOSION = synth_explosion(1.0)
 SND_EXPLOSION_BIG = synth_explosion(2.0)
 SND_WIN = synth_fanfarria_win()
 SND_GAMEOVER = synth_game_over()
+# hits: variantes de pitch para que suba con el combo (cacheadas)
+SND_HIT_PERFECT = [synth_hit(900 * (2 ** (i / 12.0)), brillo=1.0) for i in range(8)]
+SND_HIT_GOOD = synth_hit_soft(600)
+# combos: un sonido por milestone (10x..80x)
+SND_COMBO = [synth_combo(i) for i in range(1, 9)]
+
+def sfx_hit_perfect(combo):
+    # el pitch sube por tramos de combo
+    idx = min(combo // 8, len(SND_HIT_PERFECT) - 1)
+    s = SND_HIT_PERFECT[idx]
+    s.set_volume(0.35 * config["volumen"])
+    s.play()
+
+def sfx_hit_good():
+    SND_HIT_GOOD.set_volume(0.28 * config["volumen"])
+    SND_HIT_GOOD.play()
+
+def sfx_combo(combo):
+    nivel = combo // 10   # 1 para 10x, 2 para 20x...
+    idx = min(nivel - 1, len(SND_COMBO) - 1)
+    if idx >= 0:
+        s = SND_COMBO[idx]
+        s.set_volume(0.4 * config["volumen"])
+        s.play()
 
 def sfx_select():
     SND_SELECT.set_volume(0.4 * config["volumen"])
@@ -2029,7 +2101,28 @@ def tick_musica_menu():
     # 5) reproducir stream principal
     _tick_stream(mm, vol_mult)
 
-def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0):
+def _color_vivo(base, combo=0):
+    """Devuelve un color variado a partir del color base del genero.
+    Con combos altos, mas probabilidad de colores brillantes/arcoiris."""
+    prob_arcoiris = min(combo / 40.0, 0.6)
+    if random.random() < prob_arcoiris:
+        # color arcoiris vibrante (HSV -> RGB simplificado)
+        h = random.random()
+        i = int(h * 6)
+        f = h * 6 - i
+        v, p, q, tt = 255, 40, int(255 * (1 - f)), int(255 * f)
+        return [(v,tt,p),(q,v,p),(p,v,tt),(p,q,v),(tt,p,v),(v,p,q)][i % 6]
+    r = random.random()
+    if r < 0.4:
+        return base
+    elif r < 0.7:
+        # mezcla con blanco (mas brillante)
+        return tuple(min(255, int(c + (255 - c) * 0.6)) for c in base)
+    else:
+        # version saturada del base
+        return tuple(min(255, int(c * 1.3 + 30)) for c in base)
+
+def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0, combo=0):
     for _ in range(cantidad):
         angulo = random.uniform(0, 6.28)
         fuerza = random.uniform(2, 14) * potencia
@@ -2037,10 +2130,11 @@ def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0):
         dy = math.sin(angulo) * fuerza - 5 * potencia
         vida = random.randint(25, 65) + int((potencia - 1) * 15)
         tam = int(random.randint(3, 12) * (0.8 + potencia * 0.4))
-        forma = random.choice(["rect", "rect", "linea"])
+        forma = random.choice(["rect", "rect", "linea", "estrella"])
+        col_p = _color_vivo(color, combo)
         particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida,
-                           "vida_max": vida, "tam": tam, "color": color, "forma": forma,
-                           "spin": random.uniform(-0.3, 0.3)})
+                           "vida_max": vida, "tam": tam, "color": col_p, "forma": forma,
+                           "spin": random.uniform(-0.4, 0.4)})
 
 def crear_onda(x, y, intensidad=1.0, r0=4):
     ondas.append({"x": x, "y": y, "r": r0, "vida": 20, "vida_max": 20, "intensidad": intensidad})
@@ -2092,14 +2186,16 @@ def dibujar_particulas():
     # anillos de choque
     for o in ondas:
         pct = o["vida"] / o["vida_max"]
-        alpha = int(200 * pct * o["intensidad"])
-        col = (alpha, alpha, alpha)
+        alpha = pct * o["intensidad"]
+        c = int(200 * alpha)
+        col = (c, c, c)
         grosor = max(1, int(3 * pct))
         pygame.draw.circle(pantalla, col, (int(o["x"]) + shake_dx, int(o["y"]) + shake_dy), int(o["r"]), grosor)
     for p in particulas:
         pct = p["vida"] / p["vida_max"]
-        alpha = int(255 * pct)
-        color = (min(p["color"][0], alpha), min(p["color"][1], alpha), min(p["color"][2], alpha))
+        # atenuar el color multiplicando por pct (preserva el tono, no lo apaga a gris)
+        base = p["color"]
+        color = (int(base[0] * pct), int(base[1] * pct), int(base[2] * pct))
         tam = max(1, int(p["tam"] * pct))
         px = int(p["x"]) + shake_dx
         py = int(p["y"]) + shake_dy
@@ -2107,25 +2203,29 @@ def dibujar_particulas():
             ex = int(px - p["dx"] * 1.5)
             ey = int(py - p["dy"] * 1.5)
             pygame.draw.line(pantalla, color, (px, py), (ex, ey), max(1, tam // 2))
+        elif p["forma"] == "estrella":
+            # estrella de 4 puntas (cruz + diagonal tenue)
+            r = tam
+            pygame.draw.line(pantalla, color, (px - r, py), (px + r, py), 2)
+            pygame.draw.line(pantalla, color, (px, py - r), (px, py + r), 2)
+            h = max(1, r // 2)
+            pygame.draw.line(pantalla, color, (px - h, py - h), (px + h, py + h), 1)
+            pygame.draw.line(pantalla, color, (px - h, py + h), (px + h, py - h), 1)
         else:
             pygame.draw.rect(pantalla, color, (px, py, tam, tam))
     for t in textos_flotantes:
         pct = t["vida"] / t["vida_max"]
-        alpha = int(255 * pct)
-        color = (min(t["color"][0], alpha), min(t["color"][1], alpha), min(t["color"][2], alpha))
+        base = t["color"]
+        color = (int(base[0] * pct), int(base[1] * pct), int(base[2] * pct))
         f = fuente if t["grande"] else fuente_chica
         txt = f.render(t["texto"], True, color)
         pantalla.blit(txt, (int(t["x"]) - txt.get_width() // 2 + shake_dx, int(t["y"]) + shake_dy))
+
 def nota_midi(tonica, escala, grado):
     octava = grado // len(escala)
     return tonica + escala[grado % len(escala)] + octava * 12
 
 NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-def midi_a_nombre(midi):
-    return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
-
-NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-
 def midi_a_nombre(midi):
     return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
 
@@ -4263,6 +4363,7 @@ def cambiar_audio_device(idx):
     """Reinicializa el mixer con el dispositivo seleccionado."""
     global SND_ERROR, SND_EXPLOSION, SND_EXPLOSION_BIG, SND_WIN
     global SND_SELECT, SND_CONFIRM, SND_GAMEOVER, SND_DADO
+    global SND_HIT_PERFECT, SND_HIT_GOOD, SND_COMBO
     global cache_por_instrumento, cache_largas_por_instrumento
     config["audio_idx"] = idx
     try:
@@ -4282,6 +4383,9 @@ def cambiar_audio_device(idx):
         SND_CONFIRM = synth_ui_confirm()
         SND_GAMEOVER = synth_game_over()
         SND_DADO = synth_dado_tick()
+        SND_HIT_PERFECT = [synth_hit(900 * (2 ** (i / 12.0)), brillo=1.0) for i in range(8)]
+        SND_HIT_GOOD = synth_hit_soft(600)
+        SND_COMBO = [synth_combo(i) for i in range(1, 9)]
         cache_por_instrumento.clear()
         cache_largas_por_instrumento.clear()
     except Exception as e:
@@ -4686,33 +4790,35 @@ while corriendo:
                                         if distancia < 30:
                                             pts = 5
                                             partida["combo"] += 1
-                                            # potencia crece con el combo (1.0 a 2.5)
                                             pot = min(1.0 + partida["combo"] * 0.03, 1.8)
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
                                             combo_particulas = min(50 + partida["combo"] * 4, 250)
-                                            crear_explosion(cx, zy_p, combo_particulas, color=col_g, potencia=pot)
+                                            crear_explosion(cx, zy_p, combo_particulas, color=col_g, potencia=pot, combo=partida["combo"])
                                             crear_onda(cx, zy_p, 0.7)
                                             crear_onda(cx, zy_p, 0.4, r0=int(4 + partida["combo"] * 0.3))
                                             if partida["combo"] >= 30:
                                                 crear_onda(cx, zy_p, 0.5, r0=int(15 + partida["combo"] * 0.5))
                                             crear_flash(col, min(0.8, 0.5 + partida["combo"] * 0.01))
                                             crear_shake(min(5 + partida["combo"] * 0.15, 12))
+                                            sfx_hit_perfect(partida["combo"])
                                         elif distancia < 60:
                                             pts = 3
                                             partida["combo"] += 1
                                             pot = min(1.0 + partida["combo"] * 0.02, 1.5)
                                             partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, zy_p, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot)
+                                            crear_explosion(cx, zy_p, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot, combo=partida["combo"])
                                             crear_onda(cx, zy_p, 0.5)
                                             crear_flash(col, 0.4)
                                             crear_shake(min(3 + partida["combo"] * 0.1, 8))
+                                            sfx_hit_good()
                                         elif distancia < 100:
                                             pts = 1
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
-                                            crear_explosion(cx, zy_p, 20, color=col_g)
+                                            crear_explosion(cx, zy_p, 20, color=col_g, combo=partida["combo"])
                                             crear_onda(cx, zy_p, 0.4)
                                             crear_flash(col, 0.3)
+                                            sfx_hit_good()
                                         else:
                                             pts = 0
                                             partida["combo"] = 0
@@ -4721,6 +4827,23 @@ while corriendo:
                                             crear_shake(8)
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
+                                        # milestone de combo cada 10: sonido + confeti
+                                        if pts > 0 and partida["combo"] > 0 and partida["combo"] % 10 == 0:
+                                            sfx_combo(partida["combo"])
+                                            for _ in range(min(partida["combo"] * 2, 120)):
+                                                px_c = random.randint(0, ANCHO)
+                                                particulas.append({
+                                                    "x": px_c, "y": -5,
+                                                    "dx": random.uniform(-1.5, 1.5),
+                                                    "dy": random.uniform(2, 6),
+                                                    "vida": random.randint(50, 90), "vida_max": 90,
+                                                    "tam": random.randint(3, 7),
+                                                    "color": _color_vivo(col_g, partida["combo"]),
+                                                    "forma": random.choice(["rect", "estrella"]),
+                                                    "spin": random.uniform(-0.4, 0.4),
+                                                })
+                                            crear_texto_flotante(ANCHO // 2, zy_p - 120,
+                                                                 f"{partida['combo']}x COMBO!", col_g, grande=True)
                                         combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
@@ -4751,9 +4874,8 @@ while corriendo:
                                             else:
                                                 partida["puntos"] = max(0, partida["puntos"] - 2)
                                                 crear_texto_flotante(cx, zy_p - 20, "-2", GRIS_MED)
-                                            if partida["combo"] > 0 and partida["combo"] % 5 == 0:
-                                                crear_texto_flotante(ANCHO // 2, zy_p - 80, f"{partida['combo']}x COMBO!", BLANCO, True)
-                                                crear_shake(4)
+                                            if partida["combo"] > 0 and partida["combo"] % 5 == 0 and partida["combo"] % 10 != 0:
+                                                crear_texto_flotante(ANCHO // 2, zy_p - 80, f"{partida['combo']}x", col_g, True)
                                             if grupo["acertadas"] == set(grupo["cols"]):
                                                 partida["notas_cayendo"].remove(grupo)
                                     break
