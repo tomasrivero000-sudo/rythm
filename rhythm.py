@@ -3449,33 +3449,54 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         if n.get("hold", 0) > hold_max:
             n["hold"] = hold_max
 
-    # RAFAGAS: la cancion pulsa entre tramos densos (rafaga) y tramos calmos.
-    # En vez de vaciar tramos (imperceptible porque drums/bajo siguen sonando),
-    # en la fase calma dejamos solo las notas en tiempo fuerte -> el jugador
-    # SIENTE el contraste intenso/tranquilo. Ventanas de 1 compas para que el
-    # cambio sea rapido y perceptible.
+    # RAFAGAS: la cancion pulsa fuerte entre AVALANCHA y RESPIRO.
+    # - fase avalancha (2 compases): todas las notas + notas extra duplicadas
+    #   en columnas vecinas -> un muro de notas denso e intenso.
+    # - fase respiro (1 compas): solo el downbeat -> casi silencio de notas.
+    # El contraste es marcado (~4-5x) para que se sienta de verdad.
     if "rafagas" in mods_partida:
         beat = cancion["beat"]
         compas_ms = beat * 4
+        num_cols_raf = dif["columnas"]
         if compas_ms > 0:
+            # ciclo de 3 compases: 2 de avalancha + 1 de respiro
+            ciclo_ms = compas_ms * 3
             notas_filtradas = []
+            extras = []
             for n in cancion["notas_jugador"]:
-                ventana = int(n["tiempo"] // compas_ms)
-                if ventana % 2 == 0:
-                    # fase RAFAGA: todas las notas (denso)
+                pos_ciclo = n["tiempo"] % ciclo_ms
+                en_avalancha = pos_ciclo < compas_ms * 2
+                if en_avalancha:
+                    # fase AVALANCHA: mantener la nota
                     n["fase_rafaga"] = True
                     notas_filtradas.append(n)
+                    # y duplicar en una columna vecina (muro de notas), salvo acordes
+                    if not n.get("es_acorde") and num_cols_raf > 1 and n.get("cols"):
+                        col0 = n["cols"][0]
+                        col_vec = (col0 + 1) % num_cols_raf
+                        if col_vec != col0:
+                            extras.append({
+                                "cols": [col_vec],
+                                "midis": [n["midis"][0]] if n.get("midis") else [],
+                                "tiempo": n["tiempo"] + beat // 2,  # medio tiempo despues
+                                "es_acorde": False,
+                                "parte": n.get("parte", "nudo"),
+                                "hold": 0,
+                                "fase_rafaga": True,
+                            })
                 else:
-                    # fase CALMA: solo notas en tiempo fuerte del compas
+                    # fase RESPIRO: solo el downbeat del compas (casi silencio)
                     pos_en_compas = n["tiempo"] % compas_ms
-                    es_tiempo_fuerte = (pos_en_compas < beat * 0.5) or \
-                                       (abs(pos_en_compas - beat * 2) < beat * 0.5)
-                    if es_tiempo_fuerte:
+                    es_downbeat = pos_en_compas < beat * 0.5
+                    if es_downbeat:
                         n["fase_rafaga"] = False
                         notas_filtradas.append(n)
+            notas_filtradas += extras
+            notas_filtradas.sort(key=lambda x: x["tiempo"])
             if len(notas_filtradas) >= max(4, len(cancion["notas_jugador"]) // 3):
                 cancion["notas_jugador"] = notas_filtradas
                 cancion["tiene_rafagas"] = True
+                cancion["rafaga_ciclo_ms"] = ciclo_ms
                 cancion["rafaga_compas_ms"] = compas_ms
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
@@ -5417,17 +5438,29 @@ while corriendo:
                 crear_shake(6)
                 sfx_select()
 
-        # RAFAGAS: avisar al entrar en un tramo denso (fase rafaga)
+        # RAFAGAS: avisar al entrar en la avalancha (inicio de cada ciclo)
         if partida["cancion"].get("tiene_rafagas") and not partida.get("game_over"):
+            ciclo_ms = partida["cancion"].get("rafaga_ciclo_ms", 0)
             comp_ms = partida["cancion"].get("rafaga_compas_ms", 0)
-            if comp_ms > 0:
-                compas_actual = int(ahora // comp_ms)
-                if compas_actual != partida.get("_rafaga_compas", -1):
-                    partida["_rafaga_compas"] = compas_actual
-                    # compas par = rafaga (denso); avisar solo al entrar en el
-                    if compas_actual % 2 == 0 and ahora > comp_ms:
-                        crear_texto_flotante(ANCHO // 2, zy_p - 100, "RAFAGA!", BLANCO, True)
-                        crear_shake(4)
+            if ciclo_ms > 0:
+                ciclo_actual = int(ahora // ciclo_ms)
+                pos_ciclo = ahora % ciclo_ms
+                if ciclo_actual != partida.get("_rafaga_ciclo", -1):
+                    partida["_rafaga_ciclo"] = ciclo_actual
+                    if ahora > ciclo_ms * 0.5:
+                        # arranca la avalancha: aviso grande + shake fuerte
+                        col_g = color_genero(partida)
+                        crear_texto_flotante(ANCHO // 2, zy_p - 110, "RAFAGA!", col_g, True)
+                        crear_shake(9)
+                        sfx_combo(20)   # sonido energico
+                # avisar el respiro al entrar al 3er compas del ciclo
+                en_respiro = pos_ciclo >= comp_ms * 2
+                if en_respiro and not partida.get("_en_respiro", False):
+                    partida["_en_respiro"] = True
+                    if ahora > ciclo_ms:
+                        crear_texto_flotante(ANCHO // 2, zy_p - 110, "respiro", GRIS_MED, False)
+                elif not en_respiro:
+                    partida["_en_respiro"] = False
 
         if not partida.get("game_over"):
             tick_background(partida, ahora)
