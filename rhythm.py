@@ -116,8 +116,12 @@ def listar_dispositivos_audio():
 AUDIO_DEVICES = listar_dispositivos_audio()
 print(f"Dispositivos de audio ({len(AUDIO_DEVICES)}): {AUDIO_DEVICES}")
 
-pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-pygame.mixer.set_num_channels(32)
+# buffer 1024: mas margen contra underruns (clicks) durante las cargas pesadas.
+# 1024 samples @ 44100Hz = ~23ms de latencia, imperceptible en un rhythm game.
+AUDIO_BUFFER = 1024
+AUDIO_CANALES = 32
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=AUDIO_BUFFER)
+pygame.mixer.set_num_channels(AUDIO_CANALES)
 
 ANCHO, ALTO = 720, 640
 
@@ -165,13 +169,13 @@ if config.get("audio_idx", 0) != 0 and config["audio_idx"] < len(AUDIO_DEVICES):
     try:
         pygame.mixer.quit()
         nombre_dev = AUDIO_DEVICES[config["audio_idx"]]
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512, devicename=nombre_dev)
-        pygame.mixer.set_num_channels(32)
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=AUDIO_BUFFER, devicename=nombre_dev)
+        pygame.mixer.set_num_channels(AUDIO_CANALES)
         print(f"Audio en dispositivo guardado: {nombre_dev}")
     except Exception as e:
         print(f"No se pudo abrir dispositivo guardado, usando default: {e}")
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-        pygame.mixer.set_num_channels(32)
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=AUDIO_BUFFER)
+        pygame.mixer.set_num_channels(AUDIO_CANALES)
         config["audio_idx"] = 0
 
 # la ventana real puede cambiar de tamaño; el juego siempre dibuja en 720x640 y se escala
@@ -323,9 +327,10 @@ def np_to_sound(samples_mono, vol=0.7, pan=0.0, lpf=False):
             kernel /= kernel.sum()
             samples_mono = np.convolve(samples_mono, kernel, mode="same")
     scaled = samples_mono * vol
-    # soft clipping con tanh: comprime picos suavemente en vez de cortarlos
-    # esto previene distorsion cuando varios sonidos se superponen en el mixer
-    scaled = np.tanh(scaled * 1.5) * 0.75
+    # soft clipping con tanh: comprime picos suavemente en vez de cortarlos.
+    # techo en 0.68 (antes 0.75) para dejar headroom cuando varios sonidos
+    # se superponen en el mixer y evitar el clipeo de la suma.
+    scaled = np.tanh(scaled * 1.5) * 0.68
     base = scaled * 32767
     # ganancia por canal con ley de paneo de potencia constante
     ang = (pan + 1) * 0.25 * np.pi  # 0..pi/2
@@ -4570,11 +4575,11 @@ def cambiar_audio_device(idx):
     try:
         pygame.mixer.quit()
         if idx == 0:
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=AUDIO_BUFFER)
         else:
             nombre = AUDIO_DEVICES[idx]
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512, devicename=nombre)
-        pygame.mixer.set_num_channels(32)
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=AUDIO_BUFFER, devicename=nombre)
+        pygame.mixer.set_num_channels(AUDIO_CANALES)
         # reconstruir sonidos globales
         SND_ERROR = synth_error()
         SND_EXPLOSION = synth_explosion(1.0)
@@ -4591,8 +4596,8 @@ def cambiar_audio_device(idx):
         cache_largas_por_instrumento.clear()
     except Exception as e:
         print(f"Error cambiando audio: {e}")
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-        pygame.mixer.set_num_channels(32)
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=AUDIO_BUFFER)
+        pygame.mixer.set_num_channels(AUDIO_CANALES)
         SND_ERROR = synth_error()
         config["audio_idx"] = 0
 
