@@ -3449,21 +3449,34 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         if n.get("hold", 0) > hold_max:
             n["hold"] = hold_max
 
-    # RAFAGAS: alterna tramos densos y silencios. Se agrupan las notas en
-    # ventanas de ~2 compases; una de cada dos ventanas se vacia (silencio).
+    # RAFAGAS: la cancion pulsa entre tramos densos (rafaga) y tramos calmos.
+    # En vez de vaciar tramos (imperceptible porque drums/bajo siguen sonando),
+    # en la fase calma dejamos solo las notas en tiempo fuerte -> el jugador
+    # SIENTE el contraste intenso/tranquilo. Ventanas de 1 compas para que el
+    # cambio sea rapido y perceptible.
     if "rafagas" in mods_partida:
         beat = cancion["beat"]
-        ventana_ms = beat * 4 * 2   # 2 compases por ventana
-        if ventana_ms > 0:
+        compas_ms = beat * 4
+        if compas_ms > 0:
             notas_filtradas = []
             for n in cancion["notas_jugador"]:
-                ventana = int(n["tiempo"] // ventana_ms)
-                # ventanas pares = suenan (rafaga), impares = silencio
+                ventana = int(n["tiempo"] // compas_ms)
                 if ventana % 2 == 0:
+                    # fase RAFAGA: todas las notas (denso)
+                    n["fase_rafaga"] = True
                     notas_filtradas.append(n)
-            # seguridad: si quedaron muy pocas, no aplicar (evita canciones vacias)
-            if len(notas_filtradas) >= max(4, len(cancion["notas_jugador"]) // 4):
+                else:
+                    # fase CALMA: solo notas en tiempo fuerte del compas
+                    pos_en_compas = n["tiempo"] % compas_ms
+                    es_tiempo_fuerte = (pos_en_compas < beat * 0.5) or \
+                                       (abs(pos_en_compas - beat * 2) < beat * 0.5)
+                    if es_tiempo_fuerte:
+                        n["fase_rafaga"] = False
+                        notas_filtradas.append(n)
+            if len(notas_filtradas) >= max(4, len(cancion["notas_jugador"]) // 3):
                 cancion["notas_jugador"] = notas_filtradas
+                cancion["tiene_rafagas"] = True
+                cancion["rafaga_compas_ms"] = compas_ms
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
@@ -5403,6 +5416,18 @@ while corriendo:
                 crear_texto_flotante(ANCHO // 2, zy_p - 100, "COLUMNAS ROTADAS!", BLANCO, True)
                 crear_shake(6)
                 sfx_select()
+
+        # RAFAGAS: avisar al entrar en un tramo denso (fase rafaga)
+        if partida["cancion"].get("tiene_rafagas") and not partida.get("game_over"):
+            comp_ms = partida["cancion"].get("rafaga_compas_ms", 0)
+            if comp_ms > 0:
+                compas_actual = int(ahora // comp_ms)
+                if compas_actual != partida.get("_rafaga_compas", -1):
+                    partida["_rafaga_compas"] = compas_actual
+                    # compas par = rafaga (denso); avisar solo al entrar en el
+                    if compas_actual % 2 == 0 and ahora > comp_ms:
+                        crear_texto_flotante(ANCHO // 2, zy_p - 100, "RAFAGA!", BLANCO, True)
+                        crear_shake(4)
 
         if not partida.get("game_over"):
             tick_background(partida, ahora)
