@@ -301,7 +301,7 @@ MODIFICADORES = [
     {"id": "invisible",  "nombre": "INVISIBLES",  "desc": "notas desaparecen al caer", "mult": 1.8},
     {"id": "inverso",    "nombre": "INVERSO",     "desc": "notas suben en vez de caer", "mult": 1.4},
     {"id": "acelerando", "nombre": "ACELERANDO",  "desc": "velocidad sube gradualmente", "mult": 1.3},
-    {"id": "niebla",     "nombre": "NIEBLA",      "desc": "notas visibles solo al final", "mult": 1.6},
+    {"id": "niebla",     "nombre": "NIEBLA",      "desc": "notas aparecen desde la mitad", "mult": 1.6},
     {"id": "rafagas",    "nombre": "RAFAGAS",     "desc": "tramos densos y silencios", "mult": 1.3},
     {"id": "desplaza",   "nombre": "DESPLAZAMIENTO", "desc": "las columnas rotan", "mult": 1.7},
     {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
@@ -3552,6 +3552,17 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         if m["id"] in mods_partida:
             mult_mods *= m["mult"]
 
+    # --- WARM-UP: asegurar que TODO este listo antes de arrancar el reloj ---
+    # A esta altura ya estan: instrumento renderizado, bajo sintetizado, notas
+    # filtradas. Damos un respiro corto para que el mixer y el GC se asienten y
+    # drenamos eventos de teclado acumulados durante la carga. Recien despues
+    # tomamos 'inicio', asi el primer frame arranca con ahora~=0 y sin lag.
+    pygame.event.pump()
+    pygame.event.clear()      # descartar teclas apretadas durante la carga
+    pygame.time.delay(60)     # respiro para estabilizar el audio
+    pygame.event.pump()
+    inicio_partida = pygame.time.get_ticks()
+
     return {
         "seed":           seed,
         "dificultad":     dif,
@@ -3560,7 +3571,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         "indice_perc":    0,
         "indice_bajo":    0,
         "_arranco_audio": False,
-        "inicio":         pygame.time.get_ticks(),
+        "inicio":         inicio_partida,
         "notas_cayendo":  [],
         "puntos":         puntos_iniciales,
         "puntos_stage_inicio": puntos_iniciales,  # puntos con los que arranco este stage
@@ -3975,12 +3986,27 @@ def dibujar_juego(partida, ahora):
                 continue
             elif not es_inv and grupo["y"] > zy * 0.45:
                 continue
-        # modificador NIEBLA: inverso de invisible. Ocultas lejos, aparecen al final
+        # modificador NIEBLA: las notas aparecen GRADUALMENTE (fade-in) desde la
+        # mitad de la pantalla hacia la zona de golpe. Antes de la mitad son
+        # invisibles; entre la mitad y la zona su opacidad sube de 0 a 1.
+        alpha_niebla = 1.0
         if es_niebla:
-            if es_inv and grupo["y"] > zy + (ALTO - zy) * 0.55:
-                continue
-            elif not es_inv and grupo["y"] < zy * 0.55:
-                continue
+            if es_inv:
+                # notas suben: mitad de la zona inferior -> zona de golpe (arriba)
+                mitad = zy + (ALTO - zy) * 0.5
+                if grupo["y"] > mitad:
+                    continue  # aun por debajo de la mitad: invisible
+                # fade de 0 (en la mitad) a 1 (en la zona de golpe)
+                rango = mitad - zy
+                alpha_niebla = 1.0 - max(0.0, (grupo["y"] - zy) / max(1, rango))
+            else:
+                # notas caen: mitad de la pantalla -> zona de golpe (abajo)
+                mitad = zy * 0.5
+                if grupo["y"] < mitad:
+                    continue  # aun por encima de la mitad: invisible
+                # fade de 0 (en la mitad) a 1 (en la zona de golpe)
+                rango = zy - mitad
+                alpha_niebla = min(1.0, (grupo["y"] - mitad) / max(1, rango))
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
         cols_hold_activo = [c for c in grupo["cols"] if c in partida["holds_activos"]]
         cols_a_dibujar = list(set(pendientes + cols_hold_activo))
@@ -4021,12 +4047,19 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
             if col in pendientes:
-                if grupo.get("es_acorde"):
-                    pygame.draw.rect(pantalla, col_nota, (x + 6,  gy,     ancho_col - 12, 28))
-                    pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
-                    pygame.draw.rect(pantalla, col_nota, (x + 11, gy + 5, ancho_col - 22, 18))
+                # aplicar fade de niebla al color de la nota
+                if es_niebla and alpha_niebla < 1.0:
+                    cn = (int(col_nota[0] * alpha_niebla),
+                          int(col_nota[1] * alpha_niebla),
+                          int(col_nota[2] * alpha_niebla))
                 else:
-                    pygame.draw.rect(pantalla, col_nota, (x + 6, gy, ancho_col - 12, 28))
+                    cn = col_nota
+                if grupo.get("es_acorde"):
+                    pygame.draw.rect(pantalla, cn, (x + 6,  gy,     ancho_col - 12, 28))
+                    pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
+                    pygame.draw.rect(pantalla, cn, (x + 11, gy + 5, ancho_col - 22, 18))
+                else:
+                    pygame.draw.rect(pantalla, cn, (x + 6, gy, ancho_col - 12, 28))
             xs.append(x + ancho_col // 2)
         if len(xs) > 1:
             pygame.draw.line(pantalla, col_nota, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
