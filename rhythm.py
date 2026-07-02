@@ -9,6 +9,33 @@ import threading
 import math
 import traceback
 
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  RHYTHM - Juego ritmico procedural                                     ║
+# ║  Musica, graficos y audio 100% generados por codigo (sin assets).     ║
+# ╠══════════════════════════════════════════════════════════════════════╣
+# ║  INDICE DE SECCIONES (buscar el texto entre >> << para saltar)        ║
+# ║                                                                        ║
+# ║  >>SETUP<<        Imports, BASE_DIR, crash handler, init de pygame     ║
+# ║  >>AUDIO_DEV<<    Deteccion de dispositivos de audio                   ║
+# ║  >>CONFIG<<       config.json: guardar/cargar preferencias            ║
+# ║  >>VENTANA<<      Resolucion, escalado, brillo, fuentes                ║
+# ║  >>CONSTANTES<<   Colores, teclas, escalas, acordes, dificultades,    ║
+# ║                   mods, generos, instrumentos (datos puros)           ║
+# ║  >>SYNTH_SFX<<    Sintesis de efectos de sonido (UI, hit, combo...)   ║
+# ║  >>SYNTH_INST<<   Sintesis de instrumentos jugables                    ║
+# ║  >>SYNTH_DRUMS<<  Sintesis de bateria y bajo                           ║
+# ║  >>RENDER_INST<<  Renderizado/cache de instrumentos por nota          ║
+# ║  >>MUSICA_MENU<<  Musica de fondo del menu (streaming + crossfade)    ║
+# ║  >>PARTICULAS<<   Sistema de particulas, ondas, flashes, shake        ║
+# ║  >>MUSIC_GEN<<    Generacion procedural de canciones                   ║
+# ║  >>GAME_STATE<<   iniciar_partida, runs, stages, mods                  ║
+# ║  >>RENDER_JUEGO<< Dibujo del gameplay, HUD, fondo enemigo             ║
+# ║  >>PANTALLAS<<    Menu, leaderboard, config, dado, run overview       ║
+# ║  >>MAIN_LOOP<<    Bucle principal y manejo de eventos                  ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+# ═══════════════════════════════════════════════════════ >>SETUP<< ═══
+
 # directorio base: donde esta el .exe (compilado) o el .py (desarrollo)
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -34,6 +61,8 @@ sys.excepthook = _crash_handler
 pygame.init()
 
 # --- dispositivos de audio ---
+# ═══════════════════════════════════════════════════ >>AUDIO_DEV<< ═══
+
 def listar_dispositivos_audio():
     """Lista dispositivos de salida usando SDL2 (nombres compatibles con mixer)."""
     dispositivos = ["Default"]
@@ -104,6 +133,8 @@ config = {
 
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
+# ══════════════════════════════════════════════════════ >>CONFIG<< ═══
+
 def guardar_config():
     try:
         with open(CONFIG_FILE, "w") as f:
@@ -150,6 +181,8 @@ pygame.display.set_caption("Rhythm Game")
 pantalla = pygame.Surface((ANCHO, ALTO))
 clock = pygame.time.Clock()
 
+# ══════════════════════════════════════════════════════ >>VENTANA<< ═══
+
 def presentar():
     """Escala la superficie interna a la ventana, aplica brillo y muestra"""
     w, h = ventana.get_size()
@@ -176,6 +209,9 @@ _splash_t2 = _splash_f2.render("PREPARANDO...", True, (140, 140, 140))
 pantalla.blit(_splash_t2, (ANCHO // 2 - _splash_t2.get_width() // 2, 300))
 presentar()
 del _splash_f, _splash_t, _splash_f2, _splash_t2
+
+# ═══════════════════════════════════════════════════ >>CONSTANTES<< ═══
+# Datos puros: colores, teclas, escalas, acordes, dificultades, mods.
 
 NEGRO    = (0,   0,   0)
 BLANCO   = (255, 255, 255)
@@ -356,6 +392,8 @@ def aplicar_eq(wave, eq_type, intensity=0.5):
         wave = wave / peak * original_peak
     return np.clip(wave, -1, 1)
 
+# ═══════════════════════════════════════════════════ >>SYNTH_DRUMS<< ═══
+
 def synth_kick(rng):
     dur = rng.uniform(0.15, 0.4)
     freq_start = rng.uniform(120, 300)
@@ -485,6 +523,8 @@ def sintetizar_kit(rng):
     return kit
 
 print("Renderizando notas...")
+
+# ═════════════════════════════════════════════════════ >>SYNTH_SFX<< ═══
 
 def synth_error():
     """Sonido de error: buzz grave descendente, disonante"""
@@ -781,7 +821,7 @@ INST_SUSTAIN = {
 }
 # hold maximo para instrumentos percusivos (ms)
 HOLD_MAX_PERCUSIVO = 800
-HOLD_MAX = 4000  # maximo absoluto (= duracion del sample largo)
+HOLD_MAX = 6000  # holds largos: la nota de 1.6s loopea para cubrirlos
 
 # --- identidad visual: cada instrumento tiene una "forma" para su icono y notas ---
 # formas: square, saw, sine, triangle, bell, pluck, pad, metal, noise, glass,
@@ -871,6 +911,8 @@ def dibujar_icono_inst(surf, forma, cx, cy, r, color):
 def forma_de_instrumento(inst):
     return INST_FORMA.get(inst, "sine")
 
+
+# ═══════════════════════════════════════════════════ >>SYNTH_INST<< ═══
 
 def midi_a_freq(midi):
     return 440.0 * (2.0 ** ((midi - 69) / 12.0))
@@ -1783,8 +1825,10 @@ def dibujar_carga_seed(seed):
             pygame.quit()
             exit()
 
+# ════════════════════════════════════════════════════ >>RENDER_INST<< ═══
+
 def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
-    """Renderiza un instrumento completo (60 notas x 2 duraciones)"""
+    """Renderiza un instrumento. Notas cortas 0.3s, largas 1.6s con loop."""
     texto_carga = display if display else nombre
     inst_rng = random.Random(hash(nombre))
     params = generar_params_instrumento(inst_rng, tipo)
@@ -1792,11 +1836,15 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
     inst_eq_int = inst_rng.uniform(0.1, 0.35)
     c_cortas = {}
     c_largas = {}
+    # solo renderizar el rango de notas que las canciones usan
+    # (45-97 tipico, mas margen grave por octavas de mods)
+    MIDI_MIN, MIDI_MAX = 36, 98
+    total = MIDI_MAX - MIDI_MIN
     idx = 0
-    for midi in range(38, 91):
+    for midi in range(MIDI_MIN, MIDI_MAX):
         idx += 1
-        if dibujar_progreso and midi % 4 == 0:
-            dibujar_carga_seed_inst(idx / 53, texto_carga)
+        if dibujar_progreso and midi % 5 == 0:
+            dibujar_carga_seed_inst(idx / total, texto_carga)
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
@@ -1806,18 +1854,18 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
         params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
         params_hold["sustain"] = max(params.get("sustain", 0.6), 0.5)
         params_hold["decay"] = min(params.get("decay", 5.0), 1.5)
-        snd_l = synth_nota(tipo, freq, 4.0, params_hold)
+        # nota larga de 1.6s (antes 4s): 2.5x mas rapido de renderizar
+        snd_l = synth_nota(tipo, freq, 1.6, params_hold)
         arr_l = pygame.sndarray.array(snd_l).astype(np.float64) / 32767
         mono_l = aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int)
         # crossfade para loop suave: mezclar final con inicio
-        cf = min(4000, len(mono_l) // 4)
+        cf = min(3000, len(mono_l) // 4)
         fade_out = np.linspace(1, 0, cf)
         fade_in  = np.linspace(0, 1, cf)
         mono_l[-cf:] = mono_l[-cf:] * fade_out + mono_l[:cf] * fade_in
         c_largas[midi] = np_to_sound(mono_l, lpf=True)
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
-    print(f"  {nombre} OK (EQ: {inst_eq} {inst_eq_int:.1f})")
 
 def dibujar_carga_seed_inst(progreso, nombre):
     """Pantalla de carga mientras se renderiza el instrumento de la seed"""
@@ -1924,6 +1972,8 @@ def detener_musica_menu():
 # rango de seeds para la musica del menu: de DIFICIL en adelante
 SEED_MENU_MIN = 4901   # primer tramo de DIFICIL en get_dificultad
 
+# ════════════════════════════════════════════════════ >>MUSICA_MENU<< ═══
+
 def _preparar_cancion_menu(seed):
     """Genera una cancion para el menu, renderizando instrumento y bajo si faltan."""
     dif = get_dificultad(seed)
@@ -1960,6 +2010,32 @@ def _preparar_en_background():
         traceback.print_exc()
     finally:
         _menu_preparando = False
+
+_prerender_stage_activo = False
+
+def prerender_instrumento_seed(seed):
+    """Renderiza en background el instrumento que usara una seed (proximo stage).
+    Asi cuando llegas a ese stage, ya esta en cache y la carga es instantanea."""
+    global _prerender_stage_activo
+    if _prerender_stage_activo:
+        return
+    def _worker():
+        global _prerender_stage_activo
+        _prerender_stage_activo = True
+        try:
+            dif = get_dificultad(seed)
+            cancion = generar_cancion(int(seed * 23819), dif)
+            inst = cancion["instrumento"]
+            if inst not in cache_por_instrumento:
+                tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
+                if tipo:
+                    renderizar_instrumento(inst, tipo, dibujar_progreso=False)
+        except Exception:
+            pass
+        finally:
+            _prerender_stage_activo = False
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
 
 def nueva_musica_menu_aleatoria():
     """Arranca musica de menu. Usa la cancion pre-renderizada en background
@@ -2121,6 +2197,8 @@ def _color_vivo(base, combo=0):
     else:
         # version saturada del base
         return tuple(min(255, int(c * 1.3 + 30)) for c in base)
+
+# ══════════════════════════════════════════════════════ >>PARTICULAS<< ═══
 
 def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0, combo=0):
     for _ in range(cantidad):
@@ -2775,6 +2853,8 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
                 percusion.append({"tiempo": t, "sample": "crash", "vol": 0.06})
     return sorted(percusion, key=lambda n: n["tiempo"])
 
+# ═══════════════════════════════════════════════════════ >>MUSIC_GEN<< ═══
+
 def generar_cancion(seed, dif):
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
@@ -3221,6 +3301,8 @@ def hold_pixels(hold_ms, vel, fps=60):
         return 0
     return int((hold_ms / (1000 / fps)) * vel)
 
+# ══════════════════════════════════════════════════════ >>GAME_STATE<< ═══
+
 def iniciar_partida(seed, mods=None, stage_info=None):
     global cache_notas, cache_notas_largas
     # mods: set de ids; si es None usa mods_activos (modo libre)
@@ -3251,7 +3333,7 @@ def iniciar_partida(seed, mods=None, stage_info=None):
         mod_txt = fuente_chica.render("MODS: " + ", ".join(nombres), True, BLANCO)
         pantalla.blit(mod_txt, (ANCHO // 2 - mod_txt.get_width() // 2, 360))
     presentar()
-    pygame.time.delay(900)
+    pygame.time.delay(500)
 
     # renderizar el instrumento si no está en cache
     if inst not in cache_por_instrumento:
@@ -3635,6 +3717,8 @@ def dibujar_fondo_lissajous(partida, ahora):
                     pygame.draw.lines(pantalla, color2, False, puntos2[i:i+4], 1)
     pantalla.set_clip(clip_ant)
 
+# ════════════════════════════════════════════════════ >>RENDER_JUEGO<< ═══
+
 def dibujar_juego(partida, ahora):
     num_cols  = partida["dificultad"]["columnas"]
     ancho_col = ANCHO // num_cols
@@ -3858,6 +3942,8 @@ def dibujar_juego(partida, ahora):
         else:
             dl_txt = fuente_chica.render("D = DESCARGAR CANCION", True, BLANCO)
             pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 65))
+
+# ═══════════════════════════════════════════════════════ >>PANTALLAS<< ═══
 
 def dibujar_menu(seed_actual, cargando):
     dif      = get_dificultad(max(seed_actual, 1))
@@ -4456,6 +4542,8 @@ def cambiar_audio_device(idx):
         SND_ERROR = synth_error()
         config["audio_idx"] = 0
 
+# ═══════════════════════════════════════════════════════ >>MAIN_LOOP<< ═══
+
 ESTADO         = "menu"
 partida        = None
 seed_acumulada = 0.0
@@ -4530,6 +4618,9 @@ while corriendo:
                         seed_stage, mods=mods_stage,
                         stage_info={"n": run_actual["stage"]})
                     score_guardado = False
+                    # pre-render del instrumento del proximo stage en background
+                    if run_actual["stage"] < NUM_STAGES:
+                        prerender_instrumento_seed(run_actual["seeds"][idx + 1])
                     ESTADO = "jugando"
 
         elif ESTADO == "run_dado":
@@ -4908,7 +4999,9 @@ while corriendo:
                                         combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                             if midi_fijo in cache_notas_largas:
-                                                ch = cache_notas_largas[midi_fijo].play()
+                                                # loop si el hold dura mas que el sample (1.6s)
+                                                loops = -1 if grupo["hold"] > 1500 else 0
+                                                ch = cache_notas_largas[midi_fijo].play(loops=loops)
                                                 if ch:
                                                     ch.set_volume(config["volumen"])
                                                     canal_hold[col] = ch
