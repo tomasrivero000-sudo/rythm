@@ -4188,21 +4188,35 @@ def calcular_mult_mods():
 
 # ---------------- SISTEMA DE STAGES (modo roguelike) ----------------
 def mods_de_stage(n, rng):
-    """Devuelve el set de mods para el stage n (1..4)."""
+    """Devuelve el set de mods para el stage n (1..4).
+    ESPEJO tiene probabilidad controlada y solo aparece desde el stage 3:
+    30% en stage 3, 35% en stage 4. Nunca en stages 1 y 2."""
     if n == 1:
         return set()
     elif n == 2:
-        # stage 2: mod facil suave. Solo se excluye VELOZ (x2 es duro tan temprano).
-        # espejo, inverso y acelerando salen por igual -> balance parejo.
-        opciones = [m for m in MODS_FACILES if m != "veloz"]
+        # stage 2: mod facil suave. Sin espejo ni veloz (se reservan para mas
+        # adelante). Solo inverso o acelerando.
+        opciones = [m for m in MODS_FACILES if m not in ("veloz", "espejo")]
         return {rng.choice(opciones)}
     elif n == 3:
-        # stage 3: cualquier mod facil
-        return {rng.choice(MODS_FACILES)}
-    else:  # stage 4: hasta 2 mods de movimiento al azar + sudden death con 10%
-        movimiento = ["espejo", "inverso", "veloz", "acelerando"]
-        cantidad = rng.choice([1, 2])
-        mods = set(rng.sample(movimiento, cantidad))
+        # stage 3: espejo con 30%; si no sale, otro mod facil (sin espejo)
+        if rng.random() < 0.30:
+            return {"espejo"}
+        otros = [m for m in MODS_FACILES if m != "espejo"]
+        return {rng.choice(otros)}
+    else:  # stage 4: espejo con 35% + hasta 1 mod de movimiento + sudden 10%
+        mods = set()
+        if rng.random() < 0.35:
+            mods.add("espejo")
+        # completar con mods de movimiento (sin espejo, ya decidido arriba)
+        otros = ["inverso", "veloz", "acelerando"]
+        # si no salio espejo, garantizar al menos 1 mod; si salio, 50% de sumar otro
+        if not mods:
+            mods.add(rng.choice(otros))
+            if rng.random() < 0.5:
+                mods.add(rng.choice(otros))
+        elif rng.random() < 0.5:
+            mods.add(rng.choice(otros))
         if rng.random() < 0.10:
             mods.add("sudden")
         return mods
