@@ -1984,6 +1984,16 @@ def detener_musica_menu():
     _menu_fadeout = None
     _menu_siguiente = None
 
+def cortar_audio_suave(ms=200):
+    """Apaga todos los canales con un fade corto en vez de stop() abrupto.
+    Cortar el audio de golpe deja la onda a mitad de ciclo y produce un
+    'pop'/click. El fade lleva la señal a cero suavemente. Se usa al arrancar
+    una cancion (mientras se muestra la pantalla de carga, no se nota la espera)."""
+    try:
+        pygame.mixer.fadeout(ms)
+    except Exception:
+        pygame.mixer.stop()
+
 # rango de seeds para la musica del menu: de DIFICIL en adelante
 SEED_MENU_MIN = 4901   # primer tramo de DIFICIL en get_dificultad
 
@@ -3515,6 +3525,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         "indice_jugador": 0,
         "indice_perc":    0,
         "indice_bajo":    0,
+        "_arranco_audio": False,
         "inicio":         pygame.time.get_ticks(),
         "notas_cayendo":  [],
         "puntos":         puntos_iniciales,
@@ -3655,6 +3666,22 @@ def tick_background(partida, ahora):
         si = partida.get("stage_info")
         if si and si["n"] >= NUM_STAGES:
             _explotar_figura(partida)
+
+    # anti-avalancha: si hubo un hueco de timing (lag de carga), muchos eventos
+    # quedaron atrasados. Reproducirlos todos de golpe suma amplitudes y clipea.
+    # En ese caso, avanzamos los indices al presente SIN reproducir el atraso.
+    UMBRAL_ATRASO = 120   # ms; un frame normal es ~16ms
+    if not partida.get("_arranco_audio"):
+        # primer tick de audio: descartar cualquier evento con tiempo < ahora
+        # (evita el golpe inicial de eventos acumulados durante la carga)
+        while (partida["indice_perc"] < len(c["percusion"])
+               and c["percusion"][partida["indice_perc"]]["tiempo"] < ahora - UMBRAL_ATRASO):
+            partida["indice_perc"] += 1
+        bajo0 = c["bajo"]["eventos"]
+        while (partida["indice_bajo"] < len(bajo0)
+               and bajo0[partida["indice_bajo"]]["tiempo"] < ahora - UMBRAL_ATRASO):
+            partida["indice_bajo"] += 1
+        partida["_arranco_audio"] = True
 
     # paneo por tipo de elemento de percusión
     pan_perc = {
@@ -4835,7 +4862,7 @@ while corriendo:
                 elif evento.key in (pygame.K_SPACE, pygame.K_RETURN):
                     sfx_confirm()
                     detener_musica_menu()
-                    pygame.mixer.stop()
+                    cortar_audio_suave()
                     idx = run_actual["stage"] - 1
                     seed_stage = run_actual["seeds"][idx]
                     mods_stage = run_actual["mods"][idx]
@@ -4911,7 +4938,7 @@ while corriendo:
                         mods_activos.add(mid)
                 elif evento.key == pygame.K_RETURN:
                     detener_musica_menu()
-                    pygame.mixer.stop()
+                    cortar_audio_suave()
                     dibujar_carga_seed(seed_acumulada)
                     partida = iniciar_partida(int(seed_acumulada))
                     score_guardado = False
