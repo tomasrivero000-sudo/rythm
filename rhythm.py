@@ -1919,6 +1919,7 @@ particulas = []
 textos_flotantes = []
 flashes = []         # {col, vida, vida_max}
 ondas = []           # anillos de choque expansivos
+indicadores_hit = [] # {col_idx, color, vida, vida_max} semaforo de precision
 shake_amt = 0.0      # intensidad del shake actual
 shake_dx = 0
 shake_dy = 0
@@ -2209,13 +2210,29 @@ def crear_explosion(x, y, cantidad, color=BLANCO, potencia=1.0, combo=0):
         vida = random.randint(25, 65) + int((potencia - 1) * 15)
         tam = int(random.randint(3, 12) * (0.8 + potencia * 0.4))
         forma = random.choice(["rect", "rect", "linea", "estrella"])
-        col_p = _color_vivo(color, combo)
+        # color destino: la particula nace blanca y vira a este color con el tiempo
+        col_destino = _color_vivo(color, combo)
         particulas.append({"x": x, "y": y, "dx": dx, "dy": dy, "vida": vida,
-                           "vida_max": vida, "tam": tam, "color": col_p, "forma": forma,
+                           "vida_max": vida, "tam": tam, "color": col_destino, "forma": forma,
                            "spin": random.uniform(-0.4, 0.4)})
 
 def crear_onda(x, y, intensidad=1.0, r0=4):
     ondas.append({"x": x, "y": y, "r": r0, "vida": 20, "vida_max": 20, "intensidad": intensidad})
+
+# colores del semaforo de precision
+COL_HIT_PERFECTO = (60, 230, 90)    # verde
+COL_HIT_CERCA    = (240, 210, 40)   # amarillo
+COL_HIT_ERROR    = (235, 55, 55)    # rojo
+
+def crear_indicador_hit(col_idx, calidad):
+    """Enciende el indicador de una columna. calidad: 'perfecto', 'cerca', 'error'."""
+    color = {"perfecto": COL_HIT_PERFECTO,
+             "cerca": COL_HIT_CERCA,
+             "error": COL_HIT_ERROR}.get(calidad, COL_HIT_ERROR)
+    # reemplazar indicador previo de esa columna si existe
+    indicadores_hit[:] = [i for i in indicadores_hit if i["col_idx"] != col_idx]
+    indicadores_hit.append({"col_idx": col_idx, "color": color,
+                            "vida": 22, "vida_max": 22})
 
 def crear_flash(col, intensidad=1.0):
     flashes.append({"col": col, "vida": 14, "vida_max": 14, "intensidad": intensidad})
@@ -2250,6 +2267,9 @@ def actualizar_particulas():
         o["r"] += 6
         o["vida"] -= 1
     ondas[:] = [o for o in ondas if o["vida"] > 0]
+    for ind in indicadores_hit:
+        ind["vida"] -= 1
+    indicadores_hit[:] = [i for i in indicadores_hit if i["vida"] > 0]
     # shake decay
     if shake_amt > 0:
         shake_dx = random.randint(int(-shake_amt), int(shake_amt))
@@ -2271,9 +2291,18 @@ def dibujar_particulas():
         pygame.draw.circle(pantalla, col, (int(o["x"]) + shake_dx, int(o["y"]) + shake_dy), int(o["r"]), grosor)
     for p in particulas:
         pct = p["vida"] / p["vida_max"]
-        # atenuar el color multiplicando por pct (preserva el tono, no lo apaga a gris)
         base = p["color"]
-        color = (int(base[0] * pct), int(base[1] * pct), int(base[2] * pct))
+        # edad: 0 = recien nacida, 1 = a punto de morir
+        edad = 1.0 - pct
+        # la particula nace blanca y toma su color destino gradualmente
+        # (mezcla mas rapido al principio para que el blanco sea un destello)
+        tinte = min(1.0, edad * 1.8)
+        r = int(255 + (base[0] - 255) * tinte)
+        g = int(255 + (base[1] - 255) * tinte)
+        b = int(255 + (base[2] - 255) * tinte)
+        # atenuar al final de la vida (fade out)
+        atenua = min(1.0, pct * 1.6)
+        color = (int(r * atenua), int(g * atenua), int(b * atenua))
         tam = max(1, int(p["tam"] * pct))
         px = int(p["x"]) + shake_dx
         py = int(p["y"]) + shake_dy
@@ -3305,6 +3334,12 @@ def hold_pixels(hold_ms, vel, fps=60):
 
 def iniciar_partida(seed, mods=None, stage_info=None):
     global cache_notas, cache_notas_largas
+    # limpiar efectos visuales de una partida anterior
+    particulas.clear()
+    textos_flotantes.clear()
+    flashes.clear()
+    ondas.clear()
+    indicadores_hit.clear()
     # mods: set de ids; si es None usa mods_activos (modo libre)
     mods_partida = set(mods) if mods is not None else set(mods_activos)
     dif     = get_dificultad(seed)
@@ -3831,6 +3866,25 @@ def dibujar_juego(partida, ahora):
         tecla_idx = inv_teclas.get(i, i)
         label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
         pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, zy + 8 + sy))
+
+    # indicador de precision (semaforo): borde de color en la columna tocada
+    for ind in indicadores_hit:
+        pct = ind["vida"] / ind["vida_max"]
+        col_idx = ind["col_idx"]
+        if col_idx >= num_cols:
+            continue
+        x = col_idx * ancho_col + sx
+        cbase = ind["color"]
+        # el color arranca pleno y se atenua
+        cy = (int(cbase[0] * pct), int(cbase[1] * pct), int(cbase[2] * pct))
+        # relleno tenue + borde brillante alrededor de la celda de la tecla
+        rect_cel = (x + 2, zy + 2 + sy, ancho_col - 4, 32)
+        relleno = pygame.Surface((ancho_col - 4, 32))
+        relleno.set_alpha(int(90 * pct))
+        relleno.fill(cbase)
+        pantalla.blit(relleno, (x + 2, zy + 2 + sy))
+        grosor = max(2, int(4 * pct))
+        pygame.draw.rect(pantalla, cy, rect_cel, grosor)
 
     pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
@@ -4952,6 +5006,7 @@ while corriendo:
                                                 crear_onda(cx, zy_p, 0.5, r0=int(15 + partida["combo"] * 0.5))
                                             crear_flash(col, min(0.8, 0.5 + partida["combo"] * 0.01))
                                             crear_shake(min(5 + partida["combo"] * 0.15, 12))
+                                            crear_indicador_hit(col, "perfecto")
                                             sfx_hit_perfect(partida["combo"])
                                         elif distancia < 60:
                                             pts = 3
@@ -4962,6 +5017,7 @@ while corriendo:
                                             crear_onda(cx, zy_p, 0.5)
                                             crear_flash(col, 0.4)
                                             crear_shake(min(3 + partida["combo"] * 0.1, 8))
+                                            crear_indicador_hit(col, "cerca")
                                             sfx_hit_good()
                                         elif distancia < 100:
                                             pts = 1
@@ -4970,6 +5026,7 @@ while corriendo:
                                             crear_explosion(cx, zy_p, 20, color=col_g, combo=partida["combo"])
                                             crear_onda(cx, zy_p, 0.4)
                                             crear_flash(col, 0.3)
+                                            crear_indicador_hit(col, "cerca")
                                             sfx_hit_good()
                                         else:
                                             pts = 0
@@ -4977,6 +5034,7 @@ while corriendo:
                                             partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
                                             crear_explosion(cx, zy_p, 8, GRIS_MED)
                                             crear_shake(8)
+                                            crear_indicador_hit(col, "error")
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
                                         # milestone de combo cada 10: sonido + confeti
@@ -5045,6 +5103,7 @@ while corriendo:
                             crear_texto_flotante(cx, zy_p - 20, "-1", GRIS_MED)
                             crear_explosion(cx, zy_p, 6, GRIS_MED)
                             crear_shake(3)
+                            crear_indicador_hit(col, "error")
                             SND_ERROR.set_volume(0.35 * config["volumen"])
                             SND_ERROR.play()
 
