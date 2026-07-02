@@ -2974,9 +2974,12 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     densidad = gdef.get("densidad", 1.0) * dif.get("dens", 1.0)
     swing    = gdef.get("swing", 0.0)
 
-    # notas por columna: saltar de a 2 grados para cubrir acordes y rango amplio
-    # 3 cols → root, 3ra, 5ta (triada) | 4 cols → +7ma | 5+ cols → octava+
-    notas_columnas = [nota_midi(tonica + 12, escala, i * 2) for i in range(num_columnas)]
+    # notas por columna: grados CONSECUTIVOS de la escala (no cada 2).
+    # Esto es clave para la musicalidad: columnas vecinas = notas vecinas, lo
+    # que permite el movimiento por grado conjunto (paso a paso), base de toda
+    # melodia cantable. Antes se saltaba de a 2 grados (i*2) y la melodia salia
+    # como un arpegio monotono tonica-tercera-quinta.
+    notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
     kit = elegir_kit(rng)
     # instrumento: si viene forzado (runs, para garantizar variedad) se respeta.
     # si no: 2% raro, si no del pool del genero (con fallback a la lista global)
@@ -3024,50 +3027,50 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     prob_acorde = {3: 0.2, 4: 0.3, 5: 0.4, 6: 0.5, 7: 0.6}.get(num_columnas, 0.2)
 
-    # frases melódicas con contornos musicales
-    # 0=bajo(tónica), 1=medio(tercera/cuarta), 2=alto(quinta+)
+    # frases melodicas: contornos que se mueven mayormente por GRADO CONJUNTO
+    # (pasos de a 1), con algun salto ocasional. Los valores son grados de la
+    # escala relativos (0=tonica). El movimiento paso a paso es lo que hace que
+    # una melodia suene cantable y no como un arpegio.
     frases_subir = [
-        [0, 0, 1, 2],    # reposo -> ascenso gradual
-        [0, 1, 1, 2],    # paso a paso
-        [0, 1, 2, 1],    # arco: sube y baja
-        [0, 0, 0, 2],    # pedal con salto
-        [0, 1, 0, 2],    # zigzag ascendente
-        [1, 0, 1, 2],    # bordadura + ascenso
-        [0, 1, 2, 2],    # ascenso con reposo arriba
+        [0, 1, 2, 3],    # escala ascendente
+        [0, 1, 2, 1],    # sube y vuelve (bordadura superior)
+        [0, 2, 1, 3],    # onda ascendente
+        [0, 1, 3, 2],    # paso, salto, resolucion descendente
+        [2, 1, 2, 4],    # bordadura + impulso
+        [0, 2, 3, 4],    # ascenso con un salto inicial
+        [1, 2, 3, 2],    # tramo medio ascendente
     ]
     frases_bajar = [
-        [2, 2, 1, 0],    # descenso gradual
-        [2, 1, 1, 0],    # paso a paso
-        [2, 1, 0, 1],    # arco invertido
-        [2, 2, 2, 0],    # pedal con caída
-        [2, 1, 2, 0],    # zigzag descendente
-        [1, 2, 1, 0],    # bordadura + descenso
-        [2, 1, 0, 0],    # descenso con reposo abajo
+        [4, 3, 2, 1],    # escala descendente
+        [4, 3, 4, 2],    # baja con bordadura
+        [3, 4, 2, 0],    # onda descendente
+        [4, 2, 3, 1],    # salto y resolucion
+        [3, 2, 1, 2],    # descenso con reposo
+        [4, 3, 1, 0],    # descenso hacia tonica
+        [2, 3, 1, 0],    # cierra en tonica
     ]
     frases_medio = [
-        [1, 0, 1, 2],    # desde medio explora
-        [1, 2, 1, 0],    # arco desde medio
-        [1, 1, 0, 1],    # bordadura inferior
-        [1, 1, 2, 1],    # bordadura superior
-        [0, 2, 1, 1],    # salto + resolución
-        [2, 0, 1, 1],    # salto inverso + resolución
-        [1, 0, 2, 0],    # péndulo
+        [2, 3, 2, 1],    # ondulacion media
+        [1, 2, 1, 0],    # paso a paso hacia tonica
+        [2, 1, 2, 3],    # vaiven ascendente
+        [3, 2, 1, 2],    # vaiven descendente
+        [1, 3, 2, 1],    # arco con salto
+        [2, 1, 0, 1],    # bordadura inferior
+        [0, 1, 2, 1],    # arco simple
     ]
 
     def escalar_frase(frase):
-        """Mapea niveles 0,1,2 a columnas usando grados de la escala"""
-        if num_columnas <= 3:
-            return [min(g, num_columnas - 1) for g in frase]
-        # mapear a posiciones musicales: tónica, mediante, dominante
-        tonica = 0
-        mediante = num_columnas // 3
-        dominante = num_columnas * 2 // 3
-        # agregar variación por la seed
-        tonica = max(0, tonica + rng.randint(0, 1))
-        mediante = min(num_columnas - 1, mediante + rng.randint(-1, 1))
-        dominante = min(num_columnas - 1, max(mediante + 1, dominante + rng.randint(-1, 0)))
-        mapa = {0: tonica, 1: mediante, 2: dominante}
-        return [mapa[g] for g in frase]
+        """Mapea grados de escala (0..4) a columnas. Con columnas consecutivas,
+        cada grado es una columna, preservando el movimiento por grado conjunto.
+        Con pocas columnas, comprime el rango sin romper el contorno."""
+        maxg = max(frase)
+        if maxg < num_columnas:
+            # entra directo: cada grado -> su columna (movimiento conjunto real)
+            base = rng.randint(0, max(0, num_columnas - 1 - maxg))
+            return [min(num_columnas - 1, g + base) for g in frase]
+        # el contorno excede las columnas: comprimir proporcionalmente
+        return [min(num_columnas - 1, int(round(g * (num_columnas - 1) / max(1, maxg))))
+                for g in frase]
 
     motivos_a = [escalar_frase(rng.choice(frases_subir)) for _ in range(4)]
     motivos_b = [escalar_frase(rng.choice(frases_bajar)) for _ in range(4)]
@@ -3207,23 +3210,37 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                     continue
                 midi_nota = notas_columnas[col] + oct_off
                 # --- melodia consciente del acorde (convenciones tonales) ---
-                # tiempos fuertes resuelven al acorde; el s=8 (mitad, semi-fuerte)
-                # resuelve disonancias por grado conjunto descendente.
+                # Principio: los tiempos FUERTES deben apoyarse en tonos de acorde,
+                # pero SOLO corregimos si la nota es realmente disonante (a semitono
+                # del acorde). Las notas de la escala que ya suenan bien se dejan,
+                # para preservar el movimiento por grado conjunto (melodia cantable).
                 en_tiempo_fuerte = (s % 8 == 0)     # 1er y 3er tiempo (fuertes)
-                en_semifuerte   = (s % 4 == 0)      # 2do y 4to tiempo
+                clases_ac = {ta % 12 for ta in tonos_ac}
+                pc = midi_nota % 12
+                es_consonante = pc in clases_ac
                 if es_cierre and s == 0:
                     # cierre de seccion: forzar tonica o quinta (resolucion final)
                     midi_nota = ajustar_a_acorde(midi_nota, [tonos_ac[0], tonos_ac[2]],
                                                  escala, tonica + 12)
-                elif en_tiempo_fuerte:
-                    # tiempos fuertes casi siempre caen en tono de acorde
-                    if rng.random() < 0.85:
-                        midi_nota = ajustar_a_acorde(midi_nota, tonos_ac, escala, tonica + 12)
-                elif en_semifuerte:
-                    # semifuertes: resolver disonancias por grado conjunto descendente
-                    if rng.random() < 0.5:
-                        midi_nota = resolver_disonancia(midi_nota, tonos_ac, escala, tonica + 12)
-                # (16avos debiles quedan libres: notas de paso y bordaduras)
+                elif en_tiempo_fuerte and not es_consonante:
+                    # tiempo fuerte con nota disonante: resolverla al acorde
+                    # (por grado conjunto descendente, mas musical que saltar)
+                    midi_nota = resolver_disonancia(midi_nota, tonos_ac, escala, tonica + 12)
+                # evitar repetir la nota anterior (da estatismo): si se repite en
+                # un tiempo debil, moverla a un grado vecino de la escala.
+                if notas_jugador and not en_tiempo_fuerte:
+                    ult = notas_jugador[-1]
+                    if not ult.get("es_acorde") and ult["midis"] and ult["midis"][0] == midi_nota:
+                        # mover a un grado vecino de la escala (arriba o abajo)
+                        grados_esc = escala[:-1] if escala[-1] == 12 else escala
+                        pc_rel = (midi_nota - (tonica % 12)) % 12
+                        if pc_rel in grados_esc:
+                            gi = grados_esc.index(pc_rel)
+                            gi_nuevo = (gi + rng.choice([-1, 1])) % len(grados_esc)
+                            delta = grados_esc[gi_nuevo] - grados_esc[gi]
+                            midi_nota += delta
+                        else:
+                            midi_nota += rng.choice([-2, -1, 1, 2])
                 notas_jugador.append({
                     "cols": [col], "midis": [midi_nota],
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
