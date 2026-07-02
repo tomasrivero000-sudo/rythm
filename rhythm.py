@@ -301,12 +301,15 @@ MODIFICADORES = [
     {"id": "invisible",  "nombre": "INVISIBLES",  "desc": "notas desaparecen al caer", "mult": 1.8},
     {"id": "inverso",    "nombre": "INVERSO",     "desc": "notas suben en vez de caer", "mult": 1.4},
     {"id": "acelerando", "nombre": "ACELERANDO",  "desc": "velocidad sube gradualmente", "mult": 1.3},
+    {"id": "niebla",     "nombre": "NIEBLA",      "desc": "notas visibles solo al final", "mult": 1.6},
+    {"id": "rafagas",    "nombre": "RAFAGAS",     "desc": "tramos densos y silencios", "mult": 1.3},
+    {"id": "desplaza",   "nombre": "DESPLAZAMIENTO", "desc": "las columnas rotan", "mult": 1.7},
     {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
 ]
 mods_activos = set()   # ids de modificadores seleccionados (modo libre)
 
 # mods "faciles" que pueden salir en el dado de los stages 2 y 3
-MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando"]
+MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando", "niebla", "rafagas", "desplaza"]
 
 # --- modo STAGES (tipo roguelike): completar generos en cada dificultad ---
 # cada run son 4 stages del mismo genero+dificultad:
@@ -3435,6 +3438,22 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
     for n in cancion["notas_jugador"]:
         if n.get("hold", 0) > hold_max:
             n["hold"] = hold_max
+
+    # RAFAGAS: alterna tramos densos y silencios. Se agrupan las notas en
+    # ventanas de ~2 compases; una de cada dos ventanas se vacia (silencio).
+    if "rafagas" in mods_partida:
+        beat = cancion["beat"]
+        ventana_ms = beat * 4 * 2   # 2 compases por ventana
+        if ventana_ms > 0:
+            notas_filtradas = []
+            for n in cancion["notas_jugador"]:
+                ventana = int(n["tiempo"] // ventana_ms)
+                # ventanas pares = suenan (rafaga), impares = silencio
+                if ventana % 2 == 0:
+                    notas_filtradas.append(n)
+            # seguridad: si quedaron muy pocas, no aplicar (evita canciones vacias)
+            if len(notas_filtradas) >= max(4, len(cancion["notas_jugador"]) // 4):
+                cancion["notas_jugador"] = notas_filtradas
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
@@ -3478,6 +3497,11 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
     mapa_teclas = {c: c for c in range(num_cols_p)}
     if "espejo" in mods_partida:
         mapa_teclas = {c: (num_cols_p - 1 - c) for c in range(num_cols_p)}
+    # DESPLAZAMIENTO: las columnas rotan en el tiempo (se actualiza en el loop).
+    # Guardamos el periodo de rotacion en ms (cada 4 compases rota una posicion).
+    desplaza_periodo = 0
+    if "desplaza" in mods_partida:
+        desplaza_periodo = cancion["beat"] * 4 * 4  # cada 4 compases
 
     mult_mods = 1.0
     for m in MODIFICADORES:
@@ -3509,6 +3533,9 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         "velocidad":      VELOCIDAD * dif.get("vel_mult", 1.0) * (2.0 if "veloz" in mods_partida else 1.0),
         "stage_info":     stage_info,
         "mapa_teclas":    mapa_teclas,
+        "mapa_base":      dict(mapa_teclas),   # mapa sin rotacion (para DESPLAZAMIENTO)
+        "desplaza_periodo": desplaza_periodo,  # ms por rotacion (0 = sin desplazamiento)
+        "desplaza_offset": 0,                  # rotacion actual (columnas)
         "es_inverso":     "inverso" in mods_partida,
         "zona_y":         90 if "inverso" in mods_partida else ZONA_Y,
     }
@@ -3879,12 +3906,19 @@ def dibujar_juego(partida, ahora):
         pantalla.set_clip(pygame.Rect(0, 0, ANCHO, zy))
 
     es_invisible = "invisible" in partida.get("mods", set())
+    es_niebla = "niebla" in partida.get("mods", set())
     for grupo in partida["notas_cayendo"]:
-        # modificador INVISIBLE: las notas desaparecen cerca de la zona
+        # modificador INVISIBLE: las notas se ven al principio y desaparecen al caer
         if es_invisible:
             if es_inv and grupo["y"] < zy + (ALTO - zy) * 0.45:
                 continue
             elif not es_inv and grupo["y"] > zy * 0.45:
+                continue
+        # modificador NIEBLA: inverso de invisible. Ocultas lejos, aparecen al final
+        if es_niebla:
+            if es_inv and grupo["y"] > zy + (ALTO - zy) * 0.55:
+                continue
+            elif not es_inv and grupo["y"] < zy * 0.55:
                 continue
         pendientes = [c for c in grupo["cols"] if c not in grupo.get("acertadas", set())]
         cols_hold_activo = [c for c in grupo["cols"] if c in partida["holds_activos"]]
@@ -4189,28 +4223,29 @@ def calcular_mult_mods():
 # ---------------- SISTEMA DE STAGES (modo roguelike) ----------------
 def mods_de_stage(n, rng):
     """Devuelve el set de mods para el stage n (1..4).
-    ESPEJO tiene probabilidad controlada y solo aparece desde el stage 3:
-    30% en stage 3, 35% en stage 4. Nunca en stages 1 y 2."""
+    Los mods se escalonan por dificultad:
+      - suaves (stage 2+): inverso, acelerando, rafagas
+      - medios (stage 3+): niebla, veloz, + espejo con 30%
+      - duros  (stage 4):  desplaza, + espejo con 35%, sudden death
+    ESPEJO: nunca en stages 1-2, 30% en stage 3, 35% en stage 4."""
+    suaves = ["inverso", "acelerando", "rafagas"]
+    medios = ["niebla", "veloz"]
     if n == 1:
         return set()
     elif n == 2:
-        # stage 2: mod facil suave. Sin espejo ni veloz (se reservan para mas
-        # adelante). Solo inverso o acelerando.
-        opciones = [m for m in MODS_FACILES if m not in ("veloz", "espejo")]
-        return {rng.choice(opciones)}
+        # stage 2: solo un mod suave (nada que desoriente demasiado tan temprano)
+        return {rng.choice(suaves)}
     elif n == 3:
-        # stage 3: espejo con 30%; si no sale, otro mod facil (sin espejo)
+        # stage 3: espejo con 30%; si no, un mod suave o medio
         if rng.random() < 0.30:
             return {"espejo"}
-        otros = [m for m in MODS_FACILES if m != "espejo"]
-        return {rng.choice(otros)}
-    else:  # stage 4: espejo con 35% + hasta 1 mod de movimiento + sudden 10%
+        return {rng.choice(suaves + medios)}
+    else:  # stage 4: espejo con 35% + otro mod (incluye los duros) + sudden 10%
         mods = set()
         if rng.random() < 0.35:
             mods.add("espejo")
-        # completar con mods de movimiento (sin espejo, ya decidido arriba)
-        otros = ["inverso", "veloz", "acelerando"]
-        # si no salio espejo, garantizar al menos 1 mod; si salio, 50% de sumar otro
+        # pool completo de movimiento para el stage final
+        otros = suaves + medios + ["desplaza"]
         if not mods:
             mods.add(rng.choice(otros))
             if rng.random() < 0.5:
@@ -4556,32 +4591,34 @@ def dibujar_mods():
     sub = fuente_chica.render("SUBEN EL MULTIPLICADOR DE PUNTOS", True, GRIS_MED)
     pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 115))
 
-    y0 = 160
+    y0 = 145
+    fila_h = 42
     for i, m in enumerate(MODIFICADORES):
-        y = y0 + i * 56
+        y = y0 + i * fila_h
         sel = (i == mods_opcion)
         activo = m["id"] in mods_activos
         # checkbox
         box_x = 90
-        pygame.draw.rect(pantalla, GRIS, (box_x, y, 22, 22), 2)
+        pygame.draw.rect(pantalla, GRIS, (box_x, y, 20, 20), 2)
         if activo:
-            pygame.draw.rect(pantalla, BLANCO, (box_x + 4, y + 4, 14, 14))
+            pygame.draw.rect(pantalla, BLANCO, (box_x + 4, y + 4, 12, 12))
         # nombre + descripcion
         color = BLANCO if sel else GRIS_MED
         marca = "> " if sel else "  "
         nom = fuente.render(f"{marca}{m['nombre']}", True, color)
-        pantalla.blit(nom, (box_x + 40, y - 2))
+        pantalla.blit(nom, (box_x + 40, y - 4))
         desc = fuente_chica.render(m["desc"], True, GRIS)
-        pantalla.blit(desc, (box_x + 40, y + 24))
+        pantalla.blit(desc, (box_x + 40, y + 20))
         # multiplicador
         mult_txt = fuente_chica.render(f"x{m['mult']}", True, color)
-        pantalla.blit(mult_txt, (ANCHO - 120, y + 4))
+        pantalla.blit(mult_txt, (ANCHO - 120, y + 2))
 
     # multiplicador total
     mult_total = calcular_mult_mods()
-    pygame.draw.line(pantalla, GRIS, (60, 470), (ANCHO - 60, 470), 1)
+    linea_y = y0 + len(MODIFICADORES) * fila_h + 8
+    pygame.draw.line(pantalla, GRIS, (60, linea_y), (ANCHO - 60, linea_y), 1)
     total_txt = fuente.render(f"MULTIPLICADOR TOTAL: x{mult_total:.2f}", True, BLANCO)
-    pantalla.blit(total_txt, (ANCHO // 2 - total_txt.get_width() // 2, 485))
+    pantalla.blit(total_txt, (ANCHO // 2 - total_txt.get_width() // 2, linea_y + 12))
 
     ayuda1 = fuente_chica.render("ARRIBA/ABAJO = ELEGIR   ESPACIO = ACTIVAR", True, GRIS)
     pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 540))
@@ -5321,6 +5358,24 @@ while corriendo:
         if dev_mode:
             partida["inicio"] -= 1000 // 60
         ahora = ahora_ms - partida["inicio"]
+
+        # DESPLAZAMIENTO: rotar el mapa de columnas cada 'desplaza_periodo' ms
+        periodo = partida.get("desplaza_periodo", 0)
+        if periodo > 0 and not partida.get("game_over"):
+            nuevo_offset = int(ahora // periodo)
+            if nuevo_offset != partida.get("desplaza_offset", 0):
+                partida["desplaza_offset"] = nuevo_offset
+                num_c = partida["dificultad"]["columnas"]
+                base = partida.get("mapa_base", {c: c for c in range(num_c)})
+                # rotar: cada tecla fisica apunta a una columna corrida
+                partida["mapa_teclas"] = {
+                    c: (base.get(c, c) + nuevo_offset) % num_c
+                    for c in range(num_c)
+                }
+                # feedback visual y sonoro del cambio
+                crear_texto_flotante(ANCHO // 2, zy_p - 100, "COLUMNAS ROTADAS!", BLANCO, True)
+                crear_shake(6)
+                sfx_select()
 
         if not partida.get("game_over"):
             tick_background(partida, ahora)
