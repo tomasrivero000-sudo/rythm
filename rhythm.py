@@ -2225,6 +2225,42 @@ def nota_midi(tonica, escala, grado):
     octava = grado // len(escala)
     return tonica + escala[grado % len(escala)] + octava * 12
 
+def tonos_acorde(tonica_midi, escala, grado):
+    """Devuelve los 3 tonos (triada) de un acorde construido sobre 'grado'
+    de la escala: fundamental, tercera y quinta (grados +2 y +4)."""
+    return [
+        nota_midi(tonica_midi, escala, grado),
+        nota_midi(tonica_midi, escala, grado + 2),
+        nota_midi(tonica_midi, escala, grado + 4),
+    ]
+
+def ajustar_a_acorde(midi, tonos_ac, escala, tonica_midi, fuerza=1.0):
+    """Corrige una nota MIDI hacia el tono de acorde mas cercano.
+    fuerza=1.0 -> siempre al tono de acorde; 0.0 -> sin cambio.
+    Preserva la octava original para no romper el contorno melodico."""
+    if not tonos_ac:
+        return midi
+    # normalizar a clases de altura (0-11) para comparar
+    pc = midi % 12
+    mejor = None
+    mejor_dist = 99
+    for ta in tonos_ac:
+        d = abs((ta % 12) - pc)
+        d = min(d, 12 - d)
+        if d < mejor_dist:
+            mejor_dist = d
+            mejor = ta
+    if mejor is None:
+        return midi
+    # mover la nota a la clase del tono de acorde, en la octava original
+    octava_orig = midi // 12
+    nuevo = (mejor % 12) + octava_orig * 12
+    # elegir la octava mas cercana a la nota original
+    for cand in (nuevo, nuevo + 12, nuevo - 12):
+        if abs(cand - midi) < abs(nuevo - midi):
+            nuevo = cand
+    return nuevo
+
 NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 def midi_a_nombre(midi):
     return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
@@ -2955,9 +2991,15 @@ def generar_cancion(seed, dif):
         oct_off = mut_octava if (mut_activa and rep >= mut_desde) else 0
         # CAPA 4: intensidad de adornos crece con la repeticion
         prob_adorno = (0.1 + (rep / max(1, num_reps)) * 0.35) * densidad
+        es_ultima_rep = (rep == num_reps - 1)
         for c in range(4):
             compas_real = rep * 4 + c
             compas = bloque[c]
+            # acorde actual de la progresion para este compas
+            grado_actual = progresion[compas_real % len(progresion)]
+            tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
+            # ultimo compas de la seccion: resolver a la tonica
+            es_cierre = es_ultima_rep and c == 3
             for s in range(16):
                 if compas[s] is None:
                     continue
@@ -2973,25 +3015,44 @@ def generar_cancion(seed, dif):
                         if col_ac not in cols_ac:
                             cols_ac.append(col_ac)
                     if len(cols_ac) >= 2:
+                        # armonizar el acorde a los tonos reales de la progresion
+                        midis_ac = []
+                        for i, cx in enumerate(cols_ac):
+                            m = notas_columnas[cx] + oct_off
+                            m = ajustar_a_acorde(m, tonos_ac, escala, tonica + 12)
+                            midis_ac.append(m)
                         notas_jugador.append({
                             "cols": cols_ac,
-                            "midis": [notas_columnas[cx] + oct_off for cx in cols_ac],
+                            "midis": midis_ac,
                             "tiempo": t, "es_acorde": True, "parte": "nudo", "hold": 0,
                         })
                         continue
                 # densidad < 1: saltear notas (nunca el down-beat del compas)
                 if densidad < 1.0 and s != 0 and rng.random() > densidad:
                     continue
+                midi_nota = notas_columnas[col] + oct_off
+                # --- melodia consciente del acorde ---
+                # tiempos fuertes (s=0,4,8,12) resuelven al acorde; debiles pueden tensar
+                en_tiempo_fuerte = (s % 4 == 0)
+                if es_cierre and s == 0:
+                    # cierre de seccion: forzar tonica o quinta
+                    midi_nota = ajustar_a_acorde(midi_nota, [tonos_ac[0], tonos_ac[2]],
+                                                 escala, tonica + 12)
+                elif en_tiempo_fuerte and rng.random() < 0.75:
+                    midi_nota = ajustar_a_acorde(midi_nota, tonos_ac, escala, tonica + 12)
+                # (tiempos debiles quedan libres: dan movimiento y notas de paso)
                 notas_jugador.append({
-                    "cols": [col], "midis": [notas_columnas[col] + oct_off],
+                    "cols": [col], "midis": [midi_nota],
                     "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
                 })
-                # CAPA 4: adorno (nota de paso) entre esta nota y la siguiente
+                # CAPA 4: adorno (nota de paso) por grado de escala, no por columna
                 if hd == 0 and s % 4 == 0 and rng.random() < prob_adorno:
                     col_adorno = (col + rng.choice([-1, 1, 2])) % num_columnas
                     t_adorno = t + paso16 * 2
+                    midi_adorno = notas_columnas[col_adorno] + oct_off
+                    # el adorno cae en escala; en tiempo fuerte siguiente resuelve
                     notas_jugador.append({
-                        "cols": [col_adorno], "midis": [notas_columnas[col_adorno] + oct_off],
+                        "cols": [col_adorno], "midis": [midi_adorno],
                         "tiempo": t_adorno, "es_acorde": False, "parte": "nudo", "hold": 0,
                     })
 
