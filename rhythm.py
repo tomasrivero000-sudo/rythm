@@ -4120,11 +4120,12 @@ def mods_de_stage(n, rng):
     if n == 1:
         return set()
     elif n == 2:
-        # stage 2: mod facil suave (sin velocidad x2 ni espejo; inverso si)
-        opciones = [m for m in MODS_FACILES if m not in ("veloz", "espejo")]
+        # stage 2: mod facil suave. Solo se excluye VELOZ (x2 es duro tan temprano).
+        # espejo, inverso y acelerando salen por igual -> balance parejo.
+        opciones = [m for m in MODS_FACILES if m != "veloz"]
         return {rng.choice(opciones)}
     elif n == 3:
-        # stage 3: cualquier mod facil (ya puede salir inverso)
+        # stage 3: cualquier mod facil
         return {rng.choice(MODS_FACILES)}
     else:  # stage 4: hasta 2 mods de movimiento al azar + sudden death con 10%
         movimiento = ["espejo", "inverso", "veloz", "acelerando"]
