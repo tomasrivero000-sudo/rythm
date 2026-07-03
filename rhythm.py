@@ -310,6 +310,35 @@ mods_activos = set()   # ids de modificadores seleccionados (modo libre)
 # mods "faciles" que pueden salir en el dado de los stages 2 y 3
 MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando", "niebla", "rafagas"]
 
+# --- perks roguelike: se eligen entre stages y se acumulan ---
+PERKS = [
+    {"id": "escudo",     "nombre": "ESCUDO",     "desc": "absorbe 3 misses",        "cat": "def"},
+    {"id": "corazon",    "nombre": "CORAZON",    "desc": "+5 vida maxima",           "cat": "def"},
+    {"id": "ventana",    "nombre": "VENTANA",    "desc": "timing 25% mas amplio",    "cat": "def"},
+    {"id": "multi",      "nombre": "MULTI",      "desc": "puntos x1.5",             "cat": "ofe"},
+    {"id": "combo_save", "nombre": "COMBO SAVE", "desc": "1er miss no rompe combo",  "cat": "ofe"},
+    {"id": "perfecto",   "nombre": "PERFECTO+",  "desc": "perfectos valen doble",    "cat": "ofe"},
+    {"id": "lento",      "nombre": "LENTO",      "desc": "notas 15% mas lentas",     "cat": "mec"},
+    {"id": "iman",       "nombre": "IMAN",       "desc": "zona perfecto expandida",  "cat": "mec"},
+]
+
+# power-ups: notas especiales durante el gameplay que dan efectos temporales
+POWER_UPS = [
+    {"id": "estrella", "nombre": "AUTO",  "dur": 6000,  "color": (255, 255, 100)},
+    {"id": "vida",     "nombre": "VIDA",  "dur": 0,     "color": (255, 100, 100)},
+    {"id": "reloj",    "nombre": "LENTO", "dur": 8000,  "color": (100, 200, 255)},
+    {"id": "doble",    "nombre": "x2",    "dur": 10000, "color": (100, 255, 100)},
+]
+
+def generar_ofertas_perks(rng, perks_actuales):
+    """Elige 3 perks distintos para ofrecer, excluyendo los que ya tiene
+    (excepto 'multi' que es acumulable)."""
+    ids_tiene = {p["id"] for p in perks_actuales if p["id"] != "multi"}
+    pool = [p for p in PERKS if p["id"] not in ids_tiene]
+    if len(pool) < 3:
+        pool = list(PERKS)  # fallback si ya tiene casi todos
+    return rng.sample(pool, min(3, len(pool)))
+
 # --- modo STAGES (tipo roguelike): completar generos en cada dificultad ---
 # cada run son 4 stages del mismo genero+dificultad:
 #   stage 1: sin mods | stage 2: 1 mod facil | stage 3: 1 mod facil | stage 4: sudden death
@@ -3550,6 +3579,20 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     # --- CAPA 2: mutacion de timbre ya aplicada a las notas del nudo ---
 
+    # --- power-ups: notas especiales cada ~25s durante el nudo ---
+    intervalo_pu = rng.randint(22000, 30000)  # ms entre power-ups
+    t_pu = t_intro_fin + intervalo_pu
+    while t_pu < t_nudo_fin - 5000:
+        col_pu = rng.randint(0, num_columnas - 1)
+        tipo_pu = rng.choice(POWER_UPS)
+        notas_jugador.append({
+            "cols": [col_pu], "midis": [notas_columnas[col_pu]],
+            "tiempo": int(t_pu), "es_acorde": False,
+            "parte": "nudo", "hold": 0,
+            "power_up": tipo_pu["id"],
+        })
+        t_pu += rng.randint(22000, 30000)
+
     return {
         "bpm":            BPM,
         "beat":           beat,
@@ -3579,7 +3622,8 @@ def hold_pixels(hold_ms, vel, fps=60):
 
 # ══════════════════════════════════════════════════════ >>GAME_STATE<< ═══
 
-def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instrumento_forzado=None):
+def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
+                    instrumento_forzado=None, perks=None):
     global cache_notas, cache_notas_largas
     # limpiar efectos visuales de una partida anterior
     particulas.clear()
@@ -3707,7 +3751,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
     pygame.event.pump()
     inicio_partida = pygame.time.get_ticks()
 
-    return {
+    result = {
         "seed":           seed,
         "dificultad":     dif,
         "cancion":        cancion,
@@ -3735,7 +3779,34 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         "mapa_teclas":    mapa_teclas,
         "es_inverso":     "inverso" in mods_partida,
         "zona_y":         90 if "inverso" in mods_partida else ZONA_Y,
+        # --- perks roguelike ---
+        "perks":          list(perks) if perks else [],
+        "escudo_cargas":  0,
+        "combo_save_cd":  0,       # cooldown en ms (0 = listo)
+        "efectos_activos": {},     # {id: tiempo_fin_ms} para power-ups temporales
     }
+    # aplicar perks al estado de la partida
+    perks_ids = [p["id"] for p in (perks or [])]
+    p = result  # alias
+    for pid in perks_ids:
+        if pid == "escudo":
+            p["escudo_cargas"] += 3
+        elif pid == "corazon":
+            p["vida_max"] += 5
+            p["vida"] = p["vida_max"]
+        elif pid == "ventana":
+            p["perk_ventana"] = True  # flag: hit window 150 -> 187
+        elif pid == "multi":
+            p["mult_mods"] *= 1.5
+        elif pid == "combo_save":
+            p["perk_combo_save"] = True
+        elif pid == "perfecto":
+            p["perk_perfecto"] = True  # perfectos valen doble
+        elif pid == "lento":
+            p["velocidad"] *= 0.85
+        elif pid == "iman":
+            p["perk_iman"] = True  # perfecto window 30 -> 50ms
+    return p
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
     """Mezcla un sample stereo en el buffer global en la posicion dada"""
@@ -4195,7 +4266,23 @@ def dibujar_juego(partida, ahora):
                           int(col_nota[2] * alpha_niebla))
                 else:
                     cn = col_nota
-                if grupo.get("es_acorde"):
+                # power-up: color especial + parpadeo
+                pu_id = grupo.get("power_up")
+                if pu_id:
+                    pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
+                    if pu_def:
+                        pc = pu_def["color"]
+                        # parpadeo suave
+                        brill = 0.6 + 0.4 * abs(((ahora_ms // 80) % 20) - 10) / 10.0
+                        cn = (int(pc[0] * brill), int(pc[1] * brill), int(pc[2] * brill))
+                    # borde doble para distinguir
+                    pygame.draw.rect(pantalla, cn, (x + 4, gy - 2, ancho_col - 8, 32))
+                    pygame.draw.rect(pantalla, NEGRO, (x + 7, gy + 1, ancho_col - 14, 26))
+                    pygame.draw.rect(pantalla, cn, (x + 9, gy + 3, ancho_col - 18, 22))
+                    # label del power-up
+                    pu_lbl = fuente_chica.render(pu_def["nombre"] if pu_def else "?", True, NEGRO)
+                    pantalla.blit(pu_lbl, (x + ancho_col // 2 - pu_lbl.get_width() // 2, gy + 6))
+                elif grupo.get("es_acorde"):
                     pygame.draw.rect(pantalla, cn, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
                     pygame.draw.rect(pantalla, cn, (x + 11, gy + 5, ancho_col - 22, 18))
@@ -4293,6 +4380,9 @@ def dibujar_juego(partida, ahora):
     if partida.get("mult_mods", 1.0) > 1.0:
         mult_txt = fuente_chica.render(f"MODS x{partida['mult_mods']:.2f}", True, col_nota)
         pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 56))
+    # perks y power-ups HUD
+    if partida.get("perks"):
+        dibujar_perks_hud(partida)
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
     if dev_mode:
@@ -4537,7 +4627,113 @@ def crear_run(seed_inicial):
         "mods": mods_stages,   # set de mods por stage
         "instrumentos": instrumentos_stage,  # instrumento forzado por stage
         "puntos_total": 0,
+        "perks": [],           # perks acumulados (roguelike)
     }
+
+perk_ofertas = []      # 3 perks ofrecidos en la pantalla de seleccion
+perk_seleccion = 0     # indice seleccionado (0..2)
+
+def dibujar_perk_select():
+    """Pantalla de seleccion de perk entre stages."""
+    pantalla.fill(NEGRO)
+    col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO) if run_actual else BLANCO
+    titulo = fuente_grande.render("NUEVO PERK", True, col_g)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 50))
+    sub = fuente_chica.render("ELEGI UNA MEJORA PARA TU RUN", True, GRIS_MED)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 110))
+    pygame.draw.line(pantalla, GRIS, (60, 135), (ANCHO - 60, 135), 1)
+    # categorias visuales
+    cat_label = {"def": "DEFENSIVO", "ofe": "OFENSIVO", "mec": "MECANICO"}
+    # dibujar las 3 opciones
+    card_w = 180
+    gap = 30
+    total_w = card_w * len(perk_ofertas) + gap * (len(perk_ofertas) - 1)
+    x0 = ANCHO // 2 - total_w // 2
+    for i, perk in enumerate(perk_ofertas):
+        x = x0 + i * (card_w + gap)
+        y = 180
+        seleccionado = (i == perk_seleccion)
+        # borde
+        borde_color = col_g if seleccionado else GRIS
+        grosor = 3 if seleccionado else 1
+        pygame.draw.rect(pantalla, borde_color, (x, y, card_w, 260), grosor)
+        if seleccionado:
+            pygame.draw.rect(pantalla, (30, 30, 30), (x + 3, y + 3, card_w - 6, 254))
+        # numero
+        num = fuente_grande.render(str(i + 1), True, col_g if seleccionado else GRIS)
+        pantalla.blit(num, (x + card_w // 2 - num.get_width() // 2, y + 10))
+        # nombre
+        nombre = fuente.render(perk["nombre"], True, BLANCO if seleccionado else GRIS_MED)
+        pantalla.blit(nombre, (x + card_w // 2 - nombre.get_width() // 2, y + 70))
+        # categoria
+        cat = fuente_chica.render(cat_label.get(perk["cat"], ""), True, GRIS)
+        pantalla.blit(cat, (x + card_w // 2 - cat.get_width() // 2, y + 100))
+        # descripcion (word wrap manual simple)
+        desc = perk["desc"]
+        dy = 135
+        palabras = desc.split()
+        linea = ""
+        for pal in palabras:
+            test = (linea + " " + pal).strip()
+            if fuente_chica.size(test)[0] > card_w - 20:
+                txt = fuente_chica.render(linea, True, GRIS_MED)
+                pantalla.blit(txt, (x + card_w // 2 - txt.get_width() // 2, y + dy))
+                dy += 18
+                linea = pal
+            else:
+                linea = test
+        if linea:
+            txt = fuente_chica.render(linea, True, GRIS_MED)
+            pantalla.blit(txt, (x + card_w // 2 - txt.get_width() // 2, y + dy))
+    # perks acumulados
+    if run_actual and run_actual["perks"]:
+        acum_y = 470
+        acum_txt = fuente_chica.render("PERKS ACTIVOS:", True, GRIS)
+        pantalla.blit(acum_txt, (ANCHO // 2 - acum_txt.get_width() // 2, acum_y))
+        nombres = "  ".join(p["nombre"] for p in run_actual["perks"])
+        activos = fuente_chica.render(nombres, True, col_g)
+        pantalla.blit(activos, (ANCHO // 2 - activos.get_width() // 2, acum_y + 20))
+    # instrucciones
+    inst = fuente_chica.render("1 / 2 / 3  O  FLECHAS + ENTER", True, GRIS)
+    pantalla.blit(inst, (ANCHO // 2 - inst.get_width() // 2, ALTO - 40))
+
+def dibujar_perks_hud(partida):
+    """Dibuja los perks activos y efectos temporales en el HUD del juego."""
+    # perks permanentes: iconos pequeños arriba a la izquierda
+    perks = partida.get("perks", [])
+    px = 10
+    py = 46
+    for p in perks:
+        txt = fuente_chica.render(p["nombre"][:3], True, GRIS_MED)
+        pantalla.blit(txt, (px, py))
+        px += txt.get_width() + 8
+        if px > 200:
+            px = 10
+            py += 16
+    # escudo: mostrar cargas
+    cargas = partida.get("escudo_cargas", 0)
+    if cargas > 0:
+        esc_txt = fuente_chica.render(f"ESCUDO x{cargas}", True, (100, 200, 255))
+        pantalla.blit(esc_txt, (ANCHO - esc_txt.get_width() - 10, 42))
+    # efectos temporales activos
+    efectos = partida.get("efectos_activos", {})
+    ahora = pygame.time.get_ticks() - partida["inicio"]
+    ey = ALTO // 2 - len(efectos) * 12
+    for eid, t_fin in list(efectos.items()):
+        restante = max(0, t_fin - ahora)
+        if restante <= 0:
+            continue
+        pu_def = next((pu for pu in POWER_UPS if pu["id"] == eid), None)
+        if not pu_def:
+            continue
+        color = pu_def["color"]
+        # parpadea si queda poco
+        if restante < 2000 and (pygame.time.get_ticks() // 200) % 2 == 0:
+            color = GRIS
+        seg = f"{restante / 1000:.1f}s"
+        etxt = fuente_chica.render(f"{pu_def['nombre']} {seg}", True, color)
+        pantalla.blit(etxt, (ANCHO - etxt.get_width() - 10, ey))
+        ey += 20
 
 def dibujar_run_overview():
     """Pantalla entre stages que muestra el progreso del run."""
@@ -4577,6 +4773,17 @@ def dibujar_run_overview():
         elif mods_st and not completado and not actual:
             mod_txt = fuente_chica.render("+ ???", True, GRIS)
             pantalla.blit(mod_txt, (160, y + 28))
+
+    # perks acumulados
+    perks_run = run_actual.get("perks", [])
+    if perks_run:
+        col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+        pk_y = ALTO - 80
+        pk_label = fuente_chica.render("PERKS:", True, GRIS)
+        pantalla.blit(pk_label, (60, pk_y))
+        pk_nombres = "  ".join(p["nombre"] for p in perks_run)
+        pk_txt = fuente_chica.render(pk_nombres, True, col_g)
+        pantalla.blit(pk_txt, (60 + pk_label.get_width() + 10, pk_y))
 
     cont = fuente_chica.render("ESPACIO = JUGAR STAGE     ESC = ABANDONAR RUN", True, GRIS_MED)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
@@ -5080,13 +5287,51 @@ while corriendo:
                         seed_stage, mods=mods_stage,
                         stage_info={"n": run_actual["stage"]},
                         puntos_iniciales=run_actual["puntos_total"],
-                        instrumento_forzado=inst_stage)
+                        instrumento_forzado=inst_stage,
+                        perks=run_actual.get("perks"))
                     score_guardado = False
                     # pre-render del instrumento del proximo stage en background
                     if run_actual["stage"] < NUM_STAGES:
                         inst_next = run_actual.get("instrumentos", [None]*NUM_STAGES)[idx + 1]
                         prerender_instrumento_seed(run_actual["seeds"][idx + 1], instrumento=inst_next)
                     ESTADO = "jugando"
+
+        elif ESTADO == "perk_select":
+            if evento.type == pygame.KEYDOWN:
+                _perk_confirmar = False
+                if evento.key in (pygame.K_1, pygame.K_KP1):
+                    perk_seleccion = 0
+                    _perk_confirmar = True
+                elif evento.key in (pygame.K_2, pygame.K_KP2):
+                    perk_seleccion = min(1, len(perk_ofertas) - 1)
+                    _perk_confirmar = True
+                elif evento.key in (pygame.K_3, pygame.K_KP3):
+                    perk_seleccion = min(2, len(perk_ofertas) - 1)
+                    _perk_confirmar = True
+                elif evento.key == pygame.K_LEFT:
+                    perk_seleccion = max(0, perk_seleccion - 1)
+                    sfx_select()
+                elif evento.key == pygame.K_RIGHT:
+                    perk_seleccion = min(len(perk_ofertas) - 1, perk_seleccion + 1)
+                    sfx_select()
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    _perk_confirmar = True
+                elif evento.key == pygame.K_ESCAPE:
+                    run_actual = None
+                    ESTADO = "menu"
+                    nueva_musica_menu_aleatoria()
+                if _perk_confirmar and ESTADO == "perk_select":
+                    elegido = perk_ofertas[perk_seleccion]
+                    run_actual["perks"].append(elegido)
+                    sfx_confirm()
+                    run_actual["stage"] += 1
+                    idx_next = run_actual["stage"] - 1
+                    if run_actual["mods"][idx_next]:
+                        dado_inicio = pygame.time.get_ticks()
+                        _dado_ultima_fase = -2
+                        ESTADO = "run_dado"
+                    else:
+                        ESTADO = "run_overview"
 
         elif ESTADO == "run_dado":
             if evento.type == pygame.KEYDOWN:
@@ -5260,7 +5505,8 @@ while corriendo:
                                 mods=run_actual["mods"][idx],
                                 stage_info={"n": run_actual["stage"]},
                                 puntos_iniciales=run_actual["puntos_total"],
-                                instrumento_forzado=inst_stage)
+                                instrumento_forzado=inst_stage,
+                                perks=run_actual.get("perks"))
                         else:
                             partida = iniciar_partida(int(seed_acumulada))
                         score_guardado = False
@@ -5312,16 +5558,12 @@ while corriendo:
                                     ESTADO = "run_completado"
                                     nueva_musica_menu_aleatoria()
                                 else:
-                                    run_actual["stage"] += 1
-                                    idx_next = run_actual["stage"] - 1
-                                    if run_actual["mods"][idx_next]:
-                                        # tiene mods -> animacion de dado
-                                        dado_inicio = pygame.time.get_ticks()
-                                        _dado_ultima_fase = -2
-                                        ESTADO = "run_dado"
-                                    else:
-                                        ESTADO = "run_overview"
-                                        nueva_musica_menu_aleatoria()
+                                    # ofrecer perk antes de avanzar al siguiente stage
+                                    _perk_rng = random.Random(run_actual["seeds"][run_actual["stage"] - 1] + 777)
+                                    perk_ofertas[:] = generar_ofertas_perks(_perk_rng, run_actual["perks"])
+                                    perk_seleccion = 0
+                                    ESTADO = "perk_select"
+                                    nueva_musica_menu_aleatoria()
                         else:
                             # modo libre normal
                             if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
@@ -5396,10 +5638,16 @@ while corriendo:
                         partida["liss_pulso"] = 1.0
 
                         acerto_algo = False
+                        # ventanas de timing (ajustables por perks)
+                        w_hit = 187 if partida.get("perk_ventana") else 150
+                        w_perf = 50 if partida.get("perk_iman") else 30
+                        # auto-perfecto por power-up estrella
+                        ahora_juego = ahora_ms - partida["inicio"]
+                        auto_perf = ahora_juego < partida.get("efectos_activos", {}).get("estrella", 0)
                         for grupo in partida["notas_cayendo"]:
                             if col in grupo["cols"]:
-                                distancia = abs(grupo["tiempo_ms"] - (ahora_ms - partida["inicio"]))
-                                if distancia < 150:
+                                distancia = abs(grupo["tiempo_ms"] - ahora_juego)
+                                if distancia < w_hit:
                                     acerto_algo = True
                                     if "acertadas" not in grupo:
                                         grupo["acertadas"] = set()
@@ -5409,8 +5657,28 @@ while corriendo:
                                         ancho_col = ANCHO // num_cols
                                         cx = col * ancho_col + ancho_col // 2
                                         col_g = COLOR_GENERO.get(partida["cancion"].get("genero",""), BLANCO)
-                                        if distancia < 30:
-                                            pts = 5
+                                        # --- POWER-UP: nota especial ---
+                                        pu_id = grupo.get("power_up")
+                                        if pu_id and distancia < w_hit:
+                                            pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
+                                            if pu_def:
+                                                if pu_id == "vida":
+                                                    partida["vida"] = min(partida["vida_max"], partida["vida"] + 4)
+                                                    crear_texto_flotante(cx, zy_p - 30, "+4 VIDA", pu_def["color"], True)
+                                                elif pu_def["dur"] > 0:
+                                                    partida["efectos_activos"][pu_id] = ahora_juego + pu_def["dur"]
+                                                    crear_texto_flotante(cx, zy_p - 30, pu_def["nombre"], pu_def["color"], True)
+                                                crear_explosion(cx, zy_p, 80, color=pu_def["color"])
+                                                crear_shake(6)
+                                                sfx_combo(15)
+                                                partida["combo"] += 1
+                                                if partida["combo"] > partida["max_combo"]:
+                                                    partida["max_combo"] = partida["combo"]
+                                                if grupo in partida["notas_cayendo"]:
+                                                    partida["notas_cayendo"].remove(grupo)
+                                                break
+                                        if auto_perf or distancia < w_perf:
+                                            pts = 10 if partida.get("perk_perfecto") else 5
                                             partida["combo"] += 1
                                             pot = min(1.0 + partida["combo"] * 0.03, 1.8)
                                             partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
@@ -5484,7 +5752,8 @@ while corriendo:
                                                 "midi":  midi_fijo,
                                             }
                                             if pts > 0:
-                                                total_pts = int(pts * combo_mult * partida.get("mult_mods", 1.0))
+                                                _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
+                                                total_pts = int(pts * combo_mult * partida.get("mult_mods", 1.0) * _pu_doble)
                                                 partida["puntos"] += total_pts
                                                 txt = f"+{total_pts}"
                                                 if combo_mult > 1:
@@ -5492,7 +5761,8 @@ while corriendo:
                                                 crear_texto_flotante(cx, zy_p - 20, txt, BLANCO, combo_mult > 2)
                                         else:
                                             if pts > 0:
-                                                total_pts = int(pts * len(grupo["cols"]) * combo_mult * partida.get("mult_mods", 1.0))
+                                                _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
+                                                total_pts = int(pts * len(grupo["cols"]) * combo_mult * partida.get("mult_mods", 1.0) * _pu_doble)
                                                 txt_pts = f"+{total_pts}"
                                                 if combo_mult > 1:
                                                     txt_pts += f" x{combo_mult}"
@@ -5566,6 +5836,10 @@ while corriendo:
         tick_musica_menu()
         dibujar_run_overview()
 
+    elif ESTADO == "perk_select":
+        tick_musica_menu()
+        dibujar_perk_select()
+
     elif ESTADO == "run_dado":
         tick_musica_menu()
         dibujar_dado()
@@ -5633,11 +5907,22 @@ while corriendo:
                 del partida["holds_activos"][col]
 
             vel_p = partida.get("velocidad", VELOCIDAD)
+            # cooldown de combo_save: decrementar (16.67ms por frame a 60fps)
+            if partida.get("combo_save_cd", 0) > 0:
+                partida["combo_save_cd"] = max(0, partida["combo_save_cd"] - (1000 / 60))
+            # limpiar efectos temporales expirados
+            efectos = partida.get("efectos_activos", {})
+            for eid in list(efectos.keys()):
+                if ahora > efectos[eid]:
+                    del efectos[eid]
             # ACELERANDO: velocidad sube de 1x a 2x a lo largo de la cancion
             if "acelerando" in partida.get("mods", set()):
                 duracion = partida["cancion"]["duracion_loop"]
                 progreso = min(ahora / max(1, duracion), 1.0)
                 vel_p *= (1.0 + progreso)  # 1x al inicio, 2x al final
+            # power-up RELOJ: notas 25% mas lentas temporalmente
+            if ahora < partida.get("efectos_activos", {}).get("reloj", 0):
+                vel_p *= 0.75
             PIXELES_POR_MS = vel_p / (1000 / 60)
             es_inv = partida.get("es_inverso", False)
             if es_inv:
@@ -5649,7 +5934,7 @@ while corriendo:
                 while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
                     n = partida["cancion"]["notas_jugador"][partida["indice_jugador"]]
                     hold_ms = n.get("hold", 0)
-                    partida["notas_cayendo"].append({
+                    nota_cae = {
                         "cols":      n["cols"],
                         "midis":     n["midis"],
                         "tiempo_ms": n["tiempo"],
@@ -5657,7 +5942,10 @@ while corriendo:
                         "es_acorde": n.get("es_acorde", False),
                         "hold":      hold_ms,
                         "hold_px":   hold_pixels(hold_ms, vel_p),
-                    })
+                    }
+                    if n.get("power_up"):
+                        nota_cae["power_up"] = n["power_up"]
+                    partida["notas_cayendo"].append(nota_cae)
                     partida["indice_jugador"] += 1
 
             for grupo in partida["notas_cayendo"]:
@@ -5675,9 +5963,18 @@ while corriendo:
                     es_hold_activo = any(c in partida["holds_activos"] for c in n["cols"])
                     if not es_hold_activo:
                         partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
-                        partida["combo"] = 0
+                        # combo_save: el primer miss no rompe combo (cooldown 15s)
+                        if partida.get("perk_combo_save") and partida.get("combo_save_cd", 0) <= 0 and partida["combo"] > 0:
+                            partida["combo_save_cd"] = 15000
+                            crear_texto_flotante(ANCHO // 2, zy_p - 60, "COMBO SAVE!", (100, 200, 255), True)
+                        else:
+                            partida["combo"] = 0
                         partida["puntos"] = max(0, partida["puntos"] - 5)
-                        if not dev_mode:
+                        # escudo: absorbe daño de vida
+                        if partida.get("escudo_cargas", 0) > 0:
+                            partida["escudo_cargas"] -= 1
+                            crear_texto_flotante(ANCHO // 2, zy_p - 40, f"ESCUDO ({partida['escudo_cargas']})", (100, 200, 255))
+                        elif not dev_mode:
                             partida["vida"] = max(0, partida["vida"] - 2)
                             if "sudden" in partida.get("mods", set()):
                                 partida["vida"] = 0
