@@ -2946,6 +2946,65 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
 
 # ═══════════════════════════════════════════════════════ >>MUSIC_GEN<< ═══
 
+# --- FORMA MUSICAL: vocabulario de secciones tipo cancion popular ---
+# Cada seccion tiene una FUNCION y un PERFIL propio (energia, densidad, registro,
+# que material melodico usa). El estribillo repite un motivo memorable; el verso
+# desarrolla; el puente contrasta. Esto reemplaza el viejo INTRO->NUDO->DESENLACE
+# plano por una estructura con arco de tension real.
+#
+# perfil de cada seccion:
+#   energia:   0..1  -> afecta densidad de notas y probabilidad de adornos
+#   registro:  offset de octava tipico (-12, 0, +12)
+#   material:  que banco de motivos usa ("A"=verso, "B"=estribillo, "C"=puente)
+#   densidad_mult: multiplicador extra de densidad sobre la del genero
+PERFILES_SECCION = {
+    "intro":      {"energia": 0.25, "registro":  0,  "material": "A", "densidad_mult": 0.5},
+    "verso":      {"energia": 0.55, "registro":  0,  "material": "A", "densidad_mult": 0.85},
+    "preestribillo":{"energia":0.7, "registro":  0,  "material": "A", "densidad_mult": 1.0},
+    "estribillo": {"energia": 1.0,  "registro": 12,  "material": "B", "densidad_mult": 1.15},
+    "puente":     {"energia": 0.6,  "registro":  0,  "material": "C", "densidad_mult": 0.9},
+    "outro":      {"energia": 0.3,  "registro":  0,  "material": "B", "densidad_mult": 0.55},
+}
+
+# arquetipos de forma: listas de secciones. Se elige uno por seed (o se arma uno
+# dinamico). Van de simples (pocas secciones) a complejos (con puente y pre).
+# Cada arquetipo es una lista de (nombre_seccion, num_compases).
+FORMAS_CANCION = {
+    "simple":     ["intro", "verso", "estribillo", "verso", "estribillo", "outro"],
+    "pop":        ["intro", "verso", "estribillo", "verso", "estribillo", "puente", "estribillo", "outro"],
+    "con_pre":    ["intro", "verso", "preestribillo", "estribillo", "verso", "preestribillo", "estribillo", "outro"],
+    "corta":      ["intro", "verso", "estribillo", "outro"],
+    "minima":     ["verso", "estribillo", "verso", "estribillo"],
+    "epica":      ["intro", "verso", "estribillo", "verso", "estribillo", "puente", "estribillo", "estribillo", "outro"],
+}
+
+def elegir_forma(rng, nivel_dif):
+    """Elige un arquetipo de forma segun la seed y el nivel de dificultad.
+    Niveles bajos -> formas mas simples y cortas; altos -> mas elaboradas.
+    La seleccion es variable por seed: dos canciones del mismo nivel pueden
+    tener formas distintas (una simple, otra con puente)."""
+    if nivel_dif <= 3:
+        pool = ["corta", "corta", "minima", "simple"]
+    elif nivel_dif <= 7:
+        pool = ["simple", "simple", "pop", "corta", "con_pre"]
+    elif nivel_dif <= 11:
+        pool = ["pop", "pop", "con_pre", "simple", "epica"]
+    else:
+        pool = ["pop", "con_pre", "epica", "epica"]
+    return FORMAS_CANCION[rng.choice(pool)]
+
+def compases_por_seccion(nombre, rng, nivel_dif):
+    """Cuantos compases dura cada tipo de seccion (variable por seed)."""
+    if nombre in ("intro", "outro"):
+        return rng.choice([2, 2, 4]) if nivel_dif <= 6 else rng.choice([2, 4, 4])
+    if nombre == "preestribillo":
+        return rng.choice([2, 2, 4])
+    if nombre == "puente":
+        return rng.choice([4, 4, 8])
+    # verso y estribillo: bloques de 4 u 8 compases
+    return rng.choice([4, 4, 8]) if nivel_dif >= 6 else rng.choice([4, 4])
+
+
 def generar_cancion(seed, dif, instrumento_forzado=None):
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
@@ -2997,30 +3056,65 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         if instrumento == "RESO" and len(pool) > 1 and rng.random() < 0.75:
             instrumento = rng.choice([p for p in pool if p != "RESO"])
 
-    # --- CAPA 1: estructura variable por seed ---
-    # la duracion TOTAL escala con la dificultad: facil 30-45s, chaos ~120s
+    # --- ESTRUCTURA: forma musical con secciones (verso/estribillo/puente) ---
+    # Se elige un arquetipo de forma por seed (variable: simple o complejo) y se
+    # asigna una duracion a cada seccion. La duracion total sigue escalando con
+    # la dificultad ajustando cuantos compases dura cada seccion.
     nivel_dif = dif.get("nivel", 5)
-    # duracion total objetivo en segundos (interpolada por nivel 1-15)
     dur_total_min, dur_total_max = 26.0, 115.0
     dur_total_obj = dur_total_min + (nivel_dif - 1) / 14 * (dur_total_max - dur_total_min)
-    # algo de variacion aleatoria (+-12%)
-    dur_total_obj *= rng.uniform(0.88, 1.12)
-    # intro y desenlace mas cortos en niveles bajos
-    if nivel_dif <= 3:
-        C_INTRO     = rng.choice([2, 2, 4])
-        C_DESENLACE = rng.choice([2, 2, 4])
-    else:
-        C_INTRO     = rng.choice([2, 4, 4, 6])
-        C_DESENLACE = rng.choice([2, 4, 4, 6])
+    dur_total_obj *= rng.uniform(0.9, 1.1)
     seg_por_compas = (4 * beat) / 1000.0
-    seg_extra = (C_INTRO + C_DESENLACE) * seg_por_compas
-    # el nudo cubre el resto de la duracion objetivo
-    dur_nudo_obj = max(seg_por_compas * 4, dur_total_obj - seg_extra)
-    seg_por_rep = 4 * seg_por_compas   # 1 rep = 4 compases
-    # minimo 1 rep en niveles faciles (canciones cortas), 2 en el resto
-    piso_reps = 1 if nivel_dif <= 3 else 2
-    num_reps = max(piso_reps, round(dur_nudo_obj / seg_por_rep))
-    C_NUDO   = num_reps * 4
+
+    forma = elegir_forma(rng, nivel_dif)
+    # asignar compases a cada seccion de la forma
+    plan_secciones = []   # lista de dicts: {nombre, compases, inicio_compas, perfil}
+    compas_cursor = 0
+    for nombre in forma:
+        nc = compases_por_seccion(nombre, rng, nivel_dif)
+        plan_secciones.append({
+            "nombre": nombre,
+            "compases": nc,
+            "inicio_compas": compas_cursor,
+            "perfil": PERFILES_SECCION[nombre],
+        })
+        compas_cursor += nc
+    compases_forma = compas_cursor
+
+    # ajustar la duracion: si la forma base es mas corta que el objetivo, se
+    # repite el nucleo (verso+estribillo) hasta acercarse; si es mas larga en
+    # niveles bajos, se recorta. Esto mantiene el escalado por dificultad.
+    compases_obj = max(4, round(dur_total_obj / seg_por_compas))
+    # repetir el ciclo verso->estribillo si falta duracion (solo formas con nucleo)
+    idx_nucleo = [i for i, s in enumerate(plan_secciones)
+                  if s["nombre"] in ("verso", "estribillo")]
+    guard = 0
+    while compases_forma < compases_obj * 0.85 and idx_nucleo and guard < 8:
+        # insertar una repeticion de verso+estribillo antes del outro
+        pos_outro = next((i for i, s in enumerate(plan_secciones)
+                          if s["nombre"] == "outro"), len(plan_secciones))
+        nuevas = []
+        for nombre in ("verso", "estribillo"):
+            nc = compases_por_seccion(nombre, rng, nivel_dif)
+            nuevas.append({"nombre": nombre, "compases": nc, "inicio_compas": 0,
+                           "perfil": PERFILES_SECCION[nombre]})
+        plan_secciones[pos_outro:pos_outro] = nuevas
+        # recomputar inicios y total
+        compas_cursor = 0
+        for s in plan_secciones:
+            s["inicio_compas"] = compas_cursor
+            compas_cursor += s["compases"]
+        compases_forma = compas_cursor
+        guard += 1
+
+    # tiempos clave (en ms). La "intro" es la primera seccion; el "desenlace" es
+    # la ultima (outro). Se conservan estos nombres por compatibilidad con el
+    # resto del juego (percusion, estructura de retorno).
+    C_INTRO = plan_secciones[0]["compases"] if plan_secciones[0]["nombre"] == "intro" else 0
+    C_DESENLACE = plan_secciones[-1]["compases"] if plan_secciones[-1]["nombre"] == "outro" else 0
+    C_NUDO = compases_forma - C_INTRO - C_DESENLACE
+    C_NUDO = max(4, C_NUDO)
+    num_reps = max(1, C_NUDO // 4)   # compat: el resto del codigo usa num_reps
     t_intro_fin     = C_INTRO * 4 * beat
     t_nudo_fin      = t_intro_fin + C_NUDO * 4 * beat
     t_desenlace_fin = t_nudo_fin + C_DESENLACE * 4 * beat
@@ -3072,8 +3166,13 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         return [min(num_columnas - 1, int(round(g * (num_columnas - 1) / max(1, maxg))))
                 for g in frase]
 
-    motivos_a = [escalar_frase(rng.choice(frases_subir)) for _ in range(4)]
-    motivos_b = [escalar_frase(rng.choice(frases_bajar)) for _ in range(4)]
+    # --- MOTIVOS MEMORABLES por material ---
+    # Cada "material" (A=verso, B=estribillo, C=puente) tiene su propio motivo
+    # generado UNA vez. El del estribillo (B) es el "gancho": se reutiliza
+    # identico cada vez que vuelve el estribillo, por eso suena reconocible.
+    motivos_a = [escalar_frase(rng.choice(frases_subir)) for _ in range(2)]
+    motivos_b = [escalar_frase(rng.choice(frases_bajar))]     # gancho del estribillo
+    motivos_c = [escalar_frase(rng.choice(frases_medio))]
 
     pat_jugador_simples = [
         [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
@@ -3096,165 +3195,199 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     notas_jugador = []
 
-    nota_intro = motivos_a[0][0]
-    for c in range(C_INTRO):
-        if c % 2 == 0:
-            notas_jugador.append({
-                "cols": [nota_intro], "midis": [notas_columnas[nota_intro]],
-                "tiempo": (c + 1) * 4 * beat,
-                "es_acorde": False, "parte": "intro", "hold": beat * 3,
-            })
-
-    def crear_bloque(motivos_bloque, complejo=False):
-        bloque = []
-        pats = pat_jugador_complejos if complejo else pat_jugador_simples
-        pat1 = pats[rng.randint(0, len(pats) - 1)]
-        pat2 = pats[rng.randint(0, len(pats) - 1)]
-        mot  = motivos_bloque[0]
-        for c in range(4):
-            pat      = pat1 if c % 2 == 0 else pat2
-            nota_idx = 0
-            compas   = []
-            for s in range(16):
-                if pat[s] == 0:
-                    compas.append(None)
-                    continue
-                col = mot[nota_idx % len(mot)]
-                nota_idx += 1
-                compas.append({"col": col, "hold": 0})
+    def crear_compas(motivo, pat, permitir_hold=True):
+        """Genera un compas (16 pasos) colocando las notas del motivo en las
+        posiciones activas del patron ritmico. Devuelve lista de 16 (None o dict)."""
+        nota_idx = 0
+        compas = []
+        for s in range(16):
+            if pat[s] == 0:
+                compas.append(None)
+                continue
+            col = motivo[nota_idx % len(motivo)]
+            nota_idx += 1
+            compas.append({"col": col, "hold": 0})
+        if permitir_hold:
             activas = [i for i, n in enumerate(compas) if n is not None]
             for idx, pos in enumerate(activas):
-                if rng.random() < 0.45:
+                if rng.random() < 0.4:
                     if idx + 1 < len(activas):
-                        dur_beats = (activas[idx + 1] - pos) // 4
-                        dur = dur_beats * beat
+                        dur = ((activas[idx + 1] - pos) // 4) * beat
                     else:
-                        dur_beats = (16 - pos) // 4
-                        dur = dur_beats * beat
+                        dur = ((16 - pos) // 4) * beat
                     if dur >= beat:
                         compas[pos]["hold"] = dur
-            bloque.append(compas)
+        return compas
+
+    def crear_bloque_seccion(material, num_compases, complejo):
+        """Crea el contenido melodico (lista de compases) de una seccion segun
+        su material. El estribillo (B) usa SIEMPRE el mismo patron ritmico y
+        motivo, para que el gancho sea reconocible cada vez que vuelve."""
+        if material == "B":
+            motivo = motivos_b[0]
+        elif material == "C":
+            motivo = motivos_c[0]
+        else:
+            motivo = motivos_a[rng.randint(0, len(motivos_a) - 1)]
+        pats = pat_jugador_complejos if complejo else pat_jugador_simples
+        # el estribillo fija sus patrones (memorable); verso/puente varian mas
+        if material == "B":
+            pat1 = pats[rng.randint(0, len(pats) - 1)]
+            pat2 = pat1   # mismo patron los 2 compases -> mas pegadizo
+        else:
+            pat1 = pats[rng.randint(0, len(pats) - 1)]
+            pat2 = pats[rng.randint(0, len(pats) - 1)]
+        bloque = []
+        for c in range(num_compases):
+            pat = pat1 if c % 2 == 0 else pat2
+            bloque.append(crear_compas(motivo, pat))
         return bloque
 
-    bloque_a = crear_bloque(motivos_a)
-    bloque_b = crear_bloque(motivos_b, complejo=True)
+    # pre-generar el bloque del estribillo UNA vez (gancho memorable reutilizable)
+    estribillo_compases = None
 
-    motivos_c = [escalar_frase(rng.choice(frases_medio))]
-    bloque_c = crear_bloque(motivos_c, complejo=True)
-
-    # bloques adicionales para mas variedad estructural
-    bloques_disponibles = [bloque_a, bloque_b, bloque_c]
-    # plan de bloques: que seccion usa cada repeticion (varia por seed)
-    plan_bloques = []
-    for rep in range(num_reps):
-        if rep < num_reps // 3:
-            plan_bloques.append(0)   # A
-        elif rep < 2 * num_reps // 3:
-            plan_bloques.append(1)   # B
-        else:
-            plan_bloques.append(2)   # C
-    # a veces intercambia algun bloque para romper la simetria
-    if num_reps >= 5 and rng.random() < 0.5:
-        idx_swap = rng.randint(1, num_reps - 2)
-        plan_bloques[idx_swap] = rng.randint(0, 2)
-
-    # CAPA 2: preparar mutacion de timbre (se decide antes del loop)
-    mut_activa = rng.random() < 0.6
-    mut_octava = rng.choice([-12, 0, 12])
-    mut_desde = rng.randint(num_reps // 2, max(num_reps // 2, num_reps - 1))
-
-    for rep in range(num_reps):
-        bloque = bloques_disponibles[plan_bloques[rep]]
-        # CAPA 2: offset de octava si la mutacion esta activa en esta rep
-        oct_off = mut_octava if (mut_activa and rep >= mut_desde) else 0
-        # CAPA 4: intensidad de adornos crece con la repeticion
-        prob_adorno = (0.1 + (rep / max(1, num_reps)) * 0.35) * densidad
-        es_ultima_rep = (rep == num_reps - 1)
-        for c in range(4):
-            compas_real = rep * 4 + c
-            compas = bloque[c]
-            # acorde actual de la progresion para este compas
-            grado_actual = progresion[compas_real % len(progresion)]
-            tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
-            # ultimo compas de la seccion: resolver a la tonica
-            es_cierre = es_ultima_rep and c == 3
-            for s in range(16):
-                if compas[s] is None:
-                    continue
-                t   = t_intro_fin + compas_real * 4 * beat + s * paso16
-                col = compas[s]["col"]
-                hd  = compas[s]["hold"]
-                segunda_mitad = rep >= num_reps // 2
-                if (usar_acordes or segunda_mitad) and s == 0 and rng.random() < prob_acorde:
-                    grado   = progresion[compas_real % len(progresion)]
-                    cols_ac = []
-                    for g in patron_acordes[grado % len(patron_acordes)][:3]:
-                        col_ac = g % num_columnas
-                        if col_ac not in cols_ac:
-                            cols_ac.append(col_ac)
-                    if len(cols_ac) >= 2:
-                        # armonizar el acorde a los tonos reales de la progresion
-                        midis_ac = []
-                        for i, cx in enumerate(cols_ac):
-                            m = notas_columnas[cx] + oct_off
-                            m = ajustar_a_acorde(m, tonos_ac, escala, tonica + 12)
-                            midis_ac.append(m)
-                        notas_jugador.append({
-                            "cols": cols_ac,
-                            "midis": midis_ac,
-                            "tiempo": t, "es_acorde": True, "parte": "nudo", "hold": 0,
-                        })
-                        continue
-                # densidad < 1: saltear notas (nunca el down-beat del compas)
-                if densidad < 1.0 and s != 0 and rng.random() > densidad:
-                    continue
-                midi_nota = notas_columnas[col] + oct_off
-                # --- melodia consciente del acorde (convenciones tonales) ---
-                # Principio: los tiempos FUERTES deben apoyarse en tonos de acorde,
-                # pero SOLO corregimos si la nota es realmente disonante (a semitono
-                # del acorde). Las notas de la escala que ya suenan bien se dejan,
-                # para preservar el movimiento por grado conjunto (melodia cantable).
-                en_tiempo_fuerte = (s % 8 == 0)     # 1er y 3er tiempo (fuertes)
-                clases_ac = {ta % 12 for ta in tonos_ac}
-                pc = midi_nota % 12
-                es_consonante = pc in clases_ac
-                if es_cierre and s == 0:
-                    # cierre de seccion: forzar tonica o quinta (resolucion final)
-                    midi_nota = ajustar_a_acorde(midi_nota, [tonos_ac[0], tonos_ac[2]],
-                                                 escala, tonica + 12)
-                elif en_tiempo_fuerte and not es_consonante:
-                    # tiempo fuerte con nota disonante: resolverla al acorde
-                    # (por grado conjunto descendente, mas musical que saltar)
-                    midi_nota = resolver_disonancia(midi_nota, tonos_ac, escala, tonica + 12)
-                # evitar repetir la nota anterior (da estatismo): si se repite en
-                # un tiempo debil, moverla a un grado vecino de la escala.
-                if notas_jugador and not en_tiempo_fuerte:
-                    ult = notas_jugador[-1]
-                    if not ult.get("es_acorde") and ult["midis"] and ult["midis"][0] == midi_nota:
-                        # mover a un grado vecino de la escala (arriba o abajo)
-                        grados_esc = escala[:-1] if escala[-1] == 12 else escala
-                        pc_rel = (midi_nota - (tonica % 12)) % 12
-                        if pc_rel in grados_esc:
-                            gi = grados_esc.index(pc_rel)
-                            gi_nuevo = (gi + rng.choice([-1, 1])) % len(grados_esc)
-                            delta = grados_esc[gi_nuevo] - grados_esc[gi]
-                            midi_nota += delta
-                        else:
-                            midi_nota += rng.choice([-2, -1, 1, 2])
-                notas_jugador.append({
-                    "cols": [col], "midis": [midi_nota],
-                    "tiempo": t, "es_acorde": False, "parte": "nudo", "hold": hd,
-                })
-                # CAPA 4: adorno (nota de paso) por grado de escala, no por columna
-                if hd == 0 and s % 4 == 0 and rng.random() < prob_adorno:
-                    col_adorno = (col + rng.choice([-1, 1, 2])) % num_columnas
-                    t_adorno = t + paso16 * 2
-                    midi_adorno = notas_columnas[col_adorno] + oct_off
-                    # el adorno cae en escala; en tiempo fuerte siguiente resuelve
+    # helper: procesa un compas de contenido melodico y agrega las notas.
+    # 'perfil' trae energia/registro de la seccion; 'es_cierre_seccion' fuerza
+    # resolucion a tonica en el ultimo compas de la seccion.
+    def emitir_compas(contenido, compas_global, perfil, parte, es_cierre_seccion,
+                      prob_adorno_local, compas_armonico=None, det=False):
+        # compas_armonico: si se pasa, fija el grado de la progresion (para que el
+        #   estribillo suene armonicamente identico en cada retorno = gancho memorable)
+        # det: modo determinista (sin rng), refuerza que el gancho sea reconocible
+        oct_off = perfil["registro"]
+        energia = perfil["energia"]
+        dens_local = densidad * perfil["densidad_mult"]
+        ca = compas_armonico if compas_armonico is not None else compas_global
+        grado_actual = progresion[ca % len(progresion)]
+        tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
+        clases_ac = {ta % 12 for ta in tonos_ac}
+        for s in range(16):
+            if contenido[s] is None:
+                continue
+            t   = t_intro_fin + compas_global * 4 * beat + s * paso16
+            col = contenido[s]["col"]
+            hd  = contenido[s]["hold"]
+            # acordes: mas probables en estribillo (energia alta) y con dif acordes
+            prob_ac_local = prob_acorde * (0.6 + 0.6 * energia)
+            # en modo determinista (estribillo) la decision no depende del rng, asi
+            # el gancho pone acorde SIEMPRE en el mismo lugar en cada retorno
+            pone_acorde = (compas_global % 2 == 0) if det else (rng.random() < prob_ac_local)
+            if (usar_acordes or energia >= 0.9) and s == 0 and pone_acorde:
+                cols_ac = []
+                for g in patron_acordes[grado_actual % len(patron_acordes)][:3]:
+                    col_ac = g % num_columnas
+                    if col_ac not in cols_ac:
+                        cols_ac.append(col_ac)
+                if len(cols_ac) >= 2:
+                    midis_ac = []
+                    for cx in cols_ac:
+                        m = notas_columnas[cx] + oct_off
+                        m = ajustar_a_acorde(m, tonos_ac, escala, tonica + 12)
+                        midis_ac.append(m)
                     notas_jugador.append({
-                        "cols": [col_adorno], "midis": [midi_adorno],
-                        "tiempo": t_adorno, "es_acorde": False, "parte": "nudo", "hold": 0,
+                        "cols": cols_ac, "midis": midis_ac,
+                        "tiempo": t, "es_acorde": True, "parte": parte, "hold": 0,
                     })
+                    continue
+            # densidad segun energia de la seccion (nunca saltea el downbeat)
+            # en estribillo NO se saltean notas por rng: el patron es fijo y completo
+            if not det and dens_local < 1.0 and s != 0 and rng.random() > dens_local:
+                continue
+            midi_nota = notas_columnas[col] + oct_off
+            en_tiempo_fuerte = (s % 8 == 0)
+            pc = midi_nota % 12
+            es_consonante = pc in clases_ac
+            if es_cierre_seccion and s == 0:
+                midi_nota = ajustar_a_acorde(midi_nota, [tonos_ac[0], tonos_ac[2]],
+                                             escala, tonica + 12)
+            elif en_tiempo_fuerte and not es_consonante:
+                midi_nota = resolver_disonancia(midi_nota, tonos_ac, escala, tonica + 12)
+            # anti-repeticion en tiempos debiles (en estribillo es determinista:
+            # siempre sube al grado vecino, para que el gancho sea reproducible)
+            if notas_jugador and not en_tiempo_fuerte:
+                ult = notas_jugador[-1]
+                if not ult.get("es_acorde") and ult["midis"] and ult["midis"][0] == midi_nota:
+                    grados_esc = escala[:-1] if escala[-1] == 12 else escala
+                    pc_rel = (midi_nota - (tonica % 12)) % 12
+                    if pc_rel in grados_esc:
+                        gi = grados_esc.index(pc_rel)
+                        paso_ar = 1 if det else rng.choice([-1, 1])
+                        gi_nuevo = (gi + paso_ar) % len(grados_esc)
+                        midi_nota += grados_esc[gi_nuevo] - grados_esc[gi]
+                    else:
+                        midi_nota += 2 if det else rng.choice([-2, -1, 1, 2])
+            notas_jugador.append({
+                "cols": [col], "midis": [midi_nota],
+                "tiempo": t, "es_acorde": False, "parte": parte, "hold": hd,
+            })
+            # adorno: mas frecuente cuanto mayor la energia de la seccion
+            # en estribillo el adorno es fijo (no rng) para no ensuciar el gancho
+            pone_adorno = (s % 8 == 4) if det else (rng.random() < prob_adorno_local)
+            if hd == 0 and s % 4 == 0 and pone_adorno:
+                col_adorno = (col + (2 if det else rng.choice([-1, 1, 2]))) % num_columnas
+                t_adorno = t + paso16 * 2
+                midi_adorno = notas_columnas[col_adorno] + oct_off
+                notas_jugador.append({
+                    "cols": [col_adorno], "midis": [midi_adorno],
+                    "tiempo": t_adorno, "es_acorde": False, "parte": parte, "hold": 0,
+                })
+
+    # --- recorrer las secciones de la forma en orden ---
+    # el arco de tension emerge de los perfiles: intro baja, versos medios,
+    # estribillos altos, puente contrastante. El estribillo reusa su bloque.
+    for si, seccion in enumerate(plan_secciones):
+        nombre = seccion["nombre"]
+        perfil = seccion["perfil"]
+        nc = seccion["compases"]
+        material = perfil["material"]
+        complejo = perfil["energia"] >= 0.7
+        # la intro es escasa: notas largas espaciadas, no bloque completo
+        if nombre == "intro":
+            nota_intro = motivos_a[0][0]
+            for c in range(nc):
+                if c % 2 == 0:
+                    notas_jugador.append({
+                        "cols": [nota_intro], "midis": [notas_columnas[nota_intro]],
+                        "tiempo": (c + 1) * 4 * beat,
+                        "es_acorde": False, "parte": "intro", "hold": beat * 3,
+                    })
+            continue
+        # generar (o reusar) el contenido de la seccion
+        if nombre == "outro":
+            # el outro melodico lo cubre el "desenlace estilizado" de abajo
+            # (ascenso/cascada/redoble/etc.), que da un cierre mas expresivo.
+            continue
+        if nombre == "estribillo":
+            if estribillo_compases is None:
+                estribillo_compases = crear_bloque_seccion("B", nc, complejo)
+            bloque = estribillo_compases
+        else:
+            bloque = crear_bloque_seccion(material, nc, complejo)
+        # emitir los compases de la seccion
+        prob_adorno_local = (0.08 + perfil["energia"] * 0.4) * densidad
+        inicio = seccion["inicio_compas"]
+        for c in range(nc):
+            # compas global relativo al inicio del nudo (despues de la intro)
+            compas_global = inicio - C_INTRO + c
+            if compas_global < 0:
+                continue
+            contenido = bloque[c % len(bloque)]
+            es_cierre_seccion = (c == nc - 1)
+            # parte: mapear a nudo/desenlace por compat con el resto del juego
+            if nombre == "outro":
+                parte = "desenlace"
+            else:
+                parte = "nudo"
+            # ESTRIBILLO = gancho memorable: se ancla a un offset armonico fijo
+            #   (c, no compas_global) y se emite en modo determinista, de modo que
+            #   la melodia suene identica en cada retorno del estribillo.
+            if nombre == "estribillo":
+                emitir_compas(contenido, compas_global, perfil, parte,
+                              es_cierre_seccion, prob_adorno_local,
+                              compas_armonico=c, det=True)
+            else:
+                emitir_compas(contenido, compas_global, perfil, parte,
+                              es_cierre_seccion, prob_adorno_local)
 
     # --- desenlace con estilos variados ---
     estilo_des = rng.choice([
