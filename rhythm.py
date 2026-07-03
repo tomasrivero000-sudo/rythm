@@ -4316,22 +4316,29 @@ def dibujar_juego(partida, ahora):
                           int(col_nota[2] * alpha_niebla))
                 else:
                     cn = col_nota
-                # power-up: color especial + parpadeo
+                # power-up: nota especial grande y brillante
                 pu_id = grupo.get("power_up")
                 if pu_id:
                     pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
                     if pu_def:
                         pc = pu_def["color"]
                         # parpadeo suave
-                        brill = 0.6 + 0.4 * abs(((ahora_ms // 80) % 20) - 10) / 10.0
+                        brill = 0.7 + 0.3 * abs(((ahora_ms // 100) % 20) - 10) / 10.0
                         cn = (int(pc[0] * brill), int(pc[1] * brill), int(pc[2] * brill))
-                    # borde doble para distinguir
-                    pygame.draw.rect(pantalla, cn, (x + 4, gy - 2, ancho_col - 8, 32))
-                    pygame.draw.rect(pantalla, NEGRO, (x + 7, gy + 1, ancho_col - 14, 26))
-                    pygame.draw.rect(pantalla, cn, (x + 9, gy + 3, ancho_col - 18, 22))
-                    # label del power-up
-                    pu_lbl = fuente_chica.render(pu_def["nombre"] if pu_def else "?", True, NEGRO)
-                    pantalla.blit(pu_lbl, (x + ancho_col // 2 - pu_lbl.get_width() // 2, gy + 6))
+                    # nota mas alta (40px) con borde blanco grueso
+                    nota_h = 40
+                    ny = gy - 6  # centrar verticalmente
+                    # fondo solido del color
+                    pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
+                    # borde blanco doble para destacar
+                    pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+                    pygame.draw.rect(pantalla, BLANCO, (x + 5, ny + 3, ancho_col - 10, nota_h - 6), 1)
+                    # icono grande centrado
+                    iconos_pu = {"estrella": "AUTO", "vida": "+HP", "reloj": "SLOW", "doble": "x2"}
+                    pu_txt = iconos_pu.get(pu_id, "?")
+                    pu_lbl = fuente.render(pu_txt, True, NEGRO)
+                    pantalla.blit(pu_lbl, (x + ancho_col // 2 - pu_lbl.get_width() // 2,
+                                           ny + nota_h // 2 - pu_lbl.get_height() // 2))
                 elif grupo.get("es_acorde"):
                     pygame.draw.rect(pantalla, cn, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
@@ -4384,43 +4391,62 @@ def dibujar_juego(partida, ahora):
     # combo
     if partida["combo"] >= 5:
         combo_txt = fuente.render(f"{partida['combo']}x COMBO", True, col_nota)
-        pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 38))
+        pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 34))
 
-    # barra de vida
-    vida_w = 200
+    # === LADO DERECHO: vida, meta, info ===
+    # Y=8: instrumento + BPM
+    info = fuente.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['bpm']}BPM", True, GRIS_MED)
+    pantalla.blit(info, (ANCHO - info.get_width() - 10, 8))
+    forma_inst = forma_de_instrumento(partida['cancion']['instrumento'])
+    icono_x = ANCHO - info.get_width() - 34
+    dibujar_icono_inst(pantalla, forma_inst, icono_x, 18, 12, col_nota)
+
+    # Y=30: barra de vida
+    vida_w = 160
     vida_x = ANCHO - vida_w - 10
-    vida_y = 28
+    vida_y = 30
     vida_pct = partida["vida"] / partida["vida_max"]
     pygame.draw.rect(pantalla, GRIS, (vida_x, vida_y, vida_w, 8))
     if vida_pct > 0:
         color_vida = BLANCO if vida_pct > 0.3 else GRIS_MED
         pygame.draw.rect(pantalla, color_vida, (vida_x, vida_y, int(vida_w * vida_pct), 8))
     pygame.draw.rect(pantalla, BLANCO, (vida_x, vida_y, vida_w, 8), 1)
+    vida_lbl = fuente_chica.render("HP", True, GRIS)
+    pantalla.blit(vida_lbl, (vida_x - vida_lbl.get_width() - 4, vida_y - 2))
 
-    # barra de meta (objetivo del stage)
+    # Y=42: barra de meta (objetivo del stage)
     meta = partida.get("meta_puntos", 0)
     if meta > 0:
         ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
         meta_pct = min(1.0, ganado / max(1, meta))
-        meta_w = 200
+        meta_w = 160
         meta_x = ANCHO - meta_w - 10
-        meta_y = 38
+        meta_y = 42
         pygame.draw.rect(pantalla, GRIS, (meta_x, meta_y, meta_w, 8))
         if meta_pct > 0:
             bar_col = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
             pygame.draw.rect(pantalla, bar_col, (meta_x, meta_y, int(meta_w * meta_pct), 8))
         pygame.draw.rect(pantalla, BLANCO, (meta_x, meta_y, meta_w, 8), 1)
         meta_txt = fuente_chica.render(f"{ganado}/{meta}", True, GRIS_MED)
-        pantalla.blit(meta_txt, (meta_x - meta_txt.get_width() - 6, meta_y - 2))
+        pantalla.blit(meta_txt, (meta_x - meta_txt.get_width() - 4, meta_y - 2))
 
+    # Y=54: genero + multiplicador
+    gen_txt = fuente_chica.render(partida['cancion'].get('genero', ''), True, col_nota)
+    pantalla.blit(gen_txt, (ANCHO - gen_txt.get_width() - 10, 54))
+    if partida.get("mult_mods", 1.0) > 1.0:
+        mult_txt = fuente_chica.render(f"x{partida['mult_mods']:.1f}", True, col_nota)
+        pantalla.blit(mult_txt, (ANCHO - gen_txt.get_width() - mult_txt.get_width() - 18, 54))
+
+    # === LADO IZQUIERDO ===
     dif_txt = fuente_chica.render(partida["dificultad"]["nombre"], True, GRIS_MED)
     pantalla.blit(dif_txt, (10, 10))
-    # indicador de stage si estamos en un run
+    parte_txt = fuente_chica.render(parte, True, GRIS)
+    pantalla.blit(parte_txt, (10, 26))
     si = partida.get("stage_info")
     if si:
         st_txt = fuente_chica.render(f"STAGE {si['n']}/{NUM_STAGES}", True, col_nota)
-        pantalla.blit(st_txt, (10, 46))
-    # CAPA 3: mostrar evento activo
+        pantalla.blit(st_txt, (10, 42))
+    # CAPA 3: evento activo (centro)
     ev_act = partida.get("evento_activo")
     if ev_act:
         nombres_ev = {
@@ -4431,26 +4457,13 @@ def dibujar_juego(partida, ahora):
             "freeze_mel": "! FREEZE !",
         }
         ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
-        pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 50))
-    # info del instrumento (mas grande, sin escala)
-    info = fuente.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['bpm']}BPM", True, GRIS_MED)
-    pantalla.blit(info, (ANCHO - info.get_width() - 10, 8))
-    # icono del instrumento a la izquierda del texto (mas grande)
-    forma_inst = forma_de_instrumento(partida['cancion']['instrumento'])
-    icono_x = ANCHO - info.get_width() - 34
-    dibujar_icono_inst(pantalla, forma_inst, icono_x, 18, 12, col_nota)
-    # genero debajo
-    gen_txt = fuente_chica.render(partida['cancion'].get('genero', ''), True, col_nota)
-    pantalla.blit(gen_txt, (ANCHO - gen_txt.get_width() - 10, 34))
-    # multiplicador de mods activos
-    if partida.get("mult_mods", 1.0) > 1.0:
-        mult_txt = fuente_chica.render(f"MODS x{partida['mult_mods']:.2f}", True, col_nota)
-        pantalla.blit(mult_txt, (ANCHO - mult_txt.get_width() - 10, 56))
+        pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 52))
     # perks y power-ups HUD
     if partida.get("perks"):
         dibujar_perks_hud(partida)
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
+
     if dev_mode:
         dev_txt = fuente_chica.render("DEV x2  |  NO DMG", True, BLANCO)
         pantalla.blit(dev_txt, (ANCHO // 2 - dev_txt.get_width() // 2, ALTO - 20))
@@ -4770,26 +4783,23 @@ def dibujar_perk_select():
 
 def dibujar_perks_hud(partida):
     """Dibuja los perks activos y efectos temporales en el HUD del juego."""
-    # perks permanentes: iconos pequeños arriba a la izquierda
+    # perks permanentes: linea debajo del stage (izquierda, Y=58)
     perks = partida.get("perks", [])
     px = 10
-    py = 46
+    py = 58
     for p in perks:
-        txt = fuente_chica.render(p["nombre"][:3], True, GRIS_MED)
+        txt = fuente_chica.render(p["nombre"][:3], True, GRIS)
         pantalla.blit(txt, (px, py))
-        px += txt.get_width() + 8
-        if px > 200:
-            px = 10
-            py += 16
-    # escudo: mostrar cargas
+        px += txt.get_width() + 6
+    # escudo: mostrar cargas (izquierda, debajo de perks)
     cargas = partida.get("escudo_cargas", 0)
     if cargas > 0:
         esc_txt = fuente_chica.render(f"ESCUDO x{cargas}", True, (100, 200, 255))
-        pantalla.blit(esc_txt, (ANCHO - esc_txt.get_width() - 10, 42))
-    # efectos temporales activos
+        pantalla.blit(esc_txt, (10, py + 16))
+    # efectos temporales activos: borde izquierdo a media altura
     efectos = partida.get("efectos_activos", {})
     ahora = pygame.time.get_ticks() - partida["inicio"]
-    ey = ALTO // 2 - len(efectos) * 12
+    ey = 90
     for eid, t_fin in list(efectos.items()):
         restante = max(0, t_fin - ahora)
         if restante <= 0:
@@ -4798,13 +4808,12 @@ def dibujar_perks_hud(partida):
         if not pu_def:
             continue
         color = pu_def["color"]
-        # parpadea si queda poco
         if restante < 2000 and (pygame.time.get_ticks() // 200) % 2 == 0:
             color = GRIS
         seg = f"{restante / 1000:.1f}s"
         etxt = fuente_chica.render(f"{pu_def['nombre']} {seg}", True, color)
-        pantalla.blit(etxt, (ANCHO - etxt.get_width() - 10, ey))
-        ey += 20
+        pantalla.blit(etxt, (10, ey))
+        ey += 18
 
 def dibujar_run_overview():
     """Pantalla entre stages que muestra el progreso del run."""
