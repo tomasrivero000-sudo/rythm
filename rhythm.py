@@ -2573,6 +2573,21 @@ def get_dificultad(seed):
             d = dict(DIFICULTADES[i + 1]); d["nivel"] = i + 1; return d
     d = dict(DIFICULTADES[15]); d["nivel"] = 15; return d
 
+# --- meta de puntuacion por stage (objetivo roguelike) ---
+# la meta base escala con el nivel de dificultad; stages sucesivos piden mas
+META_BASE = {
+    1: 200,  2: 250,  3: 350,  4: 450,  5: 600,
+    6: 800,  7: 1100, 8: 1500, 9: 2000, 10: 2800,
+    11: 3500, 12: 4500, 13: 6000, 14: 8000, 15: 10000,
+}
+META_MULT_STAGE = {1: 1.0, 2: 1.3, 3: 1.6, 4: 2.0}
+
+def calcular_meta(nivel_dif, stage_n):
+    """Devuelve la meta de puntos para un stage (puntos a ganar EN ese stage)."""
+    base = META_BASE.get(nivel_dif, 1000)
+    mult = META_MULT_STAGE.get(stage_n, 1.0)
+    return int(base * mult)
+
 def elegir_kit(rng):
     return sintetizar_kit(rng)
 
@@ -3763,6 +3778,8 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         "notas_cayendo":  [],
         "puntos":         puntos_iniciales,
         "puntos_stage_inicio": puntos_iniciales,  # puntos con los que arranco este stage
+        "meta_puntos":   0,    # meta del stage (se calcula abajo con perks)
+        "loop_offset":   0,    # offset temporal para loop de cancion (ms)
         "terminada":      False,
         "holds_activos":  {},
         "ultimo_hit":     None,
@@ -3806,6 +3823,10 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
             p["velocidad"] *= 0.85
         elif pid == "iman":
             p["perk_iman"] = True  # perfecto window 30 -> 50ms
+    # calcular meta del stage (en modo run; en modo libre meta=0 = sin limite)
+    if stage_info:
+        nivel = dif.get("nivel", 1)
+        p["meta_puntos"] = calcular_meta(nivel, stage_info.get("n", 1))
     return p
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
@@ -3916,13 +3937,31 @@ def exportar_cancion(partida):
 def tick_background(partida, ahora):
     c = partida["cancion"]
     kit = c["kit"]
+    loop_off = partida.get("loop_offset", 0)
 
-    if ahora >= c["duracion_loop"] and not partida["terminada"]:
+    # --- WIN CONDITION: alcanzar la meta de puntos del stage ---
+    meta = partida.get("meta_puntos", 0)
+    if meta > 0 and not partida["terminada"]:
+        ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
+        if ganado >= meta:
+            partida["terminada"] = True
+            # si es el ultimo stage del run, el enemigo (figura) explota
+            si = partida.get("stage_info")
+            if si and si["n"] >= NUM_STAGES:
+                _explotar_figura(partida)
+    # modo libre (sin meta): la cancion termina al acabarse
+    if meta == 0 and ahora >= c["duracion_loop"] and not partida["terminada"]:
         partida["terminada"] = True
-        # si es el ultimo stage del run, el enemigo (figura) explota
-        si = partida.get("stage_info")
-        if si and si["n"] >= NUM_STAGES:
-            _explotar_figura(partida)
+
+    # --- LOOP: cuando se agotan perc/bajo, resetear indices y avanzar offset ---
+    perc_done = partida["indice_perc"] >= len(c["percusion"])
+    bajo_done = partida["indice_bajo"] >= len(c["bajo"]["eventos"])
+    if perc_done and bajo_done and not partida["terminada"]:
+        partida["loop_offset"] = loop_off + c["duracion_loop"]
+        partida["indice_perc"] = 0
+        partida["indice_bajo"] = 0
+        partida["_arranco_audio"] = False   # re-aplicar anti-avalancha en el nuevo loop
+        loop_off = partida["loop_offset"]
 
     # anti-avalancha: si hubo un hueco de timing (lag de carga), muchos eventos
     # quedaron atrasados. Reproducirlos todos de golpe suma amplitudes y clipea.
@@ -3932,11 +3971,11 @@ def tick_background(partida, ahora):
         # primer tick de audio: descartar cualquier evento con tiempo < ahora
         # (evita el golpe inicial de eventos acumulados durante la carga)
         while (partida["indice_perc"] < len(c["percusion"])
-               and c["percusion"][partida["indice_perc"]]["tiempo"] < ahora - UMBRAL_ATRASO):
+               and c["percusion"][partida["indice_perc"]]["tiempo"] + loop_off < ahora - UMBRAL_ATRASO):
             partida["indice_perc"] += 1
         bajo0 = c["bajo"]["eventos"]
         while (partida["indice_bajo"] < len(bajo0)
-               and bajo0[partida["indice_bajo"]]["tiempo"] < ahora - UMBRAL_ATRASO):
+               and bajo0[partida["indice_bajo"]]["tiempo"] + loop_off < ahora - UMBRAL_ATRASO):
             partida["indice_bajo"] += 1
         partida["_arranco_audio"] = True
 
@@ -3949,13 +3988,14 @@ def tick_background(partida, ahora):
     }
     # CAPA 3: determinar si hay un evento activo ahora
     evento_activo = None
+    ahora_en_loop = ahora - loop_off
     for ev in c.get("eventos", []):
-        if ev["tiempo"] <= ahora < ev["tiempo"] + ev["dur"]:
+        if ev["tiempo"] <= ahora_en_loop < ev["tiempo"] + ev["dur"]:
             evento_activo = ev["tipo"]
             break
     partida["evento_activo"] = evento_activo
 
-    while partida["indice_perc"] < len(c["percusion"]) and ahora >= c["percusion"][partida["indice_perc"]]["tiempo"]:
+    while partida["indice_perc"] < len(c["percusion"]) and ahora >= c["percusion"][partida["indice_perc"]]["tiempo"] + loop_off:
         p = c["percusion"][partida["indice_perc"]]
         sample = kit.get(p["sample"])
         # silencio_drums: saltear toda la percusion en ese tramo
@@ -3974,7 +4014,7 @@ def tick_background(partida, ahora):
     bajo = c["bajo"]["eventos"]
     cache_bajo = c.get("cache_bajo", {})
     vol_bajo = 1.5 if evento_activo == "boost_bajo" else 1.0
-    while partida["indice_bajo"] < len(bajo) and ahora >= bajo[partida["indice_bajo"]]["tiempo"]:
+    while partida["indice_bajo"] < len(bajo) and ahora >= bajo[partida["indice_bajo"]]["tiempo"] + loop_off:
         ev = bajo[partida["indice_bajo"]]
         snd_b = cache_bajo.get(ev["midi"])
         if snd_b:
@@ -4013,9 +4053,14 @@ def _explotar_figura(partida):
 
 def get_parte(partida, ahora):
     e = partida["cancion"]["estructura"]
-    if ahora < e["intro_fin"]:       return "INTRO"
-    elif ahora < e["nudo_fin"]:      return "NUDO"
-    elif ahora < e["desenlace_fin"]: return "FIN"
+    # usar tiempo dentro del loop actual
+    t = ahora - partida.get("loop_offset", 0)
+    dur = partida["cancion"]["duracion_loop"]
+    if dur > 0:
+        t = t % dur
+    if t < e["intro_fin"]:       return "INTRO"
+    elif t < e["nudo_fin"]:      return "NUDO"
+    elif t < e["desenlace_fin"]: return "FIN"
     return "FIN"
 
 GRIS_FONDO = (28, 28, 28)
@@ -4074,7 +4119,12 @@ def dibujar_fondo_lissajous(partida, ahora):
     dano = (stage_n - 1) / max(1, NUM_STAGES - 1)  # 0.0 a 1.0
     # progreso dentro del stage actual: el daño aumenta a medida que se juega
     dur_total = partida["cancion"].get("duracion_loop", 1)
-    prog_stage = min(ahora / max(1, dur_total), 1.0)
+    meta = partida.get("meta_puntos", 0)
+    if meta > 0:
+        ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
+        prog_stage = min(ganado / max(1, meta), 1.0)
+    else:
+        prog_stage = min(ahora / max(1, dur_total), 1.0)
     # daño efectivo: base del stage + algo de progreso del stage actual
     dano_ef = min(1.0, dano + prog_stage * (1.0 / max(1, NUM_STAGES - 1)) * 0.8)
 
@@ -4347,6 +4397,22 @@ def dibujar_juego(partida, ahora):
         pygame.draw.rect(pantalla, color_vida, (vida_x, vida_y, int(vida_w * vida_pct), 8))
     pygame.draw.rect(pantalla, BLANCO, (vida_x, vida_y, vida_w, 8), 1)
 
+    # barra de meta (objetivo del stage)
+    meta = partida.get("meta_puntos", 0)
+    if meta > 0:
+        ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
+        meta_pct = min(1.0, ganado / max(1, meta))
+        meta_w = 200
+        meta_x = ANCHO - meta_w - 10
+        meta_y = 38
+        pygame.draw.rect(pantalla, GRIS, (meta_x, meta_y, meta_w, 8))
+        if meta_pct > 0:
+            bar_col = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
+            pygame.draw.rect(pantalla, bar_col, (meta_x, meta_y, int(meta_w * meta_pct), 8))
+        pygame.draw.rect(pantalla, BLANCO, (meta_x, meta_y, meta_w, 8), 1)
+        meta_txt = fuente_chica.render(f"{ganado}/{meta}", True, GRIS_MED)
+        pantalla.blit(meta_txt, (meta_x - meta_txt.get_width() - 6, meta_y - 2))
+
     dif_txt = fuente_chica.render(partida["dificultad"]["nombre"], True, GRIS_MED)
     pantalla.blit(dif_txt, (10, 10))
     # indicador de stage si estamos en un run
@@ -4418,7 +4484,12 @@ def dibujar_juego(partida, ahora):
             pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 75))
 
     elif partida["terminada"] and not partida["notas_cayendo"]:
-        fin = fuente.render("FIN", True, BLANCO)
+        col_g = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
+        meta = partida.get("meta_puntos", 0)
+        if meta > 0:
+            fin = fuente.render("META ALCANZADA!", True, col_g)
+        else:
+            fin = fuente.render("FIN", True, BLANCO)
         pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2 - 40))
         if run_actual is not None:
             # en run: mostrar lo ganado en el stage y el total acumulado
@@ -5915,10 +5986,11 @@ while corriendo:
             for eid in list(efectos.keys()):
                 if ahora > efectos[eid]:
                     del efectos[eid]
-            # ACELERANDO: velocidad sube de 1x a 2x a lo largo de la cancion
+            # ACELERANDO: velocidad sube de 1x a 2x dentro de cada loop
             if "acelerando" in partida.get("mods", set()):
                 duracion = partida["cancion"]["duracion_loop"]
-                progreso = min(ahora / max(1, duracion), 1.0)
+                ahora_en_loop = (ahora - partida.get("loop_offset", 0)) % max(1, duracion)
+                progreso = min(ahora_en_loop / max(1, duracion), 1.0)
                 vel_p *= (1.0 + progreso)  # 1x al inicio, 2x al final
             # power-up RELOJ: notas 25% mas lentas temporalmente
             if ahora < partida.get("efectos_activos", {}).get("reloj", 0):
@@ -5931,13 +6003,20 @@ while corriendo:
                 ANTICIPACION = (zy_p + 40) / PIXELES_POR_MS
 
             if not partida["terminada"]:
-                while partida["indice_jugador"] < len(partida["cancion"]["notas_jugador"]) and ahora >= partida["cancion"]["notas_jugador"][partida["indice_jugador"]]["tiempo"] - ANTICIPACION:
-                    n = partida["cancion"]["notas_jugador"][partida["indice_jugador"]]
+                _lo = partida.get("loop_offset", 0)
+                njug = partida["cancion"]["notas_jugador"]
+                # loop de indice_jugador: cuando se agotan, resetear y avanzar offset
+                if partida["indice_jugador"] >= len(njug):
+                    partida["indice_jugador"] = 0
+                    # el loop_offset ya se actualizo en tick_background
+                    _lo = partida.get("loop_offset", 0)
+                while partida["indice_jugador"] < len(njug) and ahora >= njug[partida["indice_jugador"]]["tiempo"] + _lo - ANTICIPACION:
+                    n = njug[partida["indice_jugador"]]
                     hold_ms = n.get("hold", 0)
                     nota_cae = {
                         "cols":      n["cols"],
                         "midis":     n["midis"],
-                        "tiempo_ms": n["tiempo"],
+                        "tiempo_ms": n["tiempo"] + _lo,
                         "acertadas": set(),
                         "es_acorde": n.get("es_acorde", False),
                         "hold":      hold_ms,
