@@ -303,13 +303,12 @@ MODIFICADORES = [
     {"id": "acelerando", "nombre": "ACELERANDO",  "desc": "velocidad sube gradualmente", "mult": 1.3},
     {"id": "niebla",     "nombre": "NIEBLA",      "desc": "notas aparecen desde la mitad", "mult": 1.6},
     {"id": "rafagas",    "nombre": "RAFAGAS",     "desc": "tramos densos y silencios", "mult": 1.3},
-    {"id": "desplaza",   "nombre": "DESPLAZAMIENTO", "desc": "las columnas rotan", "mult": 1.7},
     {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
 ]
 mods_activos = set()   # ids de modificadores seleccionados (modo libre)
 
 # mods "faciles" que pueden salir en el dado de los stages 2 y 3
-MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando", "niebla", "rafagas", "desplaza"]
+MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando", "niebla", "rafagas"]
 
 # --- modo STAGES (tipo roguelike): completar generos en cada dificultad ---
 # cada run son 4 stages del mismo genero+dificultad:
@@ -3691,11 +3690,6 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
     mapa_teclas = {c: c for c in range(num_cols_p)}
     if "espejo" in mods_partida:
         mapa_teclas = {c: (num_cols_p - 1 - c) for c in range(num_cols_p)}
-    # DESPLAZAMIENTO: las columnas rotan en el tiempo (se actualiza en el loop).
-    # Guardamos el periodo de rotacion en ms (cada 4 compases rota una posicion).
-    desplaza_periodo = 0
-    if "desplaza" in mods_partida:
-        desplaza_periodo = cancion["beat"] * 4 * 4  # cada 4 compases
 
     mult_mods = 1.0
     for m in MODIFICADORES:
@@ -3739,9 +3733,6 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0, instru
         "velocidad":      VELOCIDAD * dif.get("vel_mult", 1.0) * (2.0 if "veloz" in mods_partida else 1.0),
         "stage_info":     stage_info,
         "mapa_teclas":    mapa_teclas,
-        "mapa_base":      dict(mapa_teclas),   # mapa sin rotacion (para DESPLAZAMIENTO)
-        "desplaza_periodo": desplaza_periodo,  # ms por rotacion (0 = sin desplazamiento)
-        "desplaza_offset": 0,                  # rotacion actual (columnas)
         "es_inverso":     "inverso" in mods_partida,
         "zona_y":         90 if "inverso" in mods_partida else ZONA_Y,
     }
@@ -4470,7 +4461,7 @@ def mods_de_stage(n, rng):
     Los mods se escalonan por dificultad:
       - suaves (stage 2+): inverso, acelerando, rafagas
       - medios (stage 3+): niebla, veloz, + espejo con 30%
-      - duros  (stage 4):  desplaza, + espejo con 35%, sudden death
+      - duros  (stage 4):  espejo con 35%, sudden death
     ESPEJO: nunca en stages 1-2, 30% en stage 3, 35% en stage 4."""
     suaves = ["inverso", "acelerando", "rafagas"]
     medios = ["niebla", "veloz"]
@@ -4489,7 +4480,7 @@ def mods_de_stage(n, rng):
         if rng.random() < 0.35:
             mods.add("espejo")
         # pool completo de movimiento para el stage final
-        otros = suaves + medios + ["desplaza"]
+        otros = suaves + medios
         if not mods:
             mods.add(rng.choice(otros))
             if rng.random() < 0.5:
@@ -5602,24 +5593,6 @@ while corriendo:
         if dev_mode:
             partida["inicio"] -= 1000 // 60
         ahora = ahora_ms - partida["inicio"]
-
-        # DESPLAZAMIENTO: rotar el mapa de columnas cada 'desplaza_periodo' ms
-        periodo = partida.get("desplaza_periodo", 0)
-        if periodo > 0 and not partida.get("game_over"):
-            nuevo_offset = int(ahora // periodo)
-            if nuevo_offset != partida.get("desplaza_offset", 0):
-                partida["desplaza_offset"] = nuevo_offset
-                num_c = partida["dificultad"]["columnas"]
-                base = partida.get("mapa_base", {c: c for c in range(num_c)})
-                # rotar: cada tecla fisica apunta a una columna corrida
-                partida["mapa_teclas"] = {
-                    c: (base.get(c, c) + nuevo_offset) % num_c
-                    for c in range(num_c)
-                }
-                # feedback visual y sonoro del cambio
-                crear_texto_flotante(ANCHO // 2, zy_p - 100, "COLUMNAS ROTADAS!", BLANCO, True)
-                crear_shake(6)
-                sfx_select()
 
         # RAFAGAS: avisar al entrar en la avalancha (inicio de cada ciclo)
         if partida["cancion"].get("tiene_rafagas") and not partida.get("game_over"):
