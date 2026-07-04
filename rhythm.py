@@ -4570,11 +4570,48 @@ def dibujar_juego(partida, ahora):
     inv_teclas = {}
     for tecla_pos, col_dest in mt.items():
         inv_teclas[col_dest] = tecla_pos
+
+    # AUTO activo: el juego toca solo, no hace falta tocar nada
+    ahora_hud = pygame.time.get_ticks() - partida["inicio"]
+    auto_activo = ahora_hud < partida.get("efectos_activos", {}).get("estrella", 0)
+
+    # ASISTENCIA VISUAL (niveles faciles): iluminar la tecla cuando la nota
+    # se acerca, con intensidad creciente; borde fuerte = "apreta AHORA"
+    asistencia = partida["dificultad"].get("nivel", 1) <= 2 and not auto_activo
+    asist_cols = {}   # col -> intensidad 0..1 (1 = apreta ya)
+    if asistencia:
+        w_hit_a = partida.get("w_hit", 150)
+        for grupo in partida["notas_cayendo"]:
+            ms_hasta = grupo["tiempo_ms"] - ahora_hud
+            if -w_hit_a < ms_hasta <= 400:
+                # 400ms antes: 0.0 → en el beat: 1.0
+                inten = 1.0 - max(0, ms_hasta) / 400.0
+                for c_a in grupo["cols"]:
+                    asist_cols[c_a] = max(asist_cols.get(c_a, 0), inten)
+
     for i in range(num_cols):
         x = i * ancho_col + sx
-        if i in teclas_sostenidas:
+        if auto_activo:
+            # tecla BLANCA = no hace falta tocarla (el juego toca solo)
+            pygame.draw.rect(pantalla, BLANCO, (x + 2, label_y0 + sy, ancho_col - 4, 32))
+        elif i in asist_cols:
+            # asistencia: relleno del color del genero con intensidad creciente
+            inten = asist_cols[i]
+            ca = (int(col_nota[0] * inten), int(col_nota[1] * inten), int(col_nota[2] * inten))
+            pygame.draw.rect(pantalla, ca, (x + 2, label_y0 + sy, ancho_col - 4, 32))
+            if inten > 0.85:
+                # "AHORA": borde blanco fuerte
+                pygame.draw.rect(pantalla, BLANCO, (x + 2, label_y0 + sy, ancho_col - 4, 32), 3)
+        if i in teclas_sostenidas and not auto_activo:
             pygame.draw.rect(pantalla, GRIS, (x + 2, label_y0 + sy, ancho_col - 4, 32))
-        col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
+        if auto_activo:
+            col_activa = NEGRO   # label negro sobre tecla blanca
+        elif i in teclas_sostenidas:
+            col_activa = BLANCO
+        elif i in asist_cols and asist_cols[i] > 0.5:
+            col_activa = BLANCO  # label visible sobre el relleno de asistencia
+        else:
+            col_activa = GRIS_MED
         tecla_idx = inv_teclas.get(i, i)
         label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
         pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, label_y0 + 8 + sy))
@@ -6262,6 +6299,61 @@ while corriendo:
                     grupo["y"] = zy_p + (ms_hasta * PIXELES_POR_MS)
                 else:
                     grupo["y"] = zy_p - (ms_hasta * PIXELES_POR_MS)
+
+            # --- POWER-UP AUTO: el juego toca solo ---
+            # toda nota que llega a su beat se acredita como PERFECTO
+            # automaticamente, con sonido, puntos y efectos. El jugador
+            # no necesita tocar nada (las teclas se pintan de blanco).
+            if ahora < partida.get("efectos_activos", {}).get("estrella", 0):
+                num_cols_a = partida["dificultad"]["columnas"]
+                ancho_col_a = ANCHO // num_cols_a
+                col_g_a = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
+                auto_restantes = []
+                for grupo in partida["notas_cayendo"]:
+                    if grupo["tiempo_ms"] <= ahora:
+                        pu_id_a = grupo.get("power_up")
+                        if pu_id_a:
+                            # auto-atrapar power-ups tambien
+                            pu_def_a = next((pu for pu in POWER_UPS if pu["id"] == pu_id_a), None)
+                            cxa = grupo["cols"][0] * ancho_col_a + ancho_col_a // 2
+                            if pu_def_a:
+                                if pu_id_a == "vida":
+                                    partida["vida"] = min(partida["vida_max"], partida["vida"] + 4)
+                                    crear_texto_flotante(cxa, zy_p - 30, "+4 VIDA", pu_def_a["color"], True)
+                                elif pu_def_a["dur"] > 0:
+                                    partida["efectos_activos"][pu_id_a] = ahora + pu_def_a["dur"]
+                                    crear_texto_flotante(cxa, zy_p - 30, pu_def_a["nombre"], pu_def_a["color"], True)
+                                crear_explosion(cxa, zy_p, 80, color=pu_def_a["color"])
+                            continue  # power-up consumido, no vuelve a la lista
+                        # acreditar como PERFECTO
+                        partida["combo"] += 1
+                        if partida["combo"] > partida["max_combo"]:
+                            partida["max_combo"] = partida["combo"]
+                        pts_a = 10 if partida.get("perk_perfecto") else 5
+                        combo_mult_a = 1 + partida["combo"] // 5
+                        _pu_doble_a = 2.0 if ahora < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
+                        bonus_hold = 3 if grupo.get("hold", 0) > 0 else 0
+                        total_a = int((pts_a * len(grupo["cols"]) + bonus_hold) * combo_mult_a
+                                      * partida.get("mult_mods", 1.0) * _pu_doble_a)
+                        partida["puntos"] += total_a
+                        # sonido de las notas (afinado con la melodia)
+                        for _ma in grupo.get("midis", []):
+                            _sa = cache_notas.get(_ma)
+                            if _sa:
+                                _cha = _sa.play()
+                                if _cha:
+                                    _cha.set_volume(config["volumen"])
+                        # efectos visuales por columna
+                        for _ca in grupo["cols"]:
+                            cxa = _ca * ancho_col_a + ancho_col_a // 2
+                            crear_explosion(cxa, zy_p, 40, color=(255, 255, 100))
+                            crear_flash(_ca, 0.5)
+                        partida["ultimo_hit"] = {"texto": "AUTO", "tiempo": ahora_ms}
+                        crear_texto_flotante(grupo["cols"][0] * ancho_col_a + ancho_col_a // 2,
+                                             zy_p - 20, f"+{total_a}", (255, 255, 100))
+                    else:
+                        auto_restantes.append(grupo)
+                partida["notas_cayendo"] = auto_restantes
 
             notas_vivas = []
             for n in partida["notas_cayendo"]:
