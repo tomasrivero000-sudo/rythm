@@ -3217,24 +3217,52 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     motivos_b = [escalar_frase(rng.choice(frases_bajar))]     # gancho del estribillo
     motivos_c = [escalar_frase(rng.choice(frases_medio))]
 
-    pat_jugador_simples = [
-        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
-        [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
-        [0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+    # --- pools de patrones ritmicos escalados por dificultad ---
+    # posiciones: 0=1er negra, 2=octavo, 4=2da negra, 6=octavo, etc.
+    # los octavos (pos impares de negra: 2,6,10,14) dan groove y sincopa.
+    pat_basicos = [
+        # 2-3 notas, con algun octavo para que no sea solo negras
+        [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0],  # 1, &3, 4
+        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0],  # 1, 2, &3
+        [1,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0],  # 1, 3, &3
+        [0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0],  # &1, 3, &4
+        [1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],  # 1, 2, 4
+        [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],  # 1, &2
+        [0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],  # 2, &3, 4
+        [1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],  # 1, &1, 3
     ]
-    pat_jugador_complejos = [
-        [1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0],
-        [1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
-        [0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0],
+    pat_intermedios = [
+        # 3-4 notas, mas sincopas y anticipaciones
+        [1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0],  # 1, &2, 3, &4
+        [1,0,1,0,0,0,0,0,1,0,0,0,1,0,0,0],  # 1, &1, 3, 4
+        [0,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0],  # &1, 2, &3, 4
+        [1,0,0,0,1,0,1,0,0,0,0,0,1,0,0,0],  # 1, 2, &2, 4
+        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,1,0],  # 1, &2, &3, &4
+        [0,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0],  # &1, &2, 3, &4
+        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1,0],  # 1, 2, &3, &4
+        [1,0,1,0,0,0,1,0,0,0,0,0,1,0,0,0],  # 1, &1, &2, 4
     ]
+    pat_avanzados = [
+        # 4-6 notas, dieciseisavos, patrones de hi-hat, muchas sincopas
+        [1,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0],  # 5 notas
+        [1,0,0,0,1,0,1,0,0,0,1,0,1,0,0,0],  # 5 notas
+        [0,0,1,0,1,0,0,0,1,0,1,0,0,0,1,0],  # 5 notas
+        [1,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0],  # 5 notas
+        [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],  # 5 notas, con 16avos
+        [1,0,1,0,0,0,1,0,1,0,1,0,0,0,0,0],  # 5 notas
+        [0,0,1,0,1,0,1,0,0,0,1,0,0,0,1,0],  # 5 notas
+        [1,1,0,0,1,0,0,0,1,1,0,0,1,0,0,0],  # 6 notas, dieciseisavos en downbeats
+    ]
+    # elegir pool segun columnas (proxy de dificultad)
+    if num_columnas <= 4:
+        pat_jugador_simples = pat_basicos
+        pat_jugador_complejos = pat_intermedios
+    elif num_columnas <= 6:
+        pat_jugador_simples = pat_intermedios
+        pat_jugador_complejos = pat_avanzados
+    else:
+        pat_jugador_simples = pat_intermedios + pat_avanzados
+        pat_jugador_complejos = pat_avanzados
 
     notas_jugador = []
 
@@ -3308,6 +3336,9 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             if contenido[s] is None:
                 continue
             t   = t_intro_fin + compas_global * 4 * beat + s * paso16
+            # swing: retrasa octavos (posiciones impares) para groove
+            if swing > 0 and (s % 2 == 1):
+                t += int(paso16 * swing)
             col = contenido[s]["col"]
             hd  = contenido[s]["hold"]
             # acordes: mas probables en estribillo (energia alta) y con dif acordes
