@@ -3859,6 +3859,34 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     if stage_info:
         nivel = dif.get("nivel", 1)
         p["meta_puntos"] = calcular_meta(nivel, stage_info.get("n", 1))
+
+    # --- BUFFER DE ARRANQUE ---
+    # garantizar que la primera nota empiece fuera de pantalla.
+    # usamos la velocidad real de esta partida (ya incluye vel_mult, veloz, lento).
+    vel_real = p["velocidad"]
+    _px_ms = vel_real / (1000 / 60)
+    es_inv = p.get("es_inverso", False)
+    if es_inv:
+        _antic = (ALTO - p.get("zona_y", ZONA_Y) + 60) / max(0.01, _px_ms)
+    else:
+        _antic = (p.get("zona_y", ZONA_Y) + 60) / max(0.01, _px_ms)
+    c = p["cancion"]
+    _primer_nota = min((n["tiempo"] for n in c["notas_jugador"]), default=999999)
+    _buffer = max(0, int(_antic - _primer_nota + 300))  # +300ms margen
+    if _buffer > 0:
+        for n in c["notas_jugador"]:
+            n["tiempo"] += _buffer
+        for pe in c["percusion"]:
+            pe["tiempo"] += _buffer
+        for ev in c["bajo"]["eventos"]:
+            ev["tiempo"] += _buffer
+        for ev in c.get("eventos", []):
+            ev["tiempo"] += _buffer
+        c["estructura"]["intro_fin"]     += _buffer
+        c["estructura"]["nudo_fin"]      += _buffer
+        c["estructura"]["desenlace_fin"] += _buffer
+        c["duracion_loop"]               += _buffer
+
     return p
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
