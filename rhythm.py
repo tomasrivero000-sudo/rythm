@@ -4013,13 +4013,16 @@ def tick_background(partida, ahora):
     if meta == 0 and ahora >= c["duracion_loop"] and not partida["terminada"]:
         partida["terminada"] = True
 
-    # --- LOOP: cuando se agotan perc/bajo, resetear indices y avanzar offset ---
+    # --- LOOP: cuando se agotan perc/bajo/jugador, resetear y avanzar offset ---
     perc_done = partida["indice_perc"] >= len(c["percusion"])
     bajo_done = partida["indice_bajo"] >= len(c["bajo"]["eventos"])
+    jug_done  = partida["indice_jugador"] >= len(c["notas_jugador"])
     if perc_done and bajo_done and not partida["terminada"]:
         partida["loop_offset"] = loop_off + c["duracion_loop"]
         partida["indice_perc"] = 0
         partida["indice_bajo"] = 0
+        if jug_done:
+            partida["indice_jugador"] = 0
         partida["_arranco_audio"] = False   # re-aplicar anti-avalancha en el nuevo loop
         loop_off = partida["loop_offset"]
 
@@ -6074,11 +6077,6 @@ while corriendo:
             if not partida["terminada"]:
                 _lo = partida.get("loop_offset", 0)
                 njug = partida["cancion"]["notas_jugador"]
-                # loop de indice_jugador: cuando se agotan, resetear y avanzar offset
-                if partida["indice_jugador"] >= len(njug):
-                    partida["indice_jugador"] = 0
-                    # el loop_offset ya se actualizo en tick_background
-                    _lo = partida.get("loop_offset", 0)
                 while partida["indice_jugador"] < len(njug) and ahora >= njug[partida["indice_jugador"]]["tiempo"] + _lo - ANTICIPACION:
                     n = njug[partida["indice_jugador"]]
                     hold_ms = n.get("hold", 0)
