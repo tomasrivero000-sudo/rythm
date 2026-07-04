@@ -3375,22 +3375,34 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             if es_cierre_seccion and s == 0:
                 midi_nota = ajustar_a_acorde(midi_nota, [tonos_ac[0], tonos_ac[2]],
                                              escala, tonica + 12)
-            elif en_tiempo_fuerte and not es_consonante:
+            elif s == 0 and not es_consonante:
+                # correccion armonica SOLO en el downbeat del compas: ahi el
+                # choque con el cambio de acorde es audible. En el resto del
+                # compas las notas de paso no-del-acorde son musicales y
+                # preservan la identidad del motivo.
                 midi_nota = resolver_disonancia(midi_nota, tonos_ac, escala, tonica + 12)
-            # anti-repeticion en tiempos debiles (en estribillo es determinista:
-            # siempre sube al grado vecino, para que el gancho sea reproducible)
-            if notas_jugador and not en_tiempo_fuerte:
-                ult = notas_jugador[-1]
-                if not ult.get("es_acorde") and ult["midis"] and ult["midis"][0] == midi_nota:
+            # anti-repeticion SUAVE: la repeticion es parte de las melodias
+            # pegadizas (mi-mi-mi), solo evitamos la TERCERA consecutiva.
+            if len(notas_jugador) >= 2 and not en_tiempo_fuerte:
+                u1 = notas_jugador[-1]
+                u2 = notas_jugador[-2]
+                if (not u1.get("es_acorde") and not u2.get("es_acorde")
+                        and u1["midis"] and u2["midis"]
+                        and u1["midis"][0] == midi_nota and u2["midis"][0] == midi_nota):
                     grados_esc = escala[:-1] if escala[-1] == 12 else escala
                     pc_rel = (midi_nota - (tonica % 12)) % 12
                     if pc_rel in grados_esc:
                         gi = grados_esc.index(pc_rel)
-                        paso_ar = 1 if det else rng.choice([-1, 1])
-                        gi_nuevo = (gi + paso_ar) % len(grados_esc)
+                        # reflejar en el borde: nunca wrap de octava
+                        if gi >= len(grados_esc) - 1:
+                            gi_nuevo = gi - 1
+                        elif gi <= 0:
+                            gi_nuevo = 1
+                        else:
+                            gi_nuevo = gi + (1 if det else rng.choice([-1, 1]))
                         midi_nota += grados_esc[gi_nuevo] - grados_esc[gi]
                     else:
-                        midi_nota += 2 if det else rng.choice([-2, -1, 1, 2])
+                        midi_nota += -2 if midi_nota % 12 > 6 else 2
             notas_jugador.append({
                 "cols": [col], "midis": [midi_nota],
                 "tiempo": t, "es_acorde": False, "parte": parte, "hold": hd,
@@ -3887,6 +3899,18 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     if stage_info:
         nivel = dif.get("nivel", 1)
         p["meta_puntos"] = calcular_meta(nivel, stage_info.get("n", 1))
+
+    # --- ventanas de timing escaladas por dificultad ---
+    # niveles faciles perdonan mas; niveles altos exigen precision.
+    _nivel = dif.get("nivel", 1)
+    w_hit = 210 - _nivel * 5      # nivel 1: 205ms ... nivel 15: 135ms
+    w_perf = 48 - _nivel          # nivel 1: 47ms  ... nivel 15: 33ms
+    if p.get("perk_ventana"):
+        w_hit = int(w_hit * 1.25)
+    if p.get("perk_iman"):
+        w_perf += 18
+    p["w_hit"] = w_hit
+    p["w_perf"] = w_perf
 
     # --- BUFFER DE ARRANQUE ---
     # garantizar que la primera nota empiece fuera de pantalla.
@@ -5833,13 +5857,13 @@ while corriendo:
                                     if idx_col < len(g.get("midis", [])):
                                         midi_a_tocar = g["midis"][idx_col]
 
-                        # volumen segun cercania: cerca del beat suena pleno, lejos mas suave
-                        if mejor_dist < 80:
+                        # volumen segun cercania: generoso, pifiar por poco suena pleno
+                        if mejor_dist < 120:
                             vol_nota = 1.0
-                        elif mejor_dist < 200:
-                            vol_nota = 0.85
+                        elif mejor_dist < 250:
+                            vol_nota = 0.9
                         else:
-                            vol_nota = 0.6
+                            vol_nota = 0.7
 
                         snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
                         if snd_tocar:
@@ -5860,8 +5884,9 @@ while corriendo:
 
                         acerto_algo = False
                         # ventanas de timing (ajustables por perks)
-                        w_hit = 187 if partida.get("perk_ventana") else 150
-                        w_perf = 50 if partida.get("perk_iman") else 30
+                        # ventanas de timing escaladas por dificultad (con perks aplicados)
+                        w_hit = partida.get("w_hit", 150)
+                        w_perf = partida.get("w_perf", 30)
                         # auto-perfecto por power-up estrella
                         ahora_juego = ahora_ms - partida["inicio"]
                         auto_perf = ahora_juego < partida.get("efectos_activos", {}).get("estrella", 0)
@@ -5913,7 +5938,7 @@ while corriendo:
                                             crear_shake(min(5 + partida["combo"] * 0.15, 12))
                                             crear_indicador_hit(col, "perfecto")
                                             sfx_hit_perfect(partida["combo"])
-                                        elif distancia < 60:
+                                        elif distancia < w_hit * 0.4:
                                             pts = 3
                                             partida["combo"] += 1
                                             pot = min(1.0 + partida["combo"] * 0.02, 1.5)
@@ -5924,7 +5949,7 @@ while corriendo:
                                             crear_shake(min(3 + partida["combo"] * 0.1, 8))
                                             crear_indicador_hit(col, "cerca")
                                             sfx_hit_good()
-                                        elif distancia < 100:
+                                        elif distancia < w_hit * 0.67:
                                             pts = 1
                                             partida["combo"] += 1
                                             partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
@@ -5961,10 +5986,16 @@ while corriendo:
                                                                  f"{partida['combo']}x COMBO!", col_g, grande=True)
                                         combo_mult = 1 + partida["combo"] // 5
                                         if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
-                                            if midi_fijo in cache_notas_largas:
+                                            # usar el midi REAL de la nota (con octava/armonia),
+                                            # no la nota base de la columna: asi el hold suena
+                                            # afinado con la melodia.
+                                            _idx_c = grupo["cols"].index(col) if col in grupo["cols"] else 0
+                                            _midi_hold = grupo.get("midis", [midi_fijo])[_idx_c] if _idx_c < len(grupo.get("midis", [])) else midi_fijo
+                                            _snd_hold = cache_notas_largas.get(_midi_hold) or cache_notas_largas.get(midi_fijo)
+                                            if _snd_hold:
                                                 # loop si el hold dura mas que el sample (1.6s)
                                                 loops = -1 if grupo["hold"] > 1500 else 0
-                                                ch = cache_notas_largas[midi_fijo].play(loops=loops)
+                                                ch = _snd_hold.play(loops=loops)
                                                 if ch:
                                                     ch.set_volume(config["volumen"])
                                                     canal_hold[col] = ch
