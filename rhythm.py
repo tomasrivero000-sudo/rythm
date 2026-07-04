@@ -3787,14 +3787,42 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         if m["id"] in mods_partida:
             mult_mods *= m["mult"]
 
-    # --- WARM-UP: asegurar que TODO este listo antes de arrancar el reloj ---
-    # A esta altura ya estan: instrumento renderizado, bajo sintetizado, notas
-    # filtradas. Damos un respiro corto para que el mixer y el GC se asienten y
-    # drenamos eventos de teclado acumulados durante la carga. Recien despues
-    # tomamos 'inicio', asi el primer frame arranca con ahora~=0 y sin lag.
+    # --- WARM-UP PROFUNDO: asegurar que TODO este listo antes del reloj ---
+    # Tres fuentes de lag en los primeros segundos que eliminamos aca,
+    # mientras la pantalla de carga sigue visible:
+    # 1) GC: la sintesis creo cientos de arrays temporales -> collect() ahora
+    #    (y no en medio del gameplay).
+    import gc
+    gc.collect()
+    # 2) MIXER FRIO: el primer play() de cada Sound inicializa el canal y
+    #    causa micro-stutter. Pre-tocamos todo a volumen 0.
+    _sonidos_warmup = []
+    for _k, _snd in cancion["kit"].items():
+        if _snd:
+            _sonidos_warmup.append(_snd)
+    _sonidos_warmup.extend(list(cache_bajo.values())[:4])
+    _midis_usados = set()
+    for _n in cancion["notas_jugador"][:12]:
+        for _m in _n["midis"]:
+            _midis_usados.add(_m)
+    for _m in list(_midis_usados)[:8]:
+        if _m in cache_notas:
+            _sonidos_warmup.append(cache_notas[_m])
+    for _snd in _sonidos_warmup:
+        _ch = _snd.play()
+        if _ch:
+            _ch.set_volume(0.0, 0.0)
+    pygame.time.delay(80)     # dejar que suenen "en silencio"
+    pygame.mixer.stop()       # cortar todos los warmups
+    # 3) RENDER FRIO: pre-renderizar textos tipicos del HUD para calentar
+    #    el cache de la fuente (el primer render de cada glifo es lento).
+    for _f in (fuente_grande, fuente, fuente_chica):
+        _f.render("0123456789xCOMBO PERFECTO BIEN MISS", True, BLANCO)
+    gc.collect()              # segunda pasada: limpiar los warmups
+    # drenar eventos de teclado acumulados durante la carga
     pygame.event.pump()
-    pygame.event.clear()      # descartar teclas apretadas durante la carga
-    pygame.time.delay(60)     # respiro para estabilizar el audio
+    pygame.event.clear()
+    pygame.time.delay(40)
     pygame.event.pump()
     inicio_partida = pygame.time.get_ticks()
 
@@ -4379,29 +4407,79 @@ def dibujar_juego(partida, ahora):
                           int(col_nota[2] * alpha_niebla))
                 else:
                     cn = col_nota
-                # power-up: nota especial grande y brillante
+                # power-up: nota especial con animacion propia por tipo
                 pu_id = grupo.get("power_up")
                 if pu_id:
+                    _mt = math
                     pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
-                    if pu_def:
-                        pc = pu_def["color"]
-                        # parpadeo suave
-                        brill = 0.7 + 0.3 * abs(((ahora_ms // 100) % 20) - 10) / 10.0
-                        cn = (int(pc[0] * brill), int(pc[1] * brill), int(pc[2] * brill))
-                    # nota mas alta (40px) con borde blanco grueso
+                    pc = pu_def["color"] if pu_def else BLANCO
+                    t_anim = ahora_ms / 1000.0
                     nota_h = 40
-                    ny = gy - 6  # centrar verticalmente
-                    # fondo solido del color
-                    pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
-                    # borde blanco doble para destacar
-                    pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
-                    pygame.draw.rect(pantalla, BLANCO, (x + 5, ny + 3, ancho_col - 10, nota_h - 6), 1)
-                    # icono grande centrado
+                    ny = gy - 6
+                    ccx = x + ancho_col // 2          # centro X de la nota
+                    ccy = int(ny + nota_h // 2)       # centro Y
+                    brill = 0.75 + 0.25 * _mt.sin(t_anim * 6.0)
+                    cn = (int(pc[0] * brill), int(pc[1] * brill), int(pc[2] * brill))
+
+                    if pu_id == "estrella":
+                        # AUTO: rayos giratorios (aura de invencibilidad)
+                        for ri in range(6):
+                            ang = t_anim * 3.0 + ri * (6.2832 / 6)
+                            x1 = ccx + _mt.cos(ang) * (ancho_col // 2 - 2)
+                            y1 = ccy + _mt.sin(ang) * (nota_h // 2 + 6)
+                            x2 = ccx + _mt.cos(ang) * (ancho_col // 2 + 10)
+                            y2 = ccy + _mt.sin(ang) * (nota_h // 2 + 18)
+                            pygame.draw.line(pantalla, cn, (x1, y1), (x2, y2), 3)
+                        pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
+                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+
+                    elif pu_id == "vida":
+                        # +HP: latido de corazon (doble pulso ritmico "tu-tum")
+                        fase = (t_anim * 1.4) % 1.0
+                        pulso = 0.0
+                        if fase < 0.12:
+                            pulso = _mt.sin(fase / 0.12 * 3.1416)
+                        elif 0.20 <= fase < 0.32:
+                            pulso = 0.7 * _mt.sin((fase - 0.20) / 0.12 * 3.1416)
+                        exp = int(6 * pulso)
+                        pygame.draw.rect(pantalla, cn,
+                                         (x + 2 - exp, ny - exp,
+                                          ancho_col - 4 + exp * 2, nota_h + exp * 2))
+                        pygame.draw.rect(pantalla, BLANCO,
+                                         (x + 2 - exp, ny - exp,
+                                          ancho_col - 4 + exp * 2, nota_h + exp * 2), 2)
+
+                    elif pu_id == "reloj":
+                        # SLOW: aguja de reloj girando LENTA + anillo
+                        pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
+                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+                        rad = min(ancho_col // 2 - 8, nota_h // 2 + 8)
+                        pygame.draw.circle(pantalla, BLANCO, (ccx, ccy), rad, 2)
+                        ang_ag = t_anim * 1.2  # giro lento = el efecto que da
+                        ax = ccx + _mt.cos(ang_ag - 1.5708) * (rad - 3)
+                        ay = ccy + _mt.sin(ang_ag - 1.5708) * (rad - 3)
+                        pygame.draw.line(pantalla, NEGRO, (ccx, ccy), (ax, ay), 3)
+
+                    elif pu_id == "doble":
+                        # x2: nota fantasma que se separa y vuelve (duplicacion)
+                        sep = int(abs(_mt.sin(t_anim * 2.5)) * 14)
+                        # fantasma desplazado (mas oscuro)
+                        cf = (pc[0] // 2, pc[1] // 2, pc[2] // 2)
+                        pygame.draw.rect(pantalla, cf,
+                                         (x + 2 + sep, ny - sep // 2, ancho_col - 4, nota_h))
+                        # nota principal
+                        pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
+                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+
+                    else:
+                        pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
+                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+
+                    # label centrado (comun a todos)
                     iconos_pu = {"estrella": "AUTO", "vida": "+HP", "reloj": "SLOW", "doble": "x2"}
-                    pu_txt = iconos_pu.get(pu_id, "?")
-                    pu_lbl = fuente.render(pu_txt, True, NEGRO)
-                    pantalla.blit(pu_lbl, (x + ancho_col // 2 - pu_lbl.get_width() // 2,
-                                           ny + nota_h // 2 - pu_lbl.get_height() // 2))
+                    pu_lbl = fuente.render(iconos_pu.get(pu_id, "?"), True, NEGRO)
+                    pantalla.blit(pu_lbl, (ccx - pu_lbl.get_width() // 2,
+                                           ccy - pu_lbl.get_height() // 2))
                 elif grupo.get("es_acorde"):
                     pygame.draw.rect(pantalla, cn, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
