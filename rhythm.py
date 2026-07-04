@@ -3939,6 +3939,38 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         c["estructura"]["desenlace_fin"] += _buffer
         c["duracion_loop"]               += _buffer
 
+    # --- WARM-UP DE RENDER: ejecutar frames completos ANTES de arrancar ---
+    # El primer frame real de dibujar_juego construye todo el pipeline en frio
+    # (fondo lissajous, clip rects, superficies alpha, paths de notas) y puede
+    # tardar >16ms, causando saltos visibles. Lo ejecutamos 3 veces ACA, con
+    # notas fake que cubren todos los paths de dibujo (normal, acorde, hold,
+    # power-up). Nada se presenta en pantalla: solo calienta caches y JIT de
+    # pygame. Al final re-tomamos 'inicio' como ULTIMA operacion.
+    _zy_w = p.get("zona_y", ZONA_Y)
+    _fake_notas = [
+        {"cols": [0], "midis": [c["notas_columnas"][0]], "tiempo_ms": 99999,
+         "acertadas": set(), "es_acorde": False, "hold": 0, "hold_px": 0, "y": _zy_w - 200},
+        {"cols": [0, 1], "midis": [c["notas_columnas"][0], c["notas_columnas"][-1]],
+         "tiempo_ms": 99999, "acertadas": set(), "es_acorde": True,
+         "hold": 0, "hold_px": 0, "y": _zy_w - 300},
+        {"cols": [0], "midis": [c["notas_columnas"][0]], "tiempo_ms": 99999,
+         "acertadas": set(), "es_acorde": False, "hold": 800, "hold_px": 60, "y": _zy_w - 120},
+        {"cols": [0], "midis": [c["notas_columnas"][0]], "tiempo_ms": 99999,
+         "acertadas": set(), "es_acorde": False, "hold": 0, "hold_px": 0,
+         "power_up": "estrella", "y": _zy_w - 400},
+    ]
+    try:
+        p["notas_cayendo"] = _fake_notas
+        for _wf in range(3):
+            dibujar_juego(p, _wf * 16)
+    except Exception:
+        pass  # el warm-up nunca debe romper el arranque
+    p["notas_cayendo"] = []
+    gc.collect()
+    pygame.event.pump()
+    pygame.event.clear()
+    p["inicio"] = pygame.time.get_ticks()   # ULTIMA operacion: reloj en cero real
+
     return p
 
 def _mezclar_sample(buffer, sample_arr, pos_sample, vol_l=1.0, vol_r=1.0):
@@ -4316,6 +4348,10 @@ def dibujar_fondo_lissajous(partida, ahora):
 
 # ════════════════════════════════════════════════════ >>RENDER_JUEGO<< ═══
 
+# caches de superficies reusables (evita crear Surface por frame → GC pressure)
+_flash_surf_cache = {}
+_relleno_surf_cache = {}
+
 def dibujar_juego(partida, ahora):
     num_cols  = partida["dificultad"]["columnas"]
     ancho_col = ANCHO // num_cols
@@ -4334,12 +4370,16 @@ def dibujar_juego(partida, ahora):
     for i in range(1, num_cols):
         pygame.draw.line(pantalla, GRIS, (i * ancho_col + sx, 0), (i * ancho_col + sx, ALTO), 1)
 
-    # dibujar flashes de columna
+    # dibujar flashes de columna (surface cacheada, no crear por frame)
+    global _flash_surf_cache
     for f in flashes:
         pct = f["vida"] / f["vida_max"]
         alpha = int(40 * pct * f["intensidad"])
         col_x = f["col"] * ancho_col + sx
-        flash_surf = pygame.Surface((ancho_col, ALTO))
+        _key_fs = ancho_col
+        if _flash_surf_cache.get("w") != _key_fs:
+            _flash_surf_cache = {"w": _key_fs, "surf": pygame.Surface((ancho_col, ALTO))}
+        flash_surf = _flash_surf_cache["surf"]
         flash_surf.set_alpha(alpha)
         flash_surf.fill(col_nota)
         pantalla.blit(flash_surf, (col_x, 0))
@@ -4550,8 +4590,13 @@ def dibujar_juego(partida, ahora):
         # el color arranca pleno y se atenua
         cy = (int(cbase[0] * pct), int(cbase[1] * pct), int(cbase[2] * pct))
         # relleno tenue + borde brillante alrededor de la celda de la tecla
+        # (surface cacheada por tamaño, no crear por frame)
+        global _relleno_surf_cache
         rect_cel = (x + 2, label_y0 + sy, ancho_col - 4, 32)
-        relleno = pygame.Surface((ancho_col - 4, 32))
+        _key_rs = ancho_col - 4
+        if _relleno_surf_cache.get("w") != _key_rs:
+            _relleno_surf_cache = {"w": _key_rs, "surf": pygame.Surface((_key_rs, 32))}
+        relleno = _relleno_surf_cache["surf"]
         relleno.set_alpha(int(90 * pct))
         relleno.fill(cbase)
         pantalla.blit(relleno, (x + 2, label_y0 + sy))
