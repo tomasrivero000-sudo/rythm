@@ -3219,49 +3219,50 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     # --- pools de patrones ritmicos escalados por dificultad ---
     # posiciones: 0=1er negra, 2=octavo, 4=2da negra, 6=octavo, etc.
-    # los octavos (pos impares de negra: 2,6,10,14) dan groove y sincopa.
+    # los octavos (pos 2,6,10,14) dan groove y sincopa.
+    # PRINCIPIO: groove = DONDE caen las notas, no CUANTAS hay.
     pat_basicos = [
-        # 2-3 notas, con algun octavo para que no sea solo negras
-        [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0],  # 1, &3, 4
-        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0],  # 1, 2, &3
-        [1,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0],  # 1, 3, &3
-        [0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0],  # &1, 3, &4
-        [1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],  # 1, 2, 4
+        # 2-3 notas, algun octavo para que no sea solo negras
         [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],  # 1, &2
-        [0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],  # 2, &3, 4
-        [1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],  # 1, &1, 3
+        [1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],  # 1, &3
+        [0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],  # &1, 3
+        [1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],  # 1, 3, 4
+        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0],  # 1, 2, &3
+        [0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0],  # 2, &4
+        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],  # 1, 4
+        [0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0],  # &1, 4
     ]
     pat_intermedios = [
-        # 3-4 notas, mas sincopas y anticipaciones
-        [1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0],  # 1, &2, 3, &4
-        [1,0,1,0,0,0,0,0,1,0,0,0,1,0,0,0],  # 1, &1, 3, 4
-        [0,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0],  # &1, 2, &3, 4
-        [1,0,0,0,1,0,1,0,0,0,0,0,1,0,0,0],  # 1, 2, &2, 4
-        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,1,0],  # 1, &2, &3, &4
-        [0,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0],  # &1, &2, 3, &4
-        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1,0],  # 1, 2, &3, &4
-        [1,0,1,0,0,0,1,0,0,0,0,0,1,0,0,0],  # 1, &1, &2, 4
+        # 2-3 notas, sincopas y anticipaciones (groove sin densidad)
+        [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0],  # 1, &2, 4
+        [0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],  # &1, 3
+        [1,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0],  # 1, &3, &4
+        [0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0],  # 2, &2
+        [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],  # 1, &2
+        [0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0],  # &1, &3
+        [1,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0],  # 1, 2, &4
+        [0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0],  # &2, 3
     ]
     pat_avanzados = [
-        # 4-6 notas, dieciseisavos, patrones de hi-hat, muchas sincopas
-        [1,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0],  # 5 notas
-        [1,0,0,0,1,0,1,0,0,0,1,0,1,0,0,0],  # 5 notas
-        [0,0,1,0,1,0,0,0,1,0,1,0,0,0,1,0],  # 5 notas
-        [1,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0],  # 5 notas
-        [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],  # 5 notas, con 16avos
-        [1,0,1,0,0,0,1,0,1,0,1,0,0,0,0,0],  # 5 notas
-        [0,0,1,0,1,0,1,0,0,0,1,0,0,0,1,0],  # 5 notas
-        [1,1,0,0,1,0,0,0,1,1,0,0,1,0,0,0],  # 6 notas, dieciseisavos en downbeats
+        # 3-4 notas, mas sincopas, algun dieciseisavo
+        [1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0],  # 1, &2, 3
+        [0,0,1,0,1,0,0,0,0,0,0,0,1,0,0,0],  # &1, 2, 4
+        [1,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0],  # 1, &2, &4
+        [1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0],  # 1, 2, &3
+        [0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0],  # &1, 3, &4
+        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],  # 1, &2, &3
+        [0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],  # 2, &3, 4
+        [1,0,0,1,0,0,0,0,1,0,0,0,0,0,1,0],  # 1, 16avo, 3, &4
     ]
     # elegir pool segun columnas (proxy de dificultad)
     if num_columnas <= 4:
         pat_jugador_simples = pat_basicos
         pat_jugador_complejos = pat_intermedios
     elif num_columnas <= 6:
-        pat_jugador_simples = pat_intermedios
-        pat_jugador_complejos = pat_avanzados
+        pat_jugador_simples = pat_basicos + pat_intermedios
+        pat_jugador_complejos = pat_intermedios + pat_avanzados
     else:
-        pat_jugador_simples = pat_intermedios + pat_avanzados
+        pat_jugador_simples = pat_intermedios
         pat_jugador_complejos = pat_avanzados
 
     notas_jugador = []
