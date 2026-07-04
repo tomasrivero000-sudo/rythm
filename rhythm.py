@@ -4604,7 +4604,8 @@ def dibujar_juego(partida, ahora):
             if gy_a is None:
                 continue
             # distancia visual a la linea de golpe (positiva = todavia no llego)
-            dist_px = (gy_a - zy) if es_inv else (zy - gy_a)
+            # en inverso el borde delantero es el bottom del rect (+28)
+            dist_px = (gy_a + 28 - zy) if es_inv else (zy - gy_a)
             if -30 < dist_px <= RANGO_PX:
                 inten = 1.0 - max(0, dist_px) / RANGO_PX
                 for c_a in grupo["cols"]:
@@ -4661,26 +4662,18 @@ def dibujar_juego(partida, ahora):
         grosor = max(2, int(4 * pct))
         pygame.draw.rect(pantalla, cy, rect_cel, grosor)
 
+    # === HUD MINIMALISTA: solo lo esencial de gameplay ===
+    # CENTRO: puntos + combo
     pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
-
-    # combo
     if partida["combo"] >= 5:
-        combo_txt = fuente.render(f"{partida['combo']}x COMBO", True, col_nota)
-        pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 34))
+        combo_txt = fuente.render(f"{partida['combo']}x", True, col_nota)
+        pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 36))
 
-    # === LADO DERECHO: vida, meta, info ===
-    # Y=8: instrumento + BPM
-    info = fuente.render(f"{partida['cancion']['instrumento']}  {partida['cancion']['bpm']}BPM", True, GRIS_MED)
-    pantalla.blit(info, (ANCHO - info.get_width() - 10, 8))
-    forma_inst = forma_de_instrumento(partida['cancion']['instrumento'])
-    icono_x = ANCHO - info.get_width() - 34
-    dibujar_icono_inst(pantalla, forma_inst, icono_x, 18, 12, col_nota)
-
-    # Y=30: barra de vida
+    # DERECHA: barra de vida + barra de meta
     vida_w = 160
     vida_x = ANCHO - vida_w - 10
-    vida_y = 30
+    vida_y = 14
     vida_pct = partida["vida"] / partida["vida_max"]
     pygame.draw.rect(pantalla, GRIS, (vida_x, vida_y, vida_w, 8))
     if vida_pct > 0:
@@ -4690,39 +4683,44 @@ def dibujar_juego(partida, ahora):
     vida_lbl = fuente_chica.render("HP", True, GRIS)
     pantalla.blit(vida_lbl, (vida_x - vida_lbl.get_width() - 4, vida_y - 2))
 
-    # Y=42: barra de meta (objetivo del stage)
     meta = partida.get("meta_puntos", 0)
     if meta > 0:
         ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
         meta_pct = min(1.0, ganado / max(1, meta))
-        meta_w = 160
-        meta_x = ANCHO - meta_w - 10
-        meta_y = 42
-        pygame.draw.rect(pantalla, GRIS, (meta_x, meta_y, meta_w, 8))
+        meta_y = 28
+        pygame.draw.rect(pantalla, GRIS, (vida_x, meta_y, vida_w, 8))
         if meta_pct > 0:
-            bar_col = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
-            pygame.draw.rect(pantalla, bar_col, (meta_x, meta_y, int(meta_w * meta_pct), 8))
-        pygame.draw.rect(pantalla, BLANCO, (meta_x, meta_y, meta_w, 8), 1)
+            pygame.draw.rect(pantalla, col_nota, (vida_x, meta_y, int(vida_w * meta_pct), 8))
+        pygame.draw.rect(pantalla, BLANCO, (vida_x, meta_y, vida_w, 8), 1)
         meta_txt = fuente_chica.render(f"{ganado}/{meta}", True, GRIS_MED)
-        pantalla.blit(meta_txt, (meta_x - meta_txt.get_width() - 4, meta_y - 2))
+        pantalla.blit(meta_txt, (vida_x - meta_txt.get_width() - 4, meta_y - 2))
 
-    # Y=54: genero + multiplicador
-    gen_txt = fuente_chica.render(partida['cancion'].get('genero', ''), True, col_nota)
-    pantalla.blit(gen_txt, (ANCHO - gen_txt.get_width() - 10, 54))
-    if partida.get("mult_mods", 1.0) > 1.0:
-        mult_txt = fuente_chica.render(f"x{partida['mult_mods']:.1f}", True, col_nota)
-        pantalla.blit(mult_txt, (ANCHO - gen_txt.get_width() - mult_txt.get_width() - 18, 54))
-
-    # === LADO IZQUIERDO ===
-    dif_txt = fuente_chica.render(partida["dificultad"]["nombre"], True, GRIS_MED)
-    pantalla.blit(dif_txt, (10, 10))
-    parte_txt = fuente_chica.render(parte, True, GRIS)
-    pantalla.blit(parte_txt, (10, 26))
+    # IZQUIERDA: stage + escudo + efectos temporales
     si = partida.get("stage_info")
     if si:
         st_txt = fuente_chica.render(f"STAGE {si['n']}/{NUM_STAGES}", True, col_nota)
-        pantalla.blit(st_txt, (10, 42))
-    # CAPA 3: evento activo (centro)
+        pantalla.blit(st_txt, (10, 12))
+    cargas = partida.get("escudo_cargas", 0)
+    if cargas > 0:
+        esc_c = fuente_chica.render(f"ESCUDO x{cargas}", True, (100, 200, 255))
+        pantalla.blit(esc_c, (10, 30))
+    efectos = partida.get("efectos_activos", {})
+    ey = 50
+    for eid, t_fin in list(efectos.items()):
+        restante = max(0, t_fin - ahora)
+        if restante <= 0:
+            continue
+        pu_def = next((pu for pu in POWER_UPS if pu["id"] == eid), None)
+        if not pu_def:
+            continue
+        colr = pu_def["color"]
+        if restante < 2000 and (pygame.time.get_ticks() // 200) % 2 == 0:
+            colr = GRIS
+        etxt = fuente_chica.render(f"{pu_def['nombre']} {restante/1000:.1f}s", True, colr)
+        pantalla.blit(etxt, (10, ey))
+        ey += 18
+
+    # evento activo (aviso puntual, centro)
     ev_act = partida.get("evento_activo")
     if ev_act:
         nombres_ev = {
@@ -4733,10 +4731,7 @@ def dibujar_juego(partida, ahora):
             "freeze_mel": "! FREEZE !",
         }
         ev_txt = fuente_chica.render(nombres_ev.get(ev_act, ""), True, BLANCO)
-        pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 52))
-    # perks y power-ups HUD
-    if partida.get("perks"):
-        dibujar_perks_hud(partida)
+        pantalla.blit(ev_txt, (ANCHO // 2 - ev_txt.get_width() // 2, 58))
     # texto guia durante la practica del tutorial
     if partida.get("es_tutorial") and not partida.get("terminada"):
         guia = fuente_chica.render("PRACTICA: TOCA LA TECLA CUANDO LA NOTA CRUZA LA LINEA", True, (255, 180, 60))
@@ -6534,7 +6529,10 @@ while corriendo:
             for grupo in partida["notas_cayendo"]:
                 ms_hasta = grupo["tiempo_ms"] - ahora
                 if es_inv:
-                    grupo["y"] = zy_p + (ms_hasta * PIXELES_POR_MS)
+                    # -28 = alto de la nota: el borde DELANTERO (bottom del rect,
+                    # que es el que el jugador ve llegar al subir) cruza la linea
+                    # exactamente en el beat, espejando el modo normal.
+                    grupo["y"] = zy_p + (ms_hasta * PIXELES_POR_MS) - 28
                 else:
                     grupo["y"] = zy_p - (ms_hasta * PIXELES_POR_MS)
 
