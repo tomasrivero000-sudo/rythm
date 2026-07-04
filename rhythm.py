@@ -3162,7 +3162,7 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     t_nudo_fin      = t_intro_fin + C_NUDO * 4 * beat
     t_desenlace_fin = t_nudo_fin + C_DESENLACE * 4 * beat
 
-    prob_acorde = {3: 0.2, 4: 0.3, 5: 0.4, 6: 0.5, 7: 0.6}.get(num_columnas, 0.2)
+    prob_acorde = {3: 0.2, 4: 0.3, 5: 0.4, 6: 0.5, 7: 0.6, 8: 0.65}.get(num_columnas, 0.4)
 
     # frases melodicas: contornos que se mueven mayormente por GRADO CONJUNTO
     # (pasos de a 1), con algun salto ocasional. Los valores son grados de la
@@ -3280,9 +3280,11 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             nota_idx += 1
             compas.append({"col": col, "hold": 0})
         if permitir_hold:
+            # prob de hold escala con el nivel: 0.32 (facil) -> 0.55 (chaos)
+            prob_hold = 0.3 + min(0.25, dif.get("nivel", 1) * 0.017)
             activas = [i for i, n in enumerate(compas) if n is not None]
             for idx, pos in enumerate(activas):
-                if rng.random() < 0.4:
+                if rng.random() < prob_hold:
                     if idx + 1 < len(activas):
                         dur = ((activas[idx + 1] - pos) // 4) * beat
                     else:
@@ -3333,9 +3335,18 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         grado_actual = progresion[ca % len(progresion)]
         tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
         clases_ac = {ta % 12 for ta in tonos_ac}
+        _nivel_gc = dif.get("nivel", 1)
+        # STREAM de 16avos (nivel 11+): el compas de cierre de seccion termina
+        # con una rafaga de 4 notas consecutivas en columnas adyacentes (el
+        # "fill" clasico de dificultad alta).
+        es_stream = es_cierre_seccion and _nivel_gc >= 11 and not det
+        stream_len = 6 if _nivel_gc >= 14 else 4
+        stream_ini = 16 - stream_len
         for s in range(16):
             if contenido[s] is None:
                 continue
+            if es_stream and s >= stream_ini:
+                continue  # los ultimos pasos los cubre el stream
             t   = t_intro_fin + compas_global * 4 * beat + s * paso16
             # swing: retrasa octavos (posiciones impares) para groove
             if swing > 0 and (s % 2 == 1):
@@ -3347,7 +3358,9 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             # en modo determinista (estribillo) la decision no depende del rng, asi
             # el gancho pone acorde SIEMPRE en el mismo lugar en cada retorno
             pone_acorde = (compas_global % 2 == 0) if det else (rng.random() < prob_ac_local)
-            if (usar_acordes or energia >= 0.9) and s == 0 and pone_acorde:
+            # en niveles altos los acordes tambien pueden caer en el beat 3
+            s_acorde_ok = (s == 0) or (_nivel_gc >= 9 and s == 8)
+            if (usar_acordes or energia >= 0.9) and s_acorde_ok and pone_acorde:
                 cols_ac = []
                 for g in patron_acordes[grado_actual % len(patron_acordes)][:3]:
                     col_ac = g % num_columnas
@@ -3417,6 +3430,36 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                 notas_jugador.append({
                     "cols": [col_adorno], "midis": [midi_adorno],
                     "tiempo": t_adorno, "es_acorde": False, "parte": parte, "hold": 0,
+                })
+            # densidad ALTA (>1.0, niveles dificiles): nota ECO en el paso +2,
+            # solo si el patron no tiene ya una nota ahi. Asi dens>1 agrega
+            # notas de verdad en vez de no hacer nada.
+            elif (not det and hd == 0 and s + 2 < 16
+                    and contenido[s + 2] is None
+                    and rng.random() < (max(0.0, dens_local - 1.0) * 0.7
+                                        + max(0, _nivel_gc - 10) * 0.04)):
+                col_eco = (col + rng.choice([-1, 1])) % num_columnas
+                midi_eco = notas_columnas[col_eco] + oct_off
+                notas_jugador.append({
+                    "cols": [col_eco], "midis": [midi_eco],
+                    "tiempo": t + paso16 * 2, "es_acorde": False,
+                    "parte": parte, "hold": 0,
+                })
+
+        # STREAM de cierre (nivel 11+): 4 notas en 16avos consecutivos,
+        # columnas adyacentes ascendentes o descendentes.
+        if es_stream:
+            col_base = rng.randint(0, max(0, num_columnas - stream_len))
+            direccion = rng.choice([1, -1])
+            if direccion == -1:
+                col_base = min(num_columnas - 1, col_base + stream_len - 1)
+            for k in range(stream_len):
+                col_s = min(num_columnas - 1, max(0, col_base + k * direccion))
+                t_s = t_intro_fin + compas_global * 4 * beat + (stream_ini + k) * paso16
+                midi_s = notas_columnas[col_s] + oct_off
+                notas_jugador.append({
+                    "cols": [col_s], "midis": [midi_s],
+                    "tiempo": t_s, "es_acorde": False, "parte": parte, "hold": 0,
                 })
 
     # --- recorrer las secciones de la forma en orden ---
