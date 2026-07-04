@@ -3710,6 +3710,18 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         beat = cancion["beat"]
         compas_ms = beat * 4
         num_cols_raf = dif["columnas"]
+        # las notas EXTRA de la avalancha escalan con el nivel:
+        #   nivel <=4: SIN extras (el contraste viene del respiro casi vacio)
+        #   nivel 5-8: 50% de extras
+        #   nivel 9+:  todas las extras (muro de notas completo)
+        _nivel_raf = dif.get("nivel", 1)
+        if _nivel_raf <= 4:
+            prob_extra = 0.0
+        elif _nivel_raf <= 8:
+            prob_extra = 0.5
+        else:
+            prob_extra = 1.0
+        _rng_raf = random.Random(int(seed * 31) + 7)
         if compas_ms > 0:
             # ciclo de 3 compases: 2 de avalancha + 1 de respiro
             ciclo_ms = compas_ms * 3
@@ -3722,8 +3734,10 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
                     # fase AVALANCHA: mantener la nota
                     n["fase_rafaga"] = True
                     notas_filtradas.append(n)
-                    # y duplicar en una columna vecina (muro de notas), salvo acordes
-                    if not n.get("es_acorde") and num_cols_raf > 1 and n.get("cols"):
+                    # duplicar en columna vecina segun el nivel (muro de notas)
+                    if (prob_extra > 0 and not n.get("es_acorde")
+                            and num_cols_raf > 1 and n.get("cols")
+                            and _rng_raf.random() < prob_extra):
                         col0 = n["cols"][0]
                         col_vec = (col0 + 1) % num_cols_raf
                         if col_vec != col0:
@@ -4572,20 +4586,23 @@ def dibujar_juego(partida, ahora):
         inv_teclas[col_dest] = tecla_pos
 
     # AUTO activo: el juego toca solo, no hace falta tocar nada
-    ahora_hud = pygame.time.get_ticks() - partida["inicio"]
-    auto_activo = ahora_hud < partida.get("efectos_activos", {}).get("estrella", 0)
+    auto_activo = ahora < partida.get("efectos_activos", {}).get("estrella", 0)
 
-    # ASISTENCIA VISUAL (niveles faciles): iluminar la tecla cuando la nota
-    # se acerca, con intensidad creciente; borde fuerte = "apreta AHORA"
+    # ASISTENCIA VISUAL (niveles faciles): iluminar la tecla segun la POSICION
+    # VISUAL de la nota (grupo["y"]), no su tiempo — asi queda perfectamente
+    # sincronizada con lo que se ve, con cualquier velocidad o mod.
     asistencia = partida["dificultad"].get("nivel", 1) <= 2 and not auto_activo
     asist_cols = {}   # col -> intensidad 0..1 (1 = apreta ya)
     if asistencia:
-        w_hit_a = partida.get("w_hit", 150)
+        RANGO_PX = 140.0   # px antes de la linea donde empieza a iluminarse
         for grupo in partida["notas_cayendo"]:
-            ms_hasta = grupo["tiempo_ms"] - ahora_hud
-            if -w_hit_a < ms_hasta <= 400:
-                # 400ms antes: 0.0 → en el beat: 1.0
-                inten = 1.0 - max(0, ms_hasta) / 400.0
+            gy_a = grupo.get("y")
+            if gy_a is None:
+                continue
+            # distancia visual a la linea de golpe (positiva = todavia no llego)
+            dist_px = (gy_a - zy) if es_inv else (zy - gy_a)
+            if -30 < dist_px <= RANGO_PX:
+                inten = 1.0 - max(0, dist_px) / RANGO_PX
                 for c_a in grupo["cols"]:
                     asist_cols[c_a] = max(asist_cols.get(c_a, 0), inten)
 
