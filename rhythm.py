@@ -3682,7 +3682,7 @@ def hold_pixels(hold_ms, vel, fps=60):
 # ══════════════════════════════════════════════════════ >>GAME_STATE<< ═══
 
 def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
-                    instrumento_forzado=None, perks=None):
+                    instrumento_forzado=None, perks=None, tutorial=False):
     global cache_notas, cache_notas_largas
     # limpiar efectos visuales de una partida anterior
     particulas.clear()
@@ -3913,6 +3913,10 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     if stage_info:
         nivel = dif.get("nivel", 1)
         p["meta_puntos"] = calcular_meta(nivel, stage_info.get("n", 1))
+    # modo TUTORIAL: meta chica, imposible morir
+    if tutorial:
+        p["es_tutorial"] = True
+        p["meta_puntos"] = 60
 
     # --- ventanas de timing escaladas por dificultad ---
     # niveles faciles perdonan mas; niveles altos exigen precision.
@@ -4733,6 +4737,12 @@ def dibujar_juego(partida, ahora):
     # perks y power-ups HUD
     if partida.get("perks"):
         dibujar_perks_hud(partida)
+    # texto guia durante la practica del tutorial
+    if partida.get("es_tutorial") and not partida.get("terminada"):
+        guia = fuente_chica.render("PRACTICA: TOCA LA TECLA CUANDO LA NOTA CRUZA LA LINEA", True, (255, 180, 60))
+        pantalla.blit(guia, (ANCHO // 2 - guia.get_width() // 2, 70))
+        guia2 = fuente_chica.render("NO PODES PERDER - LLEGA A 60 PUNTOS", True, GRIS_MED)
+        pantalla.blit(guia2, (ANCHO // 2 - guia2.get_width() // 2, 90))
     esc_txt = fuente_chica.render("ESC", True, GRIS)
     pantalla.blit(esc_txt, (10, ALTO - 20))
 
@@ -4771,7 +4781,9 @@ def dibujar_juego(partida, ahora):
     elif partida["terminada"] and not partida["notas_cayendo"]:
         col_g = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
         meta = partida.get("meta_puntos", 0)
-        if meta > 0:
+        if partida.get("es_tutorial"):
+            fin = fuente.render("TUTORIAL COMPLETADO!", True, col_g)
+        elif meta > 0:
             fin = fuente.render("META ALCANZADA!", True, col_g)
         else:
             fin = fuente.render("FIN", True, BLANCO)
@@ -4809,6 +4821,179 @@ def dibujar_juego(partida, ahora):
             pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 92))
 
 # ═══════════════════════════════════════════════════════ >>PANTALLAS<< ═══
+
+TUTORIAL_NUM_PAGINAS = 7
+tutorial_pagina = 0
+
+def dibujar_tutorial(pagina):
+    """Tutorial de 7 paginas con graficos en vivo. La ultima ofrece practica."""
+    pantalla.fill(NEGRO)
+    t_anim = pygame.time.get_ticks() / 1000.0
+    cx = ANCHO // 2
+
+    titulos = ["OBJETIVO", "NOTAS", "HOLDS Y ACORDES", "VIDA Y COMBO",
+               "POWER-UPS", "PERKS", "MODIFICADORES"]
+    titulo = fuente_grande.render(titulos[pagina], True, BLANCO)
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 36))
+    pygame.draw.line(pantalla, GRIS, (60, 96), (ANCHO - 60, 96), 1)
+
+    def linea(texto, y, color=GRIS_MED, f=None):
+        f = f or fuente_chica
+        txt = f.render(texto, True, color)
+        pantalla.blit(txt, (cx - txt.get_width() // 2, y))
+
+    if pagina == 0:
+        # OBJETIVO
+        linea("CADA STAGE TIENE UNA META DE PUNTOS", 130, BLANCO, fuente)
+        linea("LA CANCION SE REPITE HASTA QUE LA ALCANCES", 165)
+        linea("(O HASTA QUE TE QUEDES SIN VIDA)", 185)
+        # barra de meta animada
+        bar_w, bar_x, bar_y = 360, cx - 180, 250
+        prog = (math.sin(t_anim * 0.8) * 0.5 + 0.5)
+        pygame.draw.rect(pantalla, GRIS, (bar_x, bar_y, bar_w, 16))
+        pygame.draw.rect(pantalla, (255, 180, 60), (bar_x, bar_y, int(bar_w * prog), 16))
+        pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, bar_w, 16), 1)
+        linea(f"{int(prog*325)}/325", 275, GRIS_MED)
+        linea("LA BARRA DE META ESTA ARRIBA A LA DERECHA", 320)
+        linea("LOS MULTIPLICADORES TE AYUDAN A LLEGAR ANTES", 345)
+        linea("UN RUN SON 4 STAGES: LA META CRECE EN CADA UNO", 385, BLANCO)
+
+    elif pagina == 1:
+        # NOTAS
+        linea("LAS NOTAS CAEN POR COLUMNAS", 125, BLANCO, fuente)
+        linea("APRETA LA TECLA CUANDO LA NOTA CRUZA LA LINEA", 160)
+        # mini demo: 3 columnas, nota animada cayendo
+        demo_x, demo_y, demo_w, demo_h = cx - 150, 195, 300, 190
+        col_w = demo_w // 3
+        for i in range(1, 3):
+            pygame.draw.line(pantalla, GRIS, (demo_x + i * col_w, demo_y), (demo_x + i * col_w, demo_y + demo_h), 1)
+        pygame.draw.rect(pantalla, GRIS, (demo_x, demo_y, demo_w, demo_h), 1)
+        linea_y = demo_y + demo_h - 40
+        pygame.draw.line(pantalla, (255, 180, 60), (demo_x, linea_y), (demo_x + demo_w, linea_y), 2)
+        # nota cayendo en loop
+        fall = (t_anim * 0.5) % 1.0
+        ny = demo_y + 10 + fall * (linea_y - demo_y - 20)
+        pygame.draw.rect(pantalla, BLANCO, (demo_x + col_w + 8, ny, col_w - 16, 20))
+        for i, lbl in enumerate(["A", "S", "D"]):
+            l = fuente_chica.render(lbl, True, GRIS_MED)
+            pantalla.blit(l, (demo_x + i * col_w + col_w // 2 - l.get_width() // 2, linea_y + 12))
+        # precision
+        linea("PRECISION:", 400, BLANCO)
+        linea("PERFECTO (justo) > BIEN > OK > MAL (resta puntos)", 422)
+        linea("EN FACIL LA TECLA SE ILUMINA CUANDO HAY QUE APRETAR", 452, (255, 180, 60))
+
+    elif pagina == 2:
+        # HOLDS Y ACORDES
+        linea("NOTA LARGA (HOLD): MANTENE LA TECLA APRETADA", 130, BLANCO, fuente)
+        # dibujo de hold: barra vertical + nota
+        hx = cx - 130
+        pygame.draw.rect(pantalla, GRIS_MED, (hx - 6, 170, 12, 90))
+        pygame.draw.rect(pantalla, BLANCO, (hx - 6, 170, 12, 90), 1)
+        pygame.draw.rect(pantalla, BLANCO, (hx - 30, 260, 60, 22))
+        linea2 = fuente_chica.render("MANTENE HASTA QUE LA BARRA TERMINE (+3 PTS)", True, GRIS_MED)
+        pantalla.blit(linea2, (cx - 60, 215))
+        # acorde
+        linea("ACORDE: VARIAS COLUMNAS AL MISMO TIEMPO", 320, BLANCO, fuente)
+        ax = cx - 110
+        for i in range(3):
+            x = ax + i * 80
+            pygame.draw.rect(pantalla, BLANCO, (x, 360, 56, 22))
+            pygame.draw.rect(pantalla, NEGRO, (x + 4, 364, 48, 14))
+            pygame.draw.rect(pantalla, BLANCO, (x + 7, 367, 42, 8))
+        pygame.draw.line(pantalla, BLANCO, (ax + 28, 371), (ax + 188, 371), 2)
+        linea("APRETA TODAS LAS TECLAS CONECTADAS A LA VEZ", 400)
+        linea("LOS ACORDES DAN PUNTOS POR CADA NOTA", 425)
+
+    elif pagina == 3:
+        # VIDA Y COMBO
+        linea("VIDA: CADA MISS TE RESTA 2 PUNTOS DE VIDA", 130, BLANCO, fuente)
+        # barra HP
+        pygame.draw.rect(pantalla, GRIS, (cx - 100, 165, 200, 10))
+        hp = (math.sin(t_anim) * 0.3 + 0.6)
+        pygame.draw.rect(pantalla, BLANCO, (cx - 100, 165, int(200 * hp), 10))
+        pygame.draw.rect(pantalla, BLANCO, (cx - 100, 165, 200, 10), 1)
+        linea("SI LLEGA A CERO: GAME OVER", 190)
+        linea("COMBO: HITS SEGUIDOS SIN FALLAR", 250, BLANCO, fuente)
+        combo_n = int((t_anim * 4) % 30) + 1
+        ctxt = fuente.render(f"{combo_n}x COMBO", True, (255, 180, 60))
+        pantalla.blit(ctxt, (cx - ctxt.get_width() // 2, 285))
+        linea("CADA 5 DE COMBO SUBE EL MULTIPLICADOR DE PUNTOS", 325)
+        linea("UN MISS ROMPE EL COMBO (SALVO CON EL PERK COMBO SAVE)", 350)
+        linea("TOCA CON PRECISION PARA MANTENER LA RACHA", 395, (255, 180, 60))
+
+    elif pagina == 4:
+        # POWER-UPS
+        linea("NOTAS ESPECIALES QUE APARECEN EN LA CANCION", 125, BLANCO, fuente)
+        linea("ATRAPALAS PARA ACTIVAR EFECTOS TEMPORALES", 155)
+        pu_info = [
+            ("AUTO", (255, 255, 100), "EL JUEGO TOCA SOLO 6s (TECLAS BLANCAS)"),
+            ("+HP",  (255, 100, 100), "RECUPERA 4 DE VIDA"),
+            ("SLOW", (100, 200, 255), "NOTAS 25% MAS LENTAS POR 8s"),
+            ("x2",   (100, 255, 100), "PUNTOS DOBLES POR 10s"),
+        ]
+        y0 = 200
+        for i, (nom, colr, desc) in enumerate(pu_info):
+            y = y0 + i * 58
+            brill = 0.75 + 0.25 * math.sin(t_anim * 6 + i)
+            cc = (int(colr[0] * brill), int(colr[1] * brill), int(colr[2] * brill))
+            pygame.draw.rect(pantalla, cc, (cx - 240, y, 90, 36))
+            pygame.draw.rect(pantalla, BLANCO, (cx - 240, y, 90, 36), 2)
+            nlbl = fuente.render(nom, True, NEGRO)
+            pantalla.blit(nlbl, (cx - 240 + 45 - nlbl.get_width() // 2, y + 18 - nlbl.get_height() // 2))
+            dlbl = fuente_chica.render(desc, True, GRIS_MED)
+            pantalla.blit(dlbl, (cx - 130, y + 10))
+
+    elif pagina == 5:
+        # PERKS
+        linea("AL COMPLETAR UN STAGE ELEGIS 1 DE 3 MEJORAS", 125, BLANCO, fuente)
+        linea("SE ACUMULAN DURANTE TODO EL RUN", 155)
+        perk_info = [
+            ("DEFENSIVOS", "ESCUDO (absorbe misses)  CORAZON (+vida)  VENTANA (timing amplio)"),
+            ("OFENSIVOS",  "MULTI (x1.5 pts)  COMBO SAVE  PERFECTO+ (doble)"),
+            ("MECANICOS",  "LENTO (notas lentas)  IMAN (perfecto amplio)"),
+        ]
+        y0 = 210
+        for i, (cat, lista) in enumerate(perk_info):
+            y = y0 + i * 70
+            ctxt = fuente.render(cat, True, (255, 180, 60))
+            pantalla.blit(ctxt, (cx - ctxt.get_width() // 2, y))
+            ltxt = fuente_chica.render(lista, True, GRIS_MED)
+            pantalla.blit(ltxt, (cx - ltxt.get_width() // 2, y + 28))
+        linea("ELEGI SEGUN TU ESTILO: SOBREVIVIR O PUNTUAR MAS RAPIDO", 445, BLANCO)
+
+    elif pagina == 6:
+        # MODS
+        linea("DESDE EL STAGE 2 SE AGREGAN MODIFICADORES", 125, BLANCO, fuente)
+        linea("HACEN EL JUEGO MAS DIFICIL PERO MULTIPLICAN TUS PUNTOS", 155)
+        mods_info = [
+            ("ESPEJO",     "las teclas se invierten (A toca la ultima columna)"),
+            ("INVERSO",    "las notas suben desde abajo"),
+            ("VELOZ",      "todo cae al doble de velocidad"),
+            ("ACELERANDO", "la velocidad sube durante la cancion"),
+            ("NIEBLA",     "las notas aparecen desde la mitad"),
+            ("RAFAGAS",    "tramos densos alternados con silencios"),
+            ("SUDDEN",     "un solo error = game over (x2.0 pts!)"),
+        ]
+        y0 = 200
+        for i, (nom, desc) in enumerate(mods_info):
+            y = y0 + i * 30
+            ntxt = fuente_chica.render(nom, True, BLANCO)
+            pantalla.blit(ntxt, (cx - 250, y))
+            dtxt = fuente_chica.render(desc, True, GRIS_MED)
+            pantalla.blit(dtxt, (cx - 110, y))
+        linea("EL DADO REVELA EL MOD ANTES DE CADA STAGE", 430, (255, 180, 60))
+
+    # pie de pagina: navegacion + indicador
+    pag_txt = fuente_chica.render(f"{pagina + 1}/{TUTORIAL_NUM_PAGINAS}", True, GRIS)
+    pantalla.blit(pag_txt, (cx - pag_txt.get_width() // 2, ALTO - 90))
+    if pagina < TUTORIAL_NUM_PAGINAS - 1:
+        nav = fuente_chica.render("< >  NAVEGAR     ESPACIO = SIGUIENTE     ESC = SALIR", True, GRIS)
+    else:
+        if (pygame.time.get_ticks() // 500) % 2 == 0:
+            nav = fuente.render("ESPACIO = PRACTICAR!", True, (255, 180, 60))
+        else:
+            nav = fuente.render("ESPACIO = PRACTICAR!", True, GRIS_MED)
+    pantalla.blit(nav, (cx - nav.get_width() // 2, ALTO - 60))
 
 def dibujar_menu(seed_actual, cargando):
     dif      = get_dificultad(max(seed_actual, 1))
@@ -4886,7 +5071,7 @@ def dibujar_menu(seed_actual, cargando):
     prog_txt = fuente_chica.render(f"COMPLETADOS: {comp_n}/{total_runs}", True, GRIS_MED)
     pantalla.blit(prog_txt, (ANCHO // 2 - prog_txt.get_width() // 2, 488))
 
-    lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG", True, GRIS)
+    lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG     T = TUTORIAL", True, GRIS)
     pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 512))
 
 config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion, 4=audio
@@ -5616,9 +5801,37 @@ while corriendo:
                     sfx_confirm()
                     config_opcion = 0
                     ESTADO = "config"
+                if evento.key == pygame.K_t:
+                    sfx_confirm()
+                    tutorial_pagina = 0
+                    ESTADO = "tutorial"
             if evento.type == pygame.KEYUP:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = False
+
+        elif ESTADO == "tutorial":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "menu"
+                elif evento.key == pygame.K_LEFT:
+                    if tutorial_pagina > 0:
+                        tutorial_pagina -= 1
+                        sfx_select()
+                elif evento.key == pygame.K_RIGHT:
+                    if tutorial_pagina < TUTORIAL_NUM_PAGINAS - 1:
+                        tutorial_pagina += 1
+                        sfx_select()
+                elif evento.key in (pygame.K_SPACE, pygame.K_RETURN):
+                    if tutorial_pagina < TUTORIAL_NUM_PAGINAS - 1:
+                        tutorial_pagina += 1
+                        sfx_select()
+                    else:
+                        # ultima pagina: arrancar la PRACTICA
+                        sfx_confirm()
+                        cortar_audio_suave()
+                        partida = iniciar_partida(150, mods=set(), tutorial=True)
+                        score_guardado = True   # la practica no guarda score
+                        ESTADO = "jugando"
 
         elif ESTADO == "run_overview":
             if evento.type == pygame.KEYDOWN:
@@ -5892,7 +6105,11 @@ while corriendo:
                         pygame.mixer.stop()
                         teclas_sostenidas.clear()
                         canal_hold.clear()
-                        if run_actual is not None:
+                        if partida.get("es_tutorial"):
+                            # fin de la practica del tutorial -> volver al menu
+                            ESTADO = "menu"
+                            nueva_musica_menu_aleatoria()
+                        elif run_actual is not None:
                             # --- en modo RUN de stages ---
                             if partida.get("game_over"):
                                 # perdio el stage -> run fallido
@@ -6183,6 +6400,10 @@ while corriendo:
         tick_musica_menu()
         dibujar_leaderboard()
 
+    elif ESTADO == "tutorial":
+        tick_musica_menu()
+        dibujar_tutorial(tutorial_pagina)
+
     elif ESTADO == "config":
         tick_musica_menu()
         dibujar_config()
@@ -6391,7 +6612,7 @@ while corriendo:
                         if partida.get("escudo_cargas", 0) > 0:
                             partida["escudo_cargas"] -= 1
                             crear_texto_flotante(ANCHO // 2, zy_p - 40, f"ESCUDO ({partida['escudo_cargas']})", (100, 200, 255))
-                        elif not dev_mode:
+                        elif not dev_mode and not partida.get("es_tutorial"):
                             partida["vida"] = max(0, partida["vida"] - 2)
                             if "sudden" in partida.get("mods", set()):
                                 partida["vida"] = 0
