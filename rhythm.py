@@ -4347,10 +4347,14 @@ def dibujar_juego(partida, ahora):
     # linea de hit (se mueve con inverso)
     pygame.draw.line(pantalla, col_nota, (sx, zy + sy), (ANCHO + sx, zy + sy), 2)
 
-    # CLIP: las notas se cortan justo en la linea de hit (zy)
+    # CLIP: las notas se cortan al pasar la zona de hit.
+    # En normal: notas vienen de arriba, se clipean ARRIBA de la zona de labels.
+    # En inverso: notas vienen de abajo, se clipean DEBAJO de la zona de labels
+    #   (les damos 36px extra para que crucen la linea y entren a la zona,
+    #    así el jugador las ve "llegar" antes de desaparecer).
     clip_anterior = pantalla.get_clip()
     if es_inv:
-        pantalla.set_clip(pygame.Rect(0, zy + 2, ANCHO, ALTO - zy))
+        pantalla.set_clip(pygame.Rect(0, zy - 36, ANCHO, ALTO - zy + 36))
     else:
         pantalla.set_clip(pygame.Rect(0, 0, ANCHO, zy))
 
@@ -4516,8 +4520,12 @@ def dibujar_juego(partida, ahora):
 
     pantalla.set_clip(clip_anterior)
 
-    # labels del jugador (encima de las notas)
-    pygame.draw.line(pantalla, BLANCO, (sx, zy + 34 + sy), (ANCHO + sx, zy + 34 + sy), 1)
+    # labels del jugador — en inverso van ARRIBA de la linea (notas vienen de abajo)
+    if es_inv:
+        label_y0 = zy - 36  # labels arriba de la linea
+    else:
+        label_y0 = zy + 2   # labels debajo de la linea (normal)
+    pygame.draw.line(pantalla, BLANCO, (sx, label_y0 + 32 + sy), (ANCHO + sx, label_y0 + 32 + sy), 1)
     mt = partida.get("mapa_teclas", {})
     inv_teclas = {}
     for tecla_pos, col_dest in mt.items():
@@ -4525,11 +4533,11 @@ def dibujar_juego(partida, ahora):
     for i in range(num_cols):
         x = i * ancho_col + sx
         if i in teclas_sostenidas:
-            pygame.draw.rect(pantalla, GRIS, (x + 2, zy + 2 + sy, ancho_col - 4, 32))
+            pygame.draw.rect(pantalla, GRIS, (x + 2, label_y0 + sy, ancho_col - 4, 32))
         col_activa = BLANCO if i in teclas_sostenidas else GRIS_MED
         tecla_idx = inv_teclas.get(i, i)
         label = fuente_chica.render(LABELS[tecla_idx], True, col_activa)
-        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, zy + 8 + sy))
+        pantalla.blit(label, (x + ancho_col // 2 - label.get_width() // 2, label_y0 + 8 + sy))
 
     # indicador de precision (semaforo): borde de color en la columna tocada
     for ind in indicadores_hit:
@@ -4542,11 +4550,11 @@ def dibujar_juego(partida, ahora):
         # el color arranca pleno y se atenua
         cy = (int(cbase[0] * pct), int(cbase[1] * pct), int(cbase[2] * pct))
         # relleno tenue + borde brillante alrededor de la celda de la tecla
-        rect_cel = (x + 2, zy + 2 + sy, ancho_col - 4, 32)
+        rect_cel = (x + 2, label_y0 + sy, ancho_col - 4, 32)
         relleno = pygame.Surface((ancho_col - 4, 32))
         relleno.set_alpha(int(90 * pct))
         relleno.fill(cbase)
-        pantalla.blit(relleno, (x + 2, zy + 2 + sy))
+        pantalla.blit(relleno, (x + 2, label_y0 + sy))
         grosor = max(2, int(4 * pct))
         pygame.draw.rect(pantalla, cy, rect_cel, grosor)
 
