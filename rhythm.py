@@ -4751,6 +4751,16 @@ def dibujar_juego(partida, ahora):
         meta_txt = fuente_chica.render(f"{ganado}/{meta}", True, GRIS_MED)
         pantalla.blit(meta_txt, (vida_x - meta_txt.get_width() - 4, meta_y - 2))
 
+    # instrumento actual: icono identitario + nombre (discreto, derecha)
+    inst_nombre = partida["cancion"].get("instrumento", "")
+    if inst_nombre:
+        inst_txt = fuente_chica.render(inst_nombre, True, GRIS_MED)
+        inst_y = 44
+        pantalla.blit(inst_txt, (ANCHO - inst_txt.get_width() - 10, inst_y))
+        forma_inst = forma_de_instrumento(inst_nombre)
+        dibujar_icono_inst(pantalla, forma_inst,
+                           ANCHO - inst_txt.get_width() - 26, inst_y + 7, 8, col_nota)
+
     # IZQUIERDA: stage + escudo + efectos temporales
     si = partida.get("stage_info")
     if si:
