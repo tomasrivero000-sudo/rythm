@@ -273,20 +273,20 @@ GRADOS_DOMINANTE = {4}   # el V
 
 DIFICULTADES = {
     1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.30, "bpm_mult": 0.75, "vel_mult": 0.60},
-    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.40, "bpm_mult": 0.80, "vel_mult": 0.70},
-    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.50, "bpm_mult": 0.85, "vel_mult": 0.75},
-    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.45, "bpm_mult": 0.85, "vel_mult": 0.80},
-    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.55, "bpm_mult": 0.90, "vel_mult": 0.85},
-    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.65, "bpm_mult": 0.90, "vel_mult": 0.90},
-    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.80, "bpm_mult": 0.95, "vel_mult": 0.95},
-    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 0.85, "bpm_mult": 1.0,  "vel_mult": 1.0},
-    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0,  "vel_mult": 1.0},
-    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0,  "vel_mult": 1.0},
-    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.15, "bpm_mult": 1.0,  "vel_mult": 1.05},
-    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.10, "bpm_mult": 1.0,  "vel_mult": 1.05},
-    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.25, "bpm_mult": 1.0,  "vel_mult": 1.10},
-    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.40, "bpm_mult": 1.0,  "vel_mult": 1.15},
-    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.60, "bpm_mult": 1.0,  "vel_mult": 1.20},
+    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.34, "bpm_mult": 0.80, "vel_mult": 0.70},
+    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.38, "bpm_mult": 0.85, "vel_mult": 0.75},
+    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.65, "bpm_mult": 0.85, "vel_mult": 0.80},
+    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.75, "bpm_mult": 0.90, "vel_mult": 0.85},
+    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.85, "bpm_mult": 0.90, "vel_mult": 0.90},
+    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.92, "bpm_mult": 0.95, "vel_mult": 0.95},
+    8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0,  "vel_mult": 1.0},
+    9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.10, "bpm_mult": 1.0,  "vel_mult": 1.0},
+    10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.20, "bpm_mult": 1.0,  "vel_mult": 1.0},
+    11: {"nombre": "PRO+",       "columnas": 6, "acordes": True,  "dens": 1.30, "bpm_mult": 1.0,  "vel_mult": 1.05},
+    12: {"nombre": "MASTER",     "columnas": 7, "acordes": True,  "dens": 1.40, "bpm_mult": 1.0,  "vel_mult": 1.05},
+    13: {"nombre": "MASTER+",    "columnas": 7, "acordes": True,  "dens": 1.50, "bpm_mult": 1.0,  "vel_mult": 1.10},
+    14: {"nombre": "GOD",        "columnas": 7, "acordes": True,  "dens": 1.60, "bpm_mult": 1.0,  "vel_mult": 1.15},
+    15: {"nombre": "CHAOS",      "columnas": 8, "acordes": True,  "dens": 1.80, "bpm_mult": 1.0,  "vel_mult": 1.20},
 }
 
 SEED_MAX       = 9999
@@ -3467,12 +3467,16 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         oct_off = perfil["registro"]
         energia = perfil["energia"]
         dens_local = densidad * perfil["densidad_mult"]
-        # densidad acotada por nivel: piso creciente (nivel 15 nunca saltea
-        # notas) y techo en los primeros niveles (el facil se mantiene amable)
+        # compensacion por columnas: al sumar una columna, la densidad efectiva
+        # se reparte en mas teclas y el jugador percibe menos notas por tecla.
+        # cada columna extra sube dens 25% (compensa el reparto proporcional).
+        num_cols_e = num_columnas - 3
+        if num_cols_e > 0:
+            dens_local *= (1 + 0.25 * num_cols_e)
+        dens_local = min(dens_local, 1.0)  # techo: nunca subir mas que "todas las notas"
+        # piso minimo por nivel
         _niv_d = dif.get("nivel", 1)
-        dens_local = max(dens_local, 0.15 + _niv_d * 0.057)
-        if _niv_d <= 2:
-            dens_local = min(dens_local, 0.45)
+        dens_local = max(dens_local, 0.15 + _niv_d * 0.055)
         ca = compas_armonico if compas_armonico is not None else compas_global
         grado_actual = progresion[ca % len(progresion)]
         tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
