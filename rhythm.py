@@ -898,7 +898,6 @@ INSTRUMENTOS_JUGADOR = {
     "CHIPTUNE":  "chiptune",
     "SUPERSAW":  "supersaw",
     "ACID":      "acid",
-    "BITCRUSH":  "bitcrush",
     "LEAD":      "lead",
     "WOBBLE":    "wobble",
     "GLASS":     "glass",
@@ -924,12 +923,10 @@ INSTRUMENTOS_JUGADOR = {
     "GROWL":      "growl",
     "SAW STACK":  "saw_stack",
     "FM 3OP":     "fm_3op",
-    "RING MOD":   "ring_mod",
     "SYNC LEAD":  "sync_lead",
     "PLUCK SOFT": "pluck_soft",
     "VOX PAD":    "vox_pad",
     "DIST GTR":   "dist_gtr",
-    "WAVEFOLD":   "wavefold",
     "PHASE PAD":  "phase_pad",
     "FM BRASS":   "fm_brass",
     "GLASS HARM": "glass_harm",
@@ -946,8 +943,6 @@ INSTRUMENTOS_JUGADOR = {
 
 # instrumentos raros: baja probabilidad de aparecer
 INSTRUMENTOS_RAROS = {
-    "ALIEN":      "alien",
-    "BROKEN":     "broken",
 }
 
 # instrumentos que sostienen bien (se pueden loopear en holds)
@@ -967,7 +962,7 @@ HOLD_MAX = 6000  # holds largos: la nota de 1.6s loopea para cubrirlos
 # formas: square, saw, sine, triangle, bell, pluck, pad, metal, noise, glass,
 #         brass, choir, atmos, alien
 INST_FORMA = {
-    "SQUARE": "square", "CHIPTUNE": "square", "BITCRUSH": "square", "PWM LEAD": "square",
+    "SQUARE": "square", "CHIPTUNE": "square", "PWM LEAD": "square",
     "SAW": "saw", "SUPERSAW": "saw", "SAW STACK": "saw", "HOOVER": "saw",
     "ACID": "saw", "SYNC LEAD": "saw", "DETUNE": "saw", "ANALOG STR": "saw",
     "SINE": "sine", "FM EP": "sine", "SUB PLUCK": "sine", "SYNTHBASS": "sine", "BASS": "sine",
@@ -975,14 +970,13 @@ INST_FORMA = {
     "FM BELL": "bell", "BELL FM": "bell", "BELLPAD": "bell", "VIBRAPHONE": "bell", "KALIMBA": "bell",
     "PLUCK": "pluck", "PLUCK SOFT": "pluck", "HARP": "pluck", "SITAR": "pluck",
     "PAD": "pad", "PHASE PAD": "pad", "VOX PAD": "pad", "DREAM PAD": "pad", "FROZEN STR": "pad",
-    "METALLIC": "metal", "RING MOD": "metal", "RESO": "metal", "WAVEFOLD": "metal", "NOISE PITCH": "metal",
+    "METALLIC": "metal", "RESO": "metal", "NOISE PITCH": "metal",
     "GLASS": "glass", "GLASS HARM": "glass",
     "ORGAN": "organ", "ORGAN FULL": "organ",
     "TRUMPET": "brass", "FM BRASS": "brass", "GROWL": "brass", "DIST GTR": "brass",
     "CHOIR": "choir", "SPACE CHOIR": "choir", "FORMANT": "choir",
     "WOBBLE": "wobble", "FM 3OP": "wobble",
     "SHIMMER": "atmos", "ATMOS NOISE": "atmos",
-    "ALIEN": "alien", "BROKEN": "alien",
 }
 
 def dibujar_icono_inst(surf, forma, cx, cy, r, color):
@@ -1200,9 +1194,11 @@ def synth_nota(tipo, freq, duracion, rng_params):
         sw = 2.0 * (t * freq % 1) - 1.0
         wave = sq * mix + sw * (1 - mix)
     elif tipo == "wobble":
+        # antes: profundidad 0.8 hacia que el sonido "desapareciera" a la mitad
+        # ahora: 0.55 con offset -> siempre audible, wobble sigue notorio
         lfo_speed = rng_params.get("lfo_speed", 6)
-        lfo_depth = rng_params.get("lfo_depth", 0.8)
-        lfo = (1 + lfo_depth * np.sin(2 * np.pi * lfo_speed * t)) * 0.5
+        lfo_depth = rng_params.get("lfo_depth", 0.55)
+        lfo = 0.45 + lfo_depth * (0.5 + 0.5 * np.sin(2 * np.pi * lfo_speed * t))
         raw = 2.0 * (t * freq % 1) - 1.0
         wave = raw * lfo
     elif tipo == "glass":
@@ -1295,21 +1291,32 @@ def synth_nota(tipo, freq, duracion, rng_params):
             out += y * amp
         wave = out * 0.4
     elif tipo == "hoover":
+        # antes: 5 saws sin filtro -> aliasing feo en agudos
+        # ahora: pasa-bajos suave posterior para domar los armonicos duros
         sweep = 1 + 0.06 * np.exp(-t * 8)
         wave = np.zeros(n)
         for d in [-0.4, -0.1, 0, 0.1, 0.4]:
             f = freq * sweep * (1 + d * 0.012)
             wave += (2.0 * (t * f % 1) - 1.0) * 0.2
+        # pasa-bajos 1er orden: corta armonicos altos que hacen aliasing
+        # cutoff proporcional a la freq (mantiene brillo relativo)
+        coef = min(0.35, 8 * freq / SR)
+        lp_val = 0.0
+        for i in range(n):
+            lp_val += coef * (wave[i] - lp_val)
+            wave[i] = lp_val * 1.4    # compensar perdida de nivel
     elif tipo == "bell_fm":
         ratio = rng_params.get("bell_ratio", 1.414)
         idx = rng_params.get("bell_index", 5.0)
         mod_env = np.exp(-t * 3)
         wave = np.sin(phase + idx * mod_env * np.sin(2 * np.pi * freq * ratio * t))
     elif tipo == "growl":
+        # antes: idx=4 con tanh(x*1.5) = distorsion sobre distorsion embarrada
+        # ahora: idx=2.2 con tanh(x*1.1) -> gruñido reconocible sin barro
         lfo = 0.5 + 0.5 * np.sin(2 * np.pi * rng_params.get("growl_rate", 7) * t)
-        idx = rng_params.get("growl_index", 4) * lfo
+        idx = rng_params.get("growl_index", 2.2) * lfo
         wave = np.sin(phase + idx * np.sin(2 * np.pi * freq * 1.0 * t))
-        wave = np.tanh(wave * 1.5)
+        wave = np.tanh(wave * 1.1)
     elif tipo == "saw_stack":
         # 7 saws apilados con detune variable: muro de sonido
         wave = np.zeros(n)
@@ -1398,9 +1405,10 @@ def synth_nota(tipo, freq, duracion, rng_params):
         wave = body * np.exp(-t * 2) + click
     elif tipo == "noise_pitch":
         # tono de ruido filtrado con pitch: a medio camino entre tono y percusion
+        # resonancia bajada de 0.96 -> 0.85 para evitar silbidos asperos
         np_rng = np.random.RandomState(int(freq) % 999999)
         raw = np_rng.uniform(-1, 1, n)
-        res = 0.96
+        res = 0.85
         center = freq / SR
         wave = np.zeros(n)
         bp = 0.0; lp = 0.0
@@ -1451,10 +1459,12 @@ def synth_nota(tipo, freq, duracion, rng_params):
             bp += bw * hp * 6
             lp_n += bw * bp * 6
             wave[i] = bp
-        # trémolo con LFO lento y sinusoide tonal mezclada
+        # trémolo con LFO lento y sinusoide tonal reforzada
+        # antes: ruido 70% + tonal 30% -> el pitch no se identificaba.
+        # ahora: tonal 55% con octava, ruido de fondo mas suave.
         lfo_mod = 0.6 + 0.4 * np.sin(2 * np.pi * rng_params.get("lfo_spd", 0.3) * t)
-        tonal = np.sin(phase) * 0.3
-        wave = wave * lfo_mod * 0.7 + tonal
+        tonal = np.sin(phase) * 0.4 + np.sin(phase * 2) * 0.15
+        wave = wave * lfo_mod * 0.35 + tonal
     elif tipo == "frozen_strings":
         # cuerdas "congeladas": muchos armonicos con ataque lentísimo y movimiento leve
         num_v = rng_params.get("num_voices", 6)
@@ -2733,7 +2743,7 @@ GENEROS = {
         "bajo_patrones": [[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
                           [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
         "instrumentos": ["FM EP", "BASS", "SYNTHBASS", "SUB PLUCK", "ORGAN",
-                         "VIBRAPHONE", "PLUCK SOFT", "RING MOD", "DIST GTR",
+                         "VIBRAPHONE", "PLUCK SOFT", "DIST GTR",
                          "ANALOG STR", "DREAM PAD"],
         "tempo_mod": {"half": 0.20, "double": 0.05},
         "densidad": 0.75,
@@ -3182,11 +3192,11 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
     kit = elegir_kit(rng)
     # instrumento: si viene forzado (runs, para garantizar variedad) se respeta.
-    # si no: 2% raro, si no del pool del genero (con fallback a la lista global)
+    # si no: 2% raro (si hay raros), si no del pool del genero
     if instrumento_forzado and (instrumento_forzado in INSTRUMENTOS_JUGADOR
                                 or instrumento_forzado in INSTRUMENTOS_RAROS):
         instrumento = instrumento_forzado
-    elif rng.random() < 0.02:
+    elif INSTRUMENTOS_RAROS and rng.random() < 0.02:
         instrumento = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
     else:
         pool = [i for i in gdef.get("instrumentos", []) if i in INSTRUMENTOS_JUGADOR]
