@@ -5293,7 +5293,7 @@ def dibujar_perks_hud(partida):
         pantalla.blit(esc_txt, (10, py + 16))
     # efectos temporales activos: borde izquierdo a media altura
     efectos = partida.get("efectos_activos", {})
-    ahora = pygame.time.get_ticks() - partida["inicio"]
+    ahora = int(partida.get("t_musical", pygame.time.get_ticks() - partida["inicio"]))
     ey = 90
     for eid, t_fin in list(efectos.items()):
         restante = max(0, t_fin - ahora)
@@ -6207,7 +6207,7 @@ while corriendo:
                         midi_fijo = partida["cancion"]["notas_columnas"][col]
 
                         # buscar la nota objetivo más cercana en esta columna
-                        ahora_rel = ahora_ms - partida["inicio"]
+                        ahora_rel = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
                         midi_a_tocar = midi_fijo
                         mejor_dist = 99999
                         for g in partida["notas_cayendo"]:
@@ -6250,7 +6250,7 @@ while corriendo:
                         w_hit = partida.get("w_hit", 150)
                         w_perf = partida.get("w_perf", 30)
                         # auto-perfecto por power-up estrella
-                        ahora_juego = ahora_ms - partida["inicio"]
+                        ahora_juego = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
                         auto_perf = ahora_juego < partida.get("efectos_activos", {}).get("estrella", 0)
                         for grupo in partida["notas_cayendo"]:
                             if col in grupo["cols"]:
@@ -6484,7 +6484,24 @@ while corriendo:
         # dev mode: x2 speed (avanzar inicio hacia atras = tiempo pasa el doble)
         if dev_mode:
             partida["inicio"] -= 1000 // 60
-        ahora = ahora_ms - partida["inicio"]
+        # --- RELOJ MUSICAL: el tiempo del juego puede correr mas lento ---
+        # Durante el power-up SLOW, t_musical avanza a 0.75x del tiempo real
+        # (con easing suave al entrar y salir). TODO usa este reloj: percusion,
+        # bajo, emision de notas, posiciones y timing de hits — la cancion
+        # entera se ralentiza de forma coherente y sin saltos de posicion.
+        ahora_real = ahora_ms - partida["inicio"]
+        _dt_real = ahora_real - partida.get("_t_real_prev", ahora_real)
+        partida["_t_real_prev"] = ahora_real
+        _dt_real = max(0, min(_dt_real, 250))   # clamp por pausas/lag
+        _reloj_on = partida.get("t_musical", 0) < partida.get("efectos_activos", {}).get("reloj", 0)
+        _sf_obj = 0.75 if _reloj_on else 1.0
+        _sf = partida.get("slow_factor", 1.0)
+        _sf += (_sf_obj - _sf) * 0.08           # easing (~0.5s a 60fps)
+        if abs(_sf - _sf_obj) < 0.002:
+            _sf = _sf_obj
+        partida["slow_factor"] = _sf
+        partida["t_musical"] = partida.get("t_musical", float(ahora_real)) + _dt_real * _sf
+        ahora = int(partida["t_musical"])
 
         # RAFAGAS: avisar al entrar en la avalancha (inicio de cada ciclo)
         if partida["cancion"].get("tiene_rafagas") and not partida.get("game_over"):
@@ -6539,9 +6556,8 @@ while corriendo:
                 ahora_en_loop = (ahora - partida.get("loop_offset", 0)) % max(1, duracion)
                 progreso = min(ahora_en_loop / max(1, duracion), 1.0)
                 vel_p *= (1.0 + progreso)  # 1x al inicio, 2x al final
-            # power-up RELOJ: notas 25% mas lentas temporalmente
-            if ahora < partida.get("efectos_activos", {}).get("reloj", 0):
-                vel_p *= 0.75
+            # (el power-up RELOJ frena via el reloj musical t_musical, arriba;
+            #  vel_p queda constante y las posiciones no saltan jamas)
             PIXELES_POR_MS = vel_p / (1000 / 60)
             es_inv = partida.get("es_inverso", False)
             if es_inv:
