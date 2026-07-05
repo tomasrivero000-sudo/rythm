@@ -5367,7 +5367,8 @@ def crear_run(seed_inicial):
             # pool mas chico que la cantidad de stages: reusar sin repetir consecutivo
             instrumentos_stage.append(rng.choice(pool_sin_reso))
     # 15% de chance de que un stage al azar (no el primero) traiga un instrumento raro
-    if rng.random() < 0.15 and NUM_STAGES > 1:
+    # (solo si hay raros disponibles: puede quedar vacio si se eliminaron)
+    if INSTRUMENTOS_RAROS and rng.random() < 0.15 and NUM_STAGES > 1:
         idx_raro = rng.randint(1, NUM_STAGES - 1)
         instrumentos_stage[idx_raro] = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
 
