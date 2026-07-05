@@ -2713,7 +2713,7 @@ def get_dificultad(seed):
 # --- meta de puntuacion por stage (objetivo roguelike) ---
 # la meta base escala con el nivel de dificultad; stages sucesivos piden mas
 META_BASE = {
-    1: 200,  2: 250,  3: 350,  4: 450,  5: 600,
+    1: 120,  2: 180,  3: 300,  4: 450,  5: 600,
     6: 800,  7: 1100, 8: 1500, 9: 2000, 10: 2800,
     11: 3500, 12: 4500, 13: 6000, 14: 8000, 15: 10000,
 }
@@ -3425,7 +3425,13 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             compas.append({"col": col, "hold": 0})
         if permitir_hold:
             # prob de hold escala con el nivel: 0.32 (facil) -> 0.55 (chaos)
-            prob_hold = 0.3 + min(0.25, dif.get("nivel", 1) * 0.017)
+            # holds escalados por nivel: en fácil casi no hay (el principiante
+            # aprende primero a tapear). nivel 1: 5% | nivel 15: 55%
+            _niv_h = dif.get("nivel", 1)
+            if _niv_h <= 2:
+                prob_hold = 0.05 + (_niv_h - 1) * 0.05    # 0.05 (n1) -> 0.10 (n2)
+            else:
+                prob_hold = 0.3 + min(0.25, _niv_h * 0.017)
             activas = [i for i, n in enumerate(compas) if n is not None]
             for idx, pos in enumerate(activas):
                 if rng.random() < prob_hold:
@@ -3521,7 +3527,11 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             pone_acorde = (compas_global % 2 == 0) if det else (rng.random() < prob_ac_local)
             # en niveles altos los acordes tambien pueden caer en el beat 3
             s_acorde_ok = (s == 0) or (_nivel_gc >= 9 and s == 8)
-            if (usar_acordes or energia >= 0.9) and s_acorde_ok and pone_acorde:
+            # en niveles faciles (1-2) NUNCA hay acordes, ni siquiera en el
+            # estribillo (energia alta). Si la tabla dice "acordes: False",
+            # se respeta estrictamente para no sobrecargar al principiante.
+            energia_permite = energia >= 0.9 and _nivel_gc >= 3
+            if (usar_acordes or energia_permite) and s_acorde_ok and pone_acorde:
                 cols_ac = []
                 for g in patron_acordes[grado_actual % len(patron_acordes)][:3]:
                     col_ac = g % num_columnas
@@ -3841,6 +3851,21 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     eventos.sort(key=lambda e: e["tiempo"])
 
     # --- CAPA 2: mutacion de timbre ya aplicada a las notas del nudo ---
+
+    # --- anti-simultaneas en niveles faciles ---
+    # nivel 1-2: eliminar notas que caen muy juntas (< 250ms). En facil,
+    # ninguna nota deberia caer antes de que el jugador pueda reaccionar
+    # a la anterior. Mantenemos la primera del par y descartamos las
+    # siguientes hasta que haya un gap suficiente.
+    _niv_f = dif.get("nivel", 1)
+    if _niv_f <= 2 and notas_jugador:
+        gap_min = 400 if _niv_f == 1 else 300
+        notas_jugador.sort(key=lambda n: n["tiempo"])
+        filtradas = [notas_jugador[0]]
+        for n in notas_jugador[1:]:
+            if n["tiempo"] - filtradas[-1]["tiempo"] >= gap_min:
+                filtradas.append(n)
+        notas_jugador = filtradas
 
     # --- power-ups: cantidad variable por cancion (decidida por seed) ---
     #   ~25% ninguno   ~50% uno solo   ~20% dos o tres   ~5% varios (4-5)
