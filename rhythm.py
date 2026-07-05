@@ -3254,15 +3254,22 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         [0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],  # 2, &3, 4
         [1,0,0,1,0,0,0,0,1,0,0,0,0,0,1,0],  # 1, 16avo, 3, &4
     ]
-    # elegir pool segun columnas (proxy de dificultad)
-    if num_columnas <= 4:
+    # elegir pool segun NIVEL (progresion fina en 5 tramos)
+    _niv_pat = dif.get("nivel", 1)
+    if _niv_pat <= 3:
         pat_jugador_simples = pat_basicos
-        pat_jugador_complejos = pat_intermedios
-    elif num_columnas <= 6:
+        pat_jugador_complejos = pat_basicos + pat_intermedios
+    elif _niv_pat <= 6:
         pat_jugador_simples = pat_basicos + pat_intermedios
-        pat_jugador_complejos = pat_intermedios + pat_avanzados
-    else:
+        pat_jugador_complejos = pat_intermedios
+    elif _niv_pat <= 9:
         pat_jugador_simples = pat_intermedios
+        pat_jugador_complejos = pat_intermedios + pat_avanzados
+    elif _niv_pat <= 12:
+        pat_jugador_simples = pat_intermedios + pat_avanzados
+        pat_jugador_complejos = pat_avanzados
+    else:
+        pat_jugador_simples = pat_avanzados
         pat_jugador_complejos = pat_avanzados
 
     notas_jugador = []
@@ -3331,6 +3338,12 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         oct_off = perfil["registro"]
         energia = perfil["energia"]
         dens_local = densidad * perfil["densidad_mult"]
+        # densidad acotada por nivel: piso creciente (nivel 15 nunca saltea
+        # notas) y techo en los primeros niveles (el facil se mantiene amable)
+        _niv_d = dif.get("nivel", 1)
+        dens_local = max(dens_local, 0.15 + _niv_d * 0.057)
+        if _niv_d <= 2:
+            dens_local = min(dens_local, 0.45)
         ca = compas_armonico if compas_armonico is not None else compas_global
         grado_actual = progresion[ca % len(progresion)]
         tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
@@ -3437,7 +3450,7 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             elif (not det and hd == 0 and s + 2 < 16
                     and contenido[s + 2] is None
                     and rng.random() < (max(0.0, dens_local - 1.0) * 0.7
-                                        + max(0, _nivel_gc - 10) * 0.04)):
+                                        + max(0, _nivel_gc - 8) * 0.06)):
                 col_eco = (col + rng.choice([-1, 1])) % num_columnas
                 midi_eco = notas_columnas[col_eco] + oct_off
                 notas_jugador.append({
