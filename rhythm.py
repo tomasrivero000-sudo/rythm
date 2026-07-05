@@ -2000,19 +2000,40 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
         c_cortas[midi] = np_to_sound(aplicar_eq(arr[:, 0], inst_eq, inst_eq_int), lpf=True)
         params_hold = dict(params)
-        params_hold["vibrato"] = params.get("vibrato", 0) + 0.4
+        # holds: envolvente casi plana para eliminar el pumping ciclico del loop.
+        # antes: sustain=0.5, decay=1.5 -> la amplitud caia de 1.0 a 0.55 dentro
+        # del sample de 1.6s y saltaba al reiniciar el loop = "wah-wah" audible.
+        # ahora: sustain=1.0 (sin caida) y decay chico. El ataque real ya lo hace
+        # la nota corta que suena al tocar la tecla; el hold es solo el sostenido.
+        params_hold["sustain"] = 1.0
+        params_hold["decay"] = 0.3
+        # vibrato mas suave para que no salte de fase entre loops
+        params_hold["vibrato"] = params.get("vibrato", 0) * 0.7
         params_hold["vib_speed"] = params.get("vib_speed", 5) * 0.8
-        params_hold["sustain"] = max(params.get("sustain", 0.6), 0.5)
-        params_hold["decay"] = min(params.get("decay", 5.0), 1.5)
-        # nota larga de 1.6s (antes 4s): 2.5x mas rapido de renderizar
-        snd_l = synth_nota(tipo, freq, 1.6, params_hold)
+        # ataque corto: no importa el click porque despues lo cortamos
+        params_hold["attack"] = 0.005
+        # renderizar 1.9s: los primeros 300ms se DESCARTAN (ataque + estabilizacion),
+        # y solo la parte 100% estable (~1.6s) queda como material del loop.
+        # asi el pumping desaparece: el sample loopea solo sobre steady state.
+        snd_l = synth_nota(tipo, freq, 1.9, params_hold)
         arr_l = pygame.sndarray.array(snd_l).astype(np.float64) / 32767
         mono_l = aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int)
-        # crossfade para loop suave: mezclar final con inicio
-        cf = min(3000, len(mono_l) // 4)
-        fade_out = np.linspace(1, 0, cf)
-        fade_in  = np.linspace(0, 1, cf)
-        mono_l[-cf:] = mono_l[-cf:] * fade_out + mono_l[:cf] * fade_in
+        # descartar ataque + zona de estabilizacion
+        skip = int(SR * 0.30)
+        mono_l = mono_l[skip:].copy()
+        # crossfade LARGO (150ms) con curva coseno igual-potencia para
+        # que la costura del loop sea inaudible. Antes: 68ms con rampa lineal.
+        cf = min(int(SR * 0.15), len(mono_l) // 3)
+        if cf > 100:
+            xs = np.linspace(0, np.pi / 2, cf)
+            fade_out = np.cos(xs)   # 1 -> 0 con curva coseno
+            fade_in  = np.sin(xs)   # 0 -> 1 con curva seno (suma cuadratica = 1)
+            mono_l[-cf:] = mono_l[-cf:] * fade_out + mono_l[:cf] * fade_in
+        # fade-in muy corto al principio del sample para arrancar limpio
+        # (por si el hold suena antes que la nota corta)
+        fi = min(int(SR * 0.008), len(mono_l) // 8)
+        if fi > 10:
+            mono_l[:fi] *= np.linspace(0, 1, fi)
         c_largas[midi] = np_to_sound(mono_l, lpf=True)
     cache_por_instrumento[nombre] = c_cortas
     cache_largas_por_instrumento[nombre] = c_largas
