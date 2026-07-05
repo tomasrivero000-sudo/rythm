@@ -524,13 +524,24 @@ def synth_crash(rng):
     return np_to_sound(filtered * env * 0.6)
 
 def synth_agogo(rng):
-    dur = rng.uniform(0.1, 0.3)
-    freq1 = rng.uniform(800, 1500)
-    freq2 = freq1 * rng.uniform(1.3, 1.8)
+    # agogo realista: campana grave 700-1100 Hz, segundo parcial max x1.5
+    # (antes freq2 llegaba a 2700 Hz con decay lento = "biiing" agudo molesto)
+    dur = rng.uniform(0.08, 0.2)
+    freq1 = rng.uniform(700, 1100)
+    freq2 = freq1 * rng.uniform(1.25, 1.5)
     n = int(SR * dur)
     t = np.linspace(0, dur, n)
-    env = np.exp(-t * rng.uniform(10, 25))
-    wave = (np.sin(2 * np.pi * freq1 * t) * 0.5 + np.sin(2 * np.pi * freq2 * t) * 0.5) * env
+    env = np.exp(-t * rng.uniform(20, 40))
+    # fade-out anti-click
+    fade = min(int(SR * 0.004), n // 4)
+    if fade > 0:
+        env[-fade:] *= np.linspace(1, 0, fade)
+    # el parcial agudo decae mas rapido que el fundamental (campana real)
+    env2 = np.exp(-t * rng.uniform(35, 60))
+    if fade > 0:
+        env2[-fade:] *= np.linspace(1, 0, fade)
+    wave = (np.sin(2 * np.pi * freq1 * t) * 0.6 * env
+            + np.sin(2 * np.pi * freq2 * t) * 0.35 * env2)
     return np_to_sound(wave)
 
 def synth_tom(rng):
@@ -1221,6 +1232,17 @@ def synth_nota(tipo, freq, duracion, rng_params):
         for v in range(num_voices):
             d = (v - num_voices / 2) * detune
             wave += np.sin(2 * np.pi * freq * (1 + d) * t + v * 1.5) * 0.3
+    elif tipo == "bellpad":
+        # campana calida + capa pad. El parcial de campana (x2.76, inarmonico
+        # clasico) decae 4x mas rapido que el cuerpo: da el "ataque de campana"
+        # sin dejar un "bing" agudo sostenido. Sin parciales por encima de x3.
+        camp = np.exp(-t * 8)
+        wave = (np.sin(phase) * 0.45
+                + np.sin(phase * 2) * 0.15
+                + np.sin(phase * 2.76) * 0.22 * camp)
+        # capa pad: 2 voces con detune suave
+        for d in (-0.005, 0.005):
+            wave += np.sin(2 * np.pi * freq * (1 + d) * t) * 0.14
     elif tipo == "metallic":
         mod_freq = freq * rng_params.get("ring_ratio", 1.7)
         carrier = np.sin(phase)
