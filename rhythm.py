@@ -3001,9 +3001,11 @@ def _generar_patrones_drums_legacy(rng):
     return pats
 
 def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
-                      c_intro, c_nudo, c_desenlace, kit, genero=None):
+                      c_intro, c_nudo, c_desenlace, kit, genero=None, pats_pre=None):
     paso = beat // 4
-    pats  = generar_patrones_drums(rng, genero)
+    # pats_pre: patrones pre-generados (para anclar la melodia del jugador
+    # al kick). Si vienen, son el set principal; los otros 2 varian.
+    pats  = pats_pre if pats_pre is not None else generar_patrones_drums(rng, genero)
     pats2 = generar_patrones_drums(rng, genero)
     pats3 = generar_patrones_drums(rng, genero)
     tercio1 = t_intro_fin + 8 * 4 * beat
@@ -3411,6 +3413,32 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     notas_jugador = []
 
+    # --- D: ANCLA CON EL KICK ---
+    # los patrones de drums se generan ANTES de la melodia (con rng propio,
+    # determinista por seed) para que el patron ritmico del jugador pueda
+    # elegirse maximizando coincidencias con el kick -> tocas "con la banda".
+    _rng_drums = random.Random(int(seed * 13) + 7)
+    pats_drums_ancla = generar_patrones_drums(_rng_drums, genero)
+    _kick_ancla = pats_drums_ancla["kick"]
+
+    def _score_kick(pat):
+        """Fraccion de notas del patron que coinciden con el kick (downbeat x2).
+        Normalizado por cantidad de notas: alinea con el kick SIN sesgar la
+        seleccion hacia patrones mas densos."""
+        sc = 0
+        notas = 0
+        for s in range(16):
+            if pat[s]:
+                notas += 1
+                if _kick_ancla[s]:
+                    sc += 2 if s == 0 else 1
+        return sc / max(1, notas)
+
+    def _elegir_pat(pool):
+        """Muestrea 3 candidatos y devuelve el de mayor overlap con el kick."""
+        candidatos = [pool[rng.randint(0, len(pool) - 1)] for _ in range(3)]
+        return max(candidatos, key=_score_kick)
+
     def crear_compas(motivo, pat, permitir_hold=True):
         """Genera un compas (16 pasos) colocando las notas del motivo en las
         posiciones activas del patron ritmico. Devuelve lista de 16 (None o dict)."""
@@ -3455,12 +3483,13 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             motivo = motivos_a[rng.randint(0, len(motivos_a) - 1)]
         pats = pat_jugador_complejos if complejo else pat_jugador_simples
         # el estribillo fija sus patrones (memorable); verso/puente varian mas
+        # ambos se eligen maximizando el overlap con el kick (D: anclas)
         if material == "B":
-            pat1 = pats[rng.randint(0, len(pats) - 1)]
+            pat1 = _elegir_pat(pats)
             pat2 = pat1   # mismo patron los 2 compases -> mas pegadizo
         else:
-            pat1 = pats[rng.randint(0, len(pats) - 1)]
-            pat2 = pats[rng.randint(0, len(pats) - 1)]
+            pat1 = _elegir_pat(pats)
+            pat2 = _elegir_pat(pats)
         bloque = []
         for c in range(num_compases):
             pat = pat1 if c % 2 == 0 else pat2
@@ -3509,6 +3538,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         es_stream = es_cierre_seccion and _nivel_gc >= 11 and not det
         stream_len = 6 if _nivel_gc >= 14 else 4
         stream_ini = 16 - stream_len
+        # B: estado del salto expresivo (si la nota anterior salto, esta resuelve)
+        _salto = {"resolver": 0, "desde": None}
         for s in range(16):
             if contenido[s] is None:
                 continue
@@ -3553,6 +3584,27 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             if not det and dens_local < 1.0 and s != 0 and rng.random() > dens_local:
                 continue
             midi_nota = notas_columnas[col] + oct_off
+            # --- B: SALTOS EXPRESIVOS con resolucion conjunta contraria ---
+            # regla clasica de contrapunto: un salto grande (4a/5a/8va) se
+            # resuelve moviendose por grado conjunto en direccion CONTRARIA.
+            # crea momentos memorables sin perder cohesion melodica.
+            if _salto["resolver"] != 0 and not det:
+                # esta nota RESUELVE el salto anterior: grado conjunto contrario
+                base = _salto["desde"]
+                _clases_esc = {(tonica + g) % 12 for g in escala}
+                paso_res = 2 if (base + 2 * _salto["resolver"]) % 12 in _clases_esc else 1
+                midi_nota = base + paso_res * _salto["resolver"]
+                col = max(0, min(num_columnas - 1, col + _salto["resolver"]))
+                _salto["resolver"] = 0
+            elif (not det and s % 4 == 2 and s <= 10 and hd == 0
+                    and rng.random() < 0.12):
+                # salto expresivo: 4a, 5a u 8va
+                arriba = midi_nota < tonica + 24
+                intervalo = rng.choice([5, 7, 12])
+                midi_nota = midi_nota + (intervalo if arriba else -intervalo)
+                col = max(0, min(num_columnas - 1, col + (2 if arriba else -2)))
+                _salto["resolver"] = -1 if arriba else 1
+                _salto["desde"] = midi_nota
             en_tiempo_fuerte = (s % 8 == 0)
             pc = midi_nota % 12
             es_consonante = pc in clases_ac
@@ -3631,6 +3683,49 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                 notas_jugador.append({
                     "cols": [col_s], "midis": [midi_s],
                     "tiempo": t_s, "es_acorde": False, "parte": parte, "hold": 0,
+                })
+
+        _t_compas_ini = t_intro_fin + compas_global * 4 * beat
+        _t_compas_fin = _t_compas_ini + 4 * beat
+
+        # --- A: CADENCIA RESOLUTIVA al final de cada frase de 4 compases ---
+        # la ultima nota de la frase se ajusta a un tono estable del acorde
+        # (tonica o 5a): las frases "cierran" y la melodia suena intencional.
+        # Es determinista (sin rng) asi aplica tambien al estribillo sin
+        # alterar su identidad entre repeticiones.
+        if compas_global % 4 == 3:
+            for _n in reversed(notas_jugador):
+                if _n["tiempo"] < _t_compas_ini:
+                    break
+                if not _n["es_acorde"] and _n["tiempo"] < _t_compas_fin:
+                    _n["midis"][0] = ajustar_a_acorde(
+                        _n["midis"][0], [tonos_ac[0], tonos_ac[2]],
+                        escala, tonica + 12)
+                    break
+
+        # --- C: ANACRUSA (pickup): nota que anticipa el compas siguiente ---
+        # ~20% de los compases ganan una nota en el paso 15 que "empuja" hacia
+        # el proximo downbeat. Solo en niveles 3+ (los principiantes no la
+        # necesitan) y fuera del estribillo (no ensuciar el gancho).
+        if (not det and _nivel_gc >= 3 and not es_stream
+                and contenido[15] is None and contenido[14] is None
+                and rng.random() < 0.20):
+            # verificar que haya aire: ultima nota del compas antes del paso 12
+            _ok_aire = True
+            for _n in reversed(notas_jugador):
+                if _n["tiempo"] < _t_compas_ini:
+                    break
+                if _n["tiempo"] >= _t_compas_ini + 12 * paso16:
+                    _ok_aire = False
+                break
+            if _ok_aire:
+                _col_ana = contenido[0]["col"] if contenido[0] else rng.randint(0, num_columnas - 1)
+                _col_ana = max(0, min(num_columnas - 1, _col_ana + rng.choice([-1, 0, 1])))
+                notas_jugador.append({
+                    "cols": [_col_ana],
+                    "midis": [notas_columnas[_col_ana] + oct_off],
+                    "tiempo": _t_compas_ini + 15 * paso16,
+                    "es_acorde": False, "parte": parte, "hold": 0,
                 })
 
     # --- recorrer las secciones de la forma en orden ---
@@ -3762,7 +3857,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             })
 
     percusion = generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
-                                  C_INTRO, C_NUDO, C_DESENLACE, kit, genero)
+                                  C_INTRO, C_NUDO, C_DESENLACE, kit, genero,
+                                  pats_pre=pats_drums_ancla)
 
     # --- linea de bajo procedural (estilo y patron segun genero) ---
     estilos_g = [e for e in gdef.get("bajo_estilos", []) if e in ("round","pluck","sub","reese")]
