@@ -662,6 +662,104 @@ def synth_ui_confirm():
     env[-fade:] *= np.linspace(1, 0, fade)
     return np_to_sound(wave * env, vol=0.32)
 
+# ─── SFX de power-ups: uno unico por tipo, comunican el efecto ───
+
+def synth_pu_estrella():
+    """AUTO: arpegio ascendente shimmer + campana metalica = invencibilidad."""
+    dur = 0.55
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    # arpegio muy rapido: 4 notas ascendentes
+    notas_f = [880, 1108, 1318, 1760]   # A5 C#6 E6 A6 (mayor)
+    seg = n // len(notas_f)
+    wave = np.zeros(n)
+    for i, f in enumerate(notas_f):
+        s0 = i * seg
+        s1 = min(n, s0 + int(seg * 1.6))
+        tseg = t[s0:s1] - t[s0]
+        # cada nota es una senoide + su octava (brillo) + campana (5x)
+        w = (np.sin(2 * np.pi * f * tseg) * 0.5
+             + np.sin(2 * np.pi * f * 2 * tseg) * 0.25
+             + np.sin(2 * np.pi * f * 5.4 * tseg) * 0.10)
+        env_seg = np.exp(-tseg * 4)
+        wave[s0:s1] += w * env_seg
+    # shimmer general
+    wave *= (1.0 + 0.2 * np.sin(2 * np.pi * 12 * t))
+    env = np.exp(-t * 1.8)
+    fade = min(int(SR * 0.01), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.42)
+
+def synth_pu_vida():
+    """+HP: dos pitidos ascendentes rapidos = health up (clasico de arcade)."""
+    dur = 0.32
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    m1 = int(n * 0.35)
+    m2 = int(n * 0.45)
+    # dos pitidos con silencio breve entre ellos
+    f = np.ones(n) * 660  # E5
+    f[m1:m2] = 0          # silencio
+    f[m2:] = 990          # B5 (arriba)
+    ph = np.cumsum(f / SR) * 2 * np.pi
+    wave = np.sin(ph) * 0.5 + np.sin(ph * 2) * 0.15
+    # envolvente de dos golpes
+    env = np.zeros(n)
+    for s0, s1 in [(0, m1), (m2, n)]:
+        seg_t = np.linspace(0, 1, s1 - s0)
+        env[s0:s1] = np.exp(-seg_t * 8)
+    fade = min(int(SR * 0.008), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.4)
+
+def synth_pu_reloj():
+    """SLOW: sweep descendente con vibrato lento = el tiempo se estira."""
+    dur = 0.55
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    # freq baja de 700Hz a 250Hz con curva exponencial
+    f_base = 700 * np.exp(-t * 1.8) + 200
+    # vibrato lento (5Hz) creciente = sensacion de "estirarse"
+    vibrato = 1.0 + 0.05 * np.sin(2 * np.pi * 5 * t) * (t / dur)
+    f = f_base * vibrato
+    ph = np.cumsum(f / SR) * 2 * np.pi
+    wave = np.sin(ph) * 0.5 + np.sin(ph * 1.5) * 0.2   # 1.5x = disonancia suave
+    env = np.exp(-t * 2.5) * (1.0 - 0.3 * t / dur)
+    fade = min(int(SR * 0.015), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.4)
+
+def synth_pu_doble():
+    """x2: dos notas separadas por octava sonando juntas = duplicacion."""
+    dur = 0.4
+    n = int(SR * dur)
+    t = np.linspace(0, dur, n)
+    f_grave = 440    # A4
+    f_agudo = 880    # A5 (octava exacta)
+    ph1 = 2 * np.pi * f_grave * t
+    ph2 = 2 * np.pi * f_agudo * t
+    # ambas ondas juntas + un tremolo lento que las "separa" ritmicamente
+    trem = 0.75 + 0.25 * np.sin(2 * np.pi * 6 * t)
+    wave = (np.sin(ph1) * 0.4 + np.sin(ph1 * 2) * 0.12
+            + (np.sin(ph2) * 0.4 + np.sin(ph2 * 2) * 0.12) * trem)
+    env = np.exp(-t * 3.5)
+    fade = min(int(SR * 0.012), n)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    return np_to_sound(wave * env, vol=0.42)
+
+SND_PU = {
+    "estrella": synth_pu_estrella(),
+    "vida":     synth_pu_vida(),
+    "reloj":    synth_pu_reloj(),
+    "doble":    synth_pu_doble(),
+}
+
+def sfx_power_up(pu_id):
+    snd = SND_PU.get(pu_id)
+    if snd:
+        snd.set_volume(0.55 * config["volumen"])
+        snd.play()
+
 def synth_game_over():
     """Sonido de game over: acorde menor descendente, sombrio."""
     notas = [392, 311, 233]  # G4 Eb4 Bb3 descendente
@@ -3694,19 +3792,40 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     # --- CAPA 2: mutacion de timbre ya aplicada a las notas del nudo ---
 
-    # --- power-ups: notas especiales cada ~25s durante el nudo ---
-    intervalo_pu = rng.randint(22000, 30000)  # ms entre power-ups
-    t_pu = t_intro_fin + intervalo_pu
-    while t_pu < t_nudo_fin - 5000:
-        col_pu = rng.randint(0, num_columnas - 1)
-        tipo_pu = rng.choice(POWER_UPS)
-        notas_jugador.append({
-            "cols": [col_pu], "midis": [notas_columnas[col_pu]],
-            "tiempo": int(t_pu), "es_acorde": False,
-            "parte": "nudo", "hold": 0,
-            "power_up": tipo_pu["id"],
-        })
-        t_pu += rng.randint(22000, 30000)
+    # --- power-ups: cantidad variable por cancion (decidida por seed) ---
+    #   ~25% ninguno   ~50% uno solo   ~20% dos o tres   ~5% varios (4-5)
+    # Asi la aparicion se siente organica: a veces la cancion no trae nada,
+    # a veces un premio, y ocasionalmente una lluvia.
+    _roll_pu = rng.random()
+    if _roll_pu < 0.25:
+        cantidad_pu = 0
+    elif _roll_pu < 0.75:
+        cantidad_pu = 1
+    elif _roll_pu < 0.95:
+        cantidad_pu = rng.randint(2, 3)
+    else:
+        cantidad_pu = rng.randint(4, 5)
+    if cantidad_pu > 0:
+        # distribuir en la duracion util del nudo, con un jitter aleatorio
+        margen_ini = 8000
+        margen_fin = 5000
+        dur_util = max(1, (t_nudo_fin - margen_fin) - (t_intro_fin + margen_ini))
+        for i in range(cantidad_pu):
+            # posicion base equiespaciada + jitter de +/- 20% del segmento
+            base = (t_intro_fin + margen_ini
+                    + int(dur_util * (i + 0.5) / cantidad_pu))
+            jitter = rng.randint(-int(dur_util / cantidad_pu * 0.2),
+                                  int(dur_util / cantidad_pu * 0.2))
+            t_pu = max(t_intro_fin + margen_ini,
+                       min(t_nudo_fin - margen_fin, base + jitter))
+            col_pu = rng.randint(0, num_columnas - 1)
+            tipo_pu = rng.choice(POWER_UPS)
+            notas_jugador.append({
+                "cols": [col_pu], "midis": [notas_columnas[col_pu]],
+                "tiempo": int(t_pu), "es_acorde": False,
+                "parte": "nudo", "hold": 0,
+                "power_up": tipo_pu["id"],
+            })
 
     return {
         "bpm":            BPM,
@@ -6233,11 +6352,13 @@ while corriendo:
                         ahora_rel = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
                         midi_a_tocar = midi_fijo
                         mejor_dist = 99999
+                        mejor_es_pu = False   # si la mejor nota es un power-up, no sonar melodica
                         for g in partida["notas_cayendo"]:
                             if col in g["cols"]:
                                 d = abs(g["tiempo_ms"] - ahora_rel)
                                 if d < mejor_dist:
                                     mejor_dist = d
+                                    mejor_es_pu = bool(g.get("power_up"))
                                     idx_col = g["cols"].index(col)
                                     if idx_col < len(g.get("midis", [])):
                                         midi_a_tocar = g["midis"][idx_col]
@@ -6250,7 +6371,11 @@ while corriendo:
                         else:
                             vol_nota = 0.7
 
-                        snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
+                        # solo tocar la nota melodica si la mejor no es un power-up
+                        # (los power-ups tienen su propio SFX que se dispara al acertar)
+                        snd_tocar = None
+                        if not (mejor_es_pu and mejor_dist < partida.get("w_hit", 150)):
+                            snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
                         if snd_tocar:
                             # paneo segun posicion de la columna (izq a der)
                             num_cols_t = partida["dificultad"]["columnas"]
@@ -6301,7 +6426,7 @@ while corriendo:
                                                     crear_texto_flotante(cx, zy_p - 30, pu_def["nombre"], pu_def["color"], True)
                                                 crear_explosion(cx, zy_p, 80, color=pu_def["color"])
                                                 crear_shake(6)
-                                                sfx_combo(15)
+                                                sfx_power_up(pu_id)
                                                 partida["combo"] += 1
                                                 if partida["combo"] > partida["max_combo"]:
                                                     partida["max_combo"] = partida["combo"]
@@ -6648,6 +6773,7 @@ while corriendo:
                                     partida["efectos_activos"][pu_id_a] = ahora + pu_def_a["dur"]
                                     crear_texto_flotante(cxa, zy_p - 30, pu_def_a["nombre"], pu_def_a["color"], True)
                                 crear_explosion(cxa, zy_p, 80, color=pu_def_a["color"])
+                                sfx_power_up(pu_id_a)
                             continue  # power-up consumido, no vuelve a la lista
                         # acreditar como PERFECTO
                         partida["combo"] += 1
