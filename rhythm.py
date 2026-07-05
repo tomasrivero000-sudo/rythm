@@ -496,11 +496,17 @@ def synth_clap(rng):
     return np_to_sound(wave)
 
 def synth_clave(rng):
-    dur = rng.uniform(0.02, 0.06)
-    freq = rng.uniform(800, 2500)
+    # rango de frecuencia realista para clave (antes 800-2500 Hz llegaba a un
+    # "bing" agudo de campanilla; una clave real esta entre 1000-1800 Hz)
+    dur = rng.uniform(0.03, 0.07)
+    freq = rng.uniform(1000, 1800)
     n = int(SR * dur)
     t = np.linspace(0, dur, n)
-    env = np.exp(-t * rng.uniform(40, 100))
+    env = np.exp(-t * rng.uniform(35, 70))
+    # fade-out corto para evitar click al cortar
+    fade = min(int(SR * 0.003), n // 4)
+    if fade > 0:
+        env[-fade:] *= np.linspace(1, 0, fade)
     wave = np.sin(2 * np.pi * freq * t) * env
     return np_to_sound(wave)
 
@@ -3105,7 +3111,7 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
             if p["clap"][i] and kit["clap"]:
                 percusion.append({"tiempo": t, "sample": "clap", "vol": 0.10})
             if p["clave"][i] and kit["clave"]:
-                percusion.append({"tiempo": t, "sample": "clave", "vol": 0.04})
+                percusion.append({"tiempo": t, "sample": "clave", "vol": 0.03})
             if p["agogo"][i] and kit["agogo"]:
                 percusion.append({"tiempo": t, "sample": "agogo", "vol": 0.03})
             if es_fill and p["fill"][i]:
