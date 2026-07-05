@@ -272,8 +272,8 @@ PROGRESIONES = [
 GRADOS_DOMINANTE = {4}   # el V
 
 DIFICULTADES = {
-    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.30, "bpm_mult": 0.75, "vel_mult": 0.60},
-    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.34, "bpm_mult": 0.80, "vel_mult": 0.70},
+    1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.20, "bpm_mult": 0.70, "vel_mult": 0.60},
+    2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.26, "bpm_mult": 0.75, "vel_mult": 0.70},
     3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.38, "bpm_mult": 0.85, "vel_mult": 0.75},
     4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.65, "bpm_mult": 0.85, "vel_mult": 0.80},
     5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.75, "bpm_mult": 0.90, "vel_mult": 0.85},
@@ -3485,6 +3485,13 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         # piso minimo por nivel
         _niv_d = dif.get("nivel", 1)
         dens_local = max(dens_local, 0.15 + _niv_d * 0.055)
+        # cap absoluto en niveles faciles: elimina el peor caso de canciones
+        # densas por genero (antes maximo 1.39 notas/s en nivel 1, muy alto).
+        # nivel 1: cap 0.32   nivel 2: cap 0.38
+        if _niv_d == 1:
+            dens_local = min(dens_local, 0.32)
+        elif _niv_d == 2:
+            dens_local = min(dens_local, 0.38)
         ca = compas_armonico if compas_armonico is not None else compas_global
         grado_actual = progresion[ca % len(progresion)]
         tonos_ac = tonos_acorde(tonica + 12, escala, grado_actual)
