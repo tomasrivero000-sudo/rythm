@@ -6490,6 +6490,12 @@ while corriendo:
         # bajo, emision de notas, posiciones y timing de hits — la cancion
         # entera se ralentiza de forma coherente y sin saltos de posicion.
         ahora_real = ahora_ms - partida["inicio"]
+        # ahora_ms se tomo al INICIO del frame, pero si la partida se creo en
+        # este mismo frame (la carga tarda segundos), 'inicio' es mas reciente
+        # y ahora_real sale negativo -> el reloj arrancaria en el pasado
+        # (sintoma: teclas blancas de AUTO, notas retrasadas). Clamp a 0.
+        if ahora_real < 0:
+            ahora_real = 0
         _dt_real = ahora_real - partida.get("_t_real_prev", ahora_real)
         partida["_t_real_prev"] = ahora_real
         _dt_real = max(0, min(_dt_real, 250))   # clamp por pausas/lag
