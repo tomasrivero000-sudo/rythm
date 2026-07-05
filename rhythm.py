@@ -2700,9 +2700,11 @@ def dibujar_input_nombre(nombre_actual):
 def get_dificultad(seed):
     if seed <= 0:
         d = dict(DIFICULTADES[1]); d["nivel"] = 1; return d
-    # mas tramos (y mas anchos) en la zona facil/normal/intermedia
-    tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
-              7100, 7800, 8400, 9000, 9500, 9999]
+    # FACIL y FACIL+ ocupan el 25% inicial del selector (antes 9%) para que
+    # el jugador nuevo tenga mas seeds jugables. Los tramos medios y altos
+    # se comprimen proporcionalmente, manteniendo GOD y CHAOS al final.
+    tramos = [1500, 2500, 3200, 3800, 4400, 5000, 5600, 6200, 6800,
+              7300, 7800, 8300, 8800, 9400, 9999]
     for i, tope in enumerate(tramos):
         if seed <= tope:
             d = dict(DIFICULTADES[i + 1]); d["nivel"] = i + 1; return d
