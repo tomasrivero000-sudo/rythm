@@ -7788,17 +7788,33 @@ def linein_procesar_eventos(partida_ref):
             break
 
 def cargar_linein_notas():
-    global linein_notas_cal
+    global linein_notas_cal, LINEIN_OFFSET_MS
     try:
         with open(LINEIN_FILE, "r") as f:
-            linein_notas_cal = {int(k): v for k, v in json.load(f).items()}
+            data = json.load(f)
+            if "notas" in data:
+                # formato nuevo: {notas: {col: freq}, offset: ms, device: nombre}
+                linein_notas_cal = {int(k): v for k, v in data["notas"].items()}
+                LINEIN_OFFSET_MS = data.get("offset", 80)
+            else:
+                # formato viejo: {col: freq} directo
+                linein_notas_cal = {int(k): v for k, v in data.items()}
     except:
         linein_notas_cal = {}
 
 def guardar_linein_notas():
     try:
+        # buscar nombre del dispositivo activo
+        dev_nombre = ""
+        if linein_devices and linein_dev_idx < len(linein_devices):
+            dev_nombre = linein_devices[linein_dev_idx].get("nombre", "")
+        data = {
+            "notas": {str(k): v for k, v in linein_notas_cal.items()},
+            "offset": LINEIN_OFFSET_MS,
+            "device": dev_nombre,
+        }
         with open(LINEIN_FILE, "w") as f:
-            json.dump({str(k): v for k, v in linein_notas_cal.items()}, f, indent=2)
+            json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Error guardando calibracion: {e}")
 
@@ -7980,6 +7996,39 @@ def dibujar_calibracion_linein():
     pantalla.blit(inst, (cx - inst.get_width() // 2, inst_y))
 
 cargar_linein_notas()
+
+# auto-activar line-in si hay calibracion guardada
+if LINEIN_DISPONIBLE and linein_notas_cal:
+    try:
+        _saved_dev = ""
+        try:
+            with open(LINEIN_FILE, "r") as _f:
+                _saved = json.load(_f)
+                _saved_dev = _saved.get("device", "")
+        except:
+            pass
+        listar_dispositivos_entrada()
+        _dev_encontrado = None
+        for _i, _d in enumerate(linein_devices):
+            if _saved_dev and _saved_dev in _d["nombre"]:
+                _dev_encontrado = _d
+                linein_dev_idx = _i
+                break
+        if not _dev_encontrado and linein_devices:
+            _dev_encontrado = linein_devices[0]
+            linein_dev_idx = 0
+        if _dev_encontrado:
+            linein_stream = sd.InputStream(
+                device=_dev_encontrado["idx"],
+                samplerate=LINEIN_SR, channels=1,
+                blocksize=LINEIN_BLOCK, dtype="float32",
+                callback=_linein_callback)
+            linein_stream.start()
+            linein_activo = True
+            print(f"Line-in auto-activado: {_dev_encontrado['nombre']} (offset {LINEIN_OFFSET_MS}ms)")
+    except Exception as e:
+        print(f"No se pudo auto-activar line-in: {e}")
+
 
 # --- MEDICION DE LATENCIA DEL LINE-IN ---
 latencia_muestras = []
