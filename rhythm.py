@@ -5074,6 +5074,7 @@ def tick_background(partida, ahora):
         if jug_done:
             partida["indice_jugador"] = 0
         partida["_arranco_audio"] = False   # re-aplicar anti-avalancha en el nuevo loop
+        partida["_arranco_notas"] = False  # re-aplicar anti-avalancha de notas
         loop_off = partida["loop_offset"]
 
     # anti-avalancha: si hubo un hueco de timing (lag de carga), muchos eventos
@@ -7619,22 +7620,45 @@ linein_energy_prev = 0.0   # energia del bloque anterior (para detectar ataque)
 LINEIN_ATTACK_RATIO = 1.8  # ratio de energia actual/anterior para detectar ataque
 
 def _detectar_pitch(data):
+    """Detecta las frecuencias fundamentales del audio. Devuelve
+    (lista_de_freqs, energia_rms). Puede devolver 1 o 2 frecuencias
+    si detecta un acorde (dos picos prominentes en el espectro)."""
     mono = data[:, 0] if data.ndim > 1 else data
     rms = float(np.sqrt(np.mean(mono ** 2)))
     if rms < LINEIN_THRESHOLD_OFF:
-        return 0.0, rms
+        return [], rms
     ventana = mono * np.hanning(len(mono))
     espectro = np.abs(np.fft.rfft(ventana))
     freqs = np.fft.rfftfreq(len(ventana), 1.0 / LINEIN_SR)
     mask = (freqs >= 60) & (freqs <= 2000)
     if not np.any(mask):
-        return 0.0, rms
+        return [], rms
     espectro_m = espectro[mask]
     freqs_m = freqs[mask]
-    idx_pico = np.argmax(espectro_m)
-    if espectro_m[idx_pico] < np.mean(espectro_m) * 2.5:
-        return 0.0, rms
-    return float(freqs_m[idx_pico]), rms
+    promedio = np.mean(espectro_m)
+    if promedio < 1e-10:
+        return [], rms
+    # buscar picos prominentes (>2.5x el promedio)
+    umbral_pico = promedio * 2.5
+    resultado = []
+    # primer pico (el mas alto)
+    idx1 = np.argmax(espectro_m)
+    if espectro_m[idx1] >= umbral_pico:
+        resultado.append(float(freqs_m[idx1]))
+        # buscar segundo pico: enmascarar alrededor del primero (±30Hz)
+        # para encontrar un pico independiente (otra nota, no armonico)
+        mask2 = np.abs(freqs_m - freqs_m[idx1]) > 30
+        # tambien excluir armonicos del primero (2x, 3x, 0.5x)
+        f1 = freqs_m[idx1]
+        for mult in [0.5, 2.0, 3.0]:
+            mask2 = mask2 & (np.abs(freqs_m - f1 * mult) > 25)
+        if np.any(mask2):
+            espectro_m2 = espectro_m.copy()
+            espectro_m2[~mask2] = 0
+            idx2 = np.argmax(espectro_m2)
+            if espectro_m2[idx2] >= umbral_pico:
+                resultado.append(float(freqs_m[idx2]))
+    return resultado, rms
 
 def _nota_mas_cercana(freq, notas_cal):
     if freq <= 0 or not notas_cal:
@@ -7650,21 +7674,17 @@ def _nota_mas_cercana(freq, notas_cal):
     return mejor_col if mejor_dist <= 1.5 else -1
 
 def _linein_callback(indata, frames, time_info, status):
-    """Callback con deteccion de ATAQUE por pico de energia.
-    Dos formas de triggerear una nota nueva:
-    1. ONSET: silencio sostenido -> nota (como antes)
-    2. ATAQUE: la energia sube de golpe (ratio > 1.8x) incluso sin silencio
-       previo. Esto permite tocar dos veces seguidas la misma tecla sin
-       que el sustain de la primera bloquee la segunda."""
+    """Callback con deteccion de ATAQUE y soporte de ACORDES (2 notas).
+    _detectar_pitch devuelve lista de frecuencias; cada una se mapea
+    a una columna y se encola como evento independiente."""
     global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
     global linein_nota_activa, linein_en_silencio, linein_silencio_desde
     global linein_energy_prev
-    freq, rms = _detectar_pitch(indata)
+    freqs_det, rms = _detectar_pitch(indata)
     linein_energy = rms
-    linein_freq_actual = freq
+    linein_freq_actual = freqs_det[0] if freqs_det else 0.0
     ahora = pygame.time.get_ticks()
 
-    # detectar ataque: pico subito de energia (nota nueva golpeada)
     es_ataque = (rms >= LINEIN_THRESHOLD_ON
                  and linein_energy_prev > 0.001
                  and rms / linein_energy_prev >= LINEIN_ATTACK_RATIO)
@@ -7680,35 +7700,40 @@ def _linein_callback(indata, frames, time_info, status):
         return
 
     linein_silencio_desde = 0
-
-    if freq <= 0:
+    if not freqs_det:
         return
 
-    col = _nota_mas_cercana(freq, linein_notas_cal)
-    if col < 0:
+    cols_det = set()
+    for freq in freqs_det:
+        col = _nota_mas_cercana(freq, linein_notas_cal)
+        if col >= 0:
+            cols_det.add(col)
+    if not cols_det:
         return
 
-    # disparar si: onset desde silencio, O ataque detectado, O cambio de nota
     disparar = False
     if linein_en_silencio and rms >= LINEIN_THRESHOLD_ON:
         disparar = True
         linein_en_silencio = False
     elif es_ataque:
         disparar = True
-    elif not linein_en_silencio and col != linein_nota_activa:
-        disparar = True
+    elif not linein_en_silencio:
+        for col in cols_det:
+            if col != linein_nota_activa:
+                disparar = True
+                break
 
     if disparar:
-        # debounce
-        if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
-            return
-        linein_nota_activa = col
-        linein_last_col = col
+        for col in cols_det:
+            if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
+                continue
+            try:
+                linein_queue.put_nowait(("down", col, ahora))
+            except queue.Full:
+                pass
+        linein_nota_activa = min(cols_det)
+        linein_last_col = linein_nota_activa
         linein_last_time = ahora
-        try:
-            linein_queue.put_nowait(("down", col, ahora))
-        except queue.Full:
-            pass
 
 def linein_iniciar():
     global linein_stream, linein_activo
@@ -9343,6 +9368,13 @@ while corriendo:
             if not partida["terminada"]:
                 _lo = partida.get("loop_offset", 0)
                 njug = partida["cancion"]["notas_jugador"]
+                # anti-avalancha del jugador: al arrancar o al loopear,
+                # saltar notas cuyo tiempo ya paso (no se pueden tocar)
+                if not partida.get("_arranco_notas"):
+                    while (partida["indice_jugador"] < len(njug)
+                           and njug[partida["indice_jugador"]]["tiempo"] + _lo < ahora - 200):
+                        partida["indice_jugador"] += 1
+                    partida["_arranco_notas"] = True
                 while partida["indice_jugador"] < len(njug) and ahora >= njug[partida["indice_jugador"]]["tiempo"] + _lo - ANTICIPACION:
                     n = njug[partida["indice_jugador"]]
                     hold_ms = n.get("hold", 0)
