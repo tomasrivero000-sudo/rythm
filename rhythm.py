@@ -7869,7 +7869,9 @@ def dibujar_linein_setup():
 
     opciones_txt = []
     if linein_devices:
-        opciones_txt.append("ENTER = CALIBRAR CON ESTE DISPOSITIVO")
+        opciones_txt.append("ENTER = CALIBRAR NOTAS")
+    if linein_activo or linein_notas_cal:
+        opciones_txt.append("D = MEDIR LATENCIA (RECOMENDADO)")
     if linein_notas_cal and not linein_activo:
         opciones_txt.append("A = ACTIVAR LINE-IN")
     if linein_activo:
@@ -7877,7 +7879,7 @@ def dibujar_linein_setup():
     opciones_txt.append("ESC = VOLVER")
 
     for i, txt in enumerate(opciones_txt):
-        col = (140, 230, 100) if "ACTIVAR" in txt else GRIS_MED
+        col = (255, 180, 60) if "LATENCIA" in txt else ((140, 230, 100) if "ACTIVAR" in txt else GRIS_MED)
         t = fuente_chica.render(txt, True, col)
         pantalla.blit(t, (cx - t.get_width() // 2, 515 + i * 20))
 
@@ -7941,6 +7943,82 @@ def dibujar_calibracion_linein():
     pantalla.blit(inst, (cx - inst.get_width() // 2, inst_y))
 
 cargar_linein_notas()
+
+# --- MEDICION DE LATENCIA DEL LINE-IN ---
+latencia_muestras = []
+latencia_flash_time = 0
+latencia_flash_activo = False
+latencia_esperando = False
+latencia_intervalo = 2200
+latencia_resultado = -1
+LATENCIA_NUM_MUESTRAS = 6
+
+def dibujar_medir_latencia():
+    pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+    ahora = pygame.time.get_ticks()
+    titulo = fuente.render("MEDIR LATENCIA", True, (255, 180, 60))
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 30))
+    pygame.draw.line(pantalla, (255, 180, 60), (60, 65), (ANCHO - 60, 65), 1)
+    n_hechas = len(latencia_muestras)
+    if n_hechas < LATENCIA_NUM_MUESTRAS:
+        inst = fuente_chica.render("TOCA CUALQUIER NOTA CUANDO VES EL CIRCULO BLANCO", True, GRIS_MED)
+        pantalla.blit(inst, (cx - inst.get_width() // 2, 80))
+        prog = fuente_chica.render(f"MUESTRA {n_hechas + 1} DE {LATENCIA_NUM_MUESTRAS}", True, GRIS)
+        pantalla.blit(prog, (cx - prog.get_width() // 2, 105))
+        radio = 80
+        cy = ALTO // 2 - 20
+        t_desde_flash = ahora - latencia_flash_time
+        flash_dur = 200
+        if latencia_flash_activo and t_desde_flash < flash_dur:
+            pygame.draw.circle(pantalla, BLANCO, (cx, cy), radio)
+            pygame.draw.circle(pantalla, (200, 200, 200), (cx, cy), radio, 3)
+            lbl = fuente.render("TOCA!", True, NEGRO)
+            pantalla.blit(lbl, (cx - lbl.get_width() // 2, cy - lbl.get_height() // 2))
+        elif latencia_esperando:
+            pygame.draw.circle(pantalla, (40, 40, 50), (cx, cy), radio)
+            pygame.draw.circle(pantalla, GRIS, (cx, cy), radio, 2)
+            wait = fuente_chica.render("ESPERANDO...", True, GRIS)
+            pantalla.blit(wait, (cx - wait.get_width() // 2, cy - 8))
+        else:
+            t_hasta_flash = latencia_intervalo - t_desde_flash
+            if t_hasta_flash < 800:
+                p = 1.0 - (t_hasta_flash / 800.0)
+                r_pre = int(radio * 0.3 + radio * 0.7 * p)
+                g_pre = int(30 + 40 * p)
+                pygame.draw.circle(pantalla, (g_pre, g_pre, g_pre + 10), (cx, cy), r_pre)
+                pygame.draw.circle(pantalla, GRIS, (cx, cy), r_pre, 2)
+            else:
+                pygame.draw.circle(pantalla, (25, 25, 30), (cx, cy), radio)
+                pygame.draw.circle(pantalla, (40, 40, 45), (cx, cy), radio, 2)
+            lbl = fuente_chica.render("ESPERA...", True, GRIS)
+            pantalla.blit(lbl, (cx - lbl.get_width() // 2, cy - 8))
+        if latencia_muestras:
+            y_m = ALTO // 2 + 100
+            for i, ms in enumerate(latencia_muestras):
+                col_m = (140, 230, 100) if ms < 150 else (255, 180, 60) if ms < 250 else (255, 100, 100)
+                mt = fuente_chica.render(f"#{i+1}: {ms}ms", True, col_m)
+                pantalla.blit(mt, (cx - 120 + (i % 3) * 100, y_m + (i // 3) * 20))
+        esc = fuente_chica.render("ESC = CANCELAR", True, GRIS)
+        pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 35))
+    else:
+        promedio = sum(latencia_muestras) // len(latencia_muestras)
+        res_titulo = fuente.render("RESULTADO", True, (140, 230, 100))
+        pantalla.blit(res_titulo, (cx - res_titulo.get_width() // 2, 130))
+        res_val = fuente_grande.render(f"{promedio}ms", True, BLANCO)
+        pantalla.blit(res_val, (cx - res_val.get_width() // 2, 190))
+        y_m = 280
+        for i, ms in enumerate(latencia_muestras):
+            col_m = (140, 230, 100) if ms < 150 else (255, 180, 60) if ms < 250 else (255, 100, 100)
+            mt = fuente_chica.render(f"#{i+1}: {ms}ms", True, col_m)
+            pantalla.blit(mt, (cx - 120 + (i % 3) * 100, y_m + (i // 3) * 22))
+        _min, _max = min(latencia_muestras), max(latencia_muestras)
+        rng_txt = fuente_chica.render(f"MIN: {_min}ms  MAX: {_max}ms  VARIANZA: {_max - _min}ms", True, GRIS)
+        pantalla.blit(rng_txt, (cx - rng_txt.get_width() // 2, 350))
+        aplicar = fuente_chica.render(f"ENTER = APLICAR {promedio}ms COMO COMPENSACION", True, (140, 230, 100))
+        pantalla.blit(aplicar, (cx - aplicar.get_width() // 2, 420))
+        reintentar = fuente_chica.render("R = REPETIR     ESC = CANCELAR", True, GRIS)
+        pantalla.blit(reintentar, (cx - reintentar.get_width() // 2, 450))
 
 ESTADO         = "menu"
 partida        = None
@@ -8379,6 +8457,26 @@ while corriendo:
                             linein_activo = True
                         except Exception as e:
                             print(f"Error: {e}")
+                elif evento.key == pygame.K_d and (linein_activo or linein_notas_cal):
+                    # medir latencia
+                    sfx_confirm()
+                    if not linein_activo and linein_devices:
+                        dev_info = linein_devices[linein_dev_idx]
+                        try:
+                            linein_stream = sd.InputStream(
+                                device=dev_info["idx"],
+                                samplerate=LINEIN_SR, channels=1,
+                                blocksize=LINEIN_BLOCK, dtype="float32",
+                                callback=_linein_callback)
+                            linein_stream.start()
+                            linein_activo = True
+                        except Exception as e:
+                            print(f"Error: {e}")
+                    latencia_muestras.clear()
+                    latencia_flash_time = pygame.time.get_ticks()
+                    latencia_flash_activo = False
+                    latencia_esperando = False
+                    ESTADO = "medir_latencia"
 
         elif ESTADO == "calibrar_linein":
             if evento.type == pygame.KEYDOWN:
@@ -8393,25 +8491,20 @@ while corriendo:
                         ESTADO = "config"
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if linein_cal_col >= 8:
-                        # guardar y activar
                         guardar_linein_notas()
                         sfx_confirm()
-                        # dejar line-in activo para jugar
                         ESTADO = "config"
                     elif linein_cal_estado == "idle":
-                        # empezar a escuchar
                         linein_cal_estado = "escuchando"
                         linein_cal_muestras = []
                         sfx_select()
                     elif linein_cal_estado == "escuchando":
-                        # confirmar la nota actual si hay frecuencia estable
                         if linein_freq_actual > 0:
                             linein_notas_cal[linein_cal_col] = round(linein_freq_actual, 1)
                             sfx_confirm()
                             linein_cal_estado = "idle"
                             linein_cal_col += 1
                 elif evento.key == pygame.K_r and linein_cal_col >= 8:
-                    # recalibrar desde cero
                     linein_notas_cal.clear()
                     linein_cal_col = 0
                     linein_cal_estado = "idle"
@@ -8421,6 +8514,30 @@ while corriendo:
                 elif evento.key == pygame.K_DOWN and linein_cal_col < 8 and linein_cal_estado == "idle":
                     linein_cal_col += 1
                     sfx_select()
+
+        elif ESTADO == "medir_latencia":
+            if evento.type == pygame.KEYDOWN:
+                if hasattr(evento, "_linein_col"):
+                    if latencia_esperando and latencia_flash_time > 0:
+                        delay = pygame.time.get_ticks() - latencia_flash_time
+                        if delay < 1500:
+                            latencia_muestras.append(delay)
+                            latencia_esperando = False
+                            latencia_flash_activo = False
+                            latencia_flash_time = pygame.time.get_ticks()
+                    continue
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "linein_setup"
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if len(latencia_muestras) >= LATENCIA_NUM_MUESTRAS:
+                        LINEIN_OFFSET_MS = sum(latencia_muestras) // len(latencia_muestras)
+                        sfx_confirm()
+                        ESTADO = "linein_setup"
+                elif evento.key == pygame.K_r:
+                    latencia_muestras.clear()
+                    latencia_flash_time = pygame.time.get_ticks()
+                    latencia_flash_activo = False
+                    latencia_esperando = False
 
         elif ESTADO == "input_nombre":
             if evento.type == pygame.KEYDOWN:
@@ -8996,6 +9113,26 @@ while corriendo:
     elif ESTADO == "calibrar_linein":
         tick_musica_menu()
         dibujar_calibracion_linein()
+
+    elif ESTADO == "medir_latencia":
+        tick_musica_menu()
+        # logica del flash: disparar un flash cada latencia_intervalo ms
+        _ahora_lat = pygame.time.get_ticks()
+        if len(latencia_muestras) < LATENCIA_NUM_MUESTRAS:
+            _t_desde = _ahora_lat - latencia_flash_time
+            if not latencia_flash_activo and not latencia_esperando and _t_desde >= latencia_intervalo:
+                # disparar flash
+                latencia_flash_time = _ahora_lat
+                latencia_flash_activo = True
+                latencia_esperando = True
+            elif latencia_flash_activo and _t_desde >= 200:
+                # el flash visual termino (200ms) pero seguimos esperando input
+                latencia_flash_activo = False
+            # timeout: si paso mucho tiempo sin respuesta, resetear
+            if latencia_esperando and _t_desde > 1500:
+                latencia_esperando = False
+                latencia_flash_activo = False
+        dibujar_medir_latencia()
 
     elif ESTADO == "linein_setup":
         tick_musica_menu()
