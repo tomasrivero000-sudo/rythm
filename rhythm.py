@@ -8,6 +8,7 @@ import sys
 import threading
 import math
 import traceback
+import queue
 
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  RHYTHM - Juego ritmico procedural                                     ║
@@ -235,12 +236,75 @@ COLUMNAS = {
 
 LABELS = ["A", "S", "D", "F", "G", "H", "J", "K"]
 
+# --- SOPORTE DE CONTROLADOR (GAMEPAD) ---
+# Inicializa el primer joystick disponible. Los botones se mapean a columnas
+# de juego y a navegacion de menus. Compatible con Xbox, PlayStation, y
+# genericos. El mapeo es configurable abajo.
+pygame.joystick.init()
+joystick = None
+if pygame.joystick.get_count() > 0:
+    joystick = pygame.joystick.Joystick(0)
+    joystick.init()
+    print(f"Controlador detectado: {joystick.get_name()}")
+    print(f"  Botones: {joystick.get_numbuttons()}, Ejes: {joystick.get_numaxes()}, Hats: {joystick.get_numhats()}")
+else:
+    print("No se detecto controlador (solo teclado)")
+
+# Mapeo de botones del gamepad a columnas de juego.
+# Orden pensado para Xbox/PS: las 4 caras (A/B/X/Y o Cross/Circle/Square/Triangle)
+# + bumpers + triggers para 6-8 columnas.
+# Xbox:  A=0 B=1 X=2 Y=3 LB=4 RB=5 LT_btn=6 RT_btn=7
+# PS:    X=0 O=1 Sq=2 Tri=3 L1=4 R1=5 L2_btn=6 R2_btn=7
+# Los ejes analogicos (triggers) se tratan aparte si es necesario.
+PAD_COLUMNAS = {
+    0: 0,   # A / Cross       -> col 0
+    1: 1,   # B / Circle      -> col 1
+    2: 2,   # X / Square      -> col 2
+    3: 3,   # Y / Triangle    -> col 3
+    4: 4,   # LB / L1         -> col 4
+    5: 5,   # RB / R1         -> col 5
+    6: 6,   # Back/Select/L2  -> col 6
+    7: 7,   # Start/R2        -> col 7
+}
+# Botones de navegacion (para menus). Estos NO mapean a columnas.
+PAD_CONFIRM = {0}       # A / Cross = confirmar
+PAD_BACK    = {1}       # B / Circle = atras/ESC
+PAD_START   = {7, 11}   # Start / Options = pausar (varía por controlador)
+# Umbral del eje digital del hat/dpad
+PAD_AXIS_THRESHOLD = 0.5
+
+def pad_col_down(button):
+    """Devuelve la columna (0-7) si el boton mapea a una, o None."""
+    return PAD_COLUMNAS.get(button)
+
+def pad_es_confirm(button):
+    return button in PAD_CONFIRM
+
+def pad_es_back(button):
+    return button in PAD_BACK
+
+def pad_es_start(button):
+    return button in PAD_START
+
 ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
     "menor":       [0, 2, 3, 5, 7, 8, 10, 12],
     "pentatonica": [0, 2, 4, 7, 9, 12, 14, 16],
     "arm_menor":   [0, 2, 3, 5, 7, 8, 11, 12],
     "blues":       [0, 3, 5, 7, 10, 12, 15, 17],
+}
+
+# Grados pentatonicos derivados de cada escala. Cuando el jugador pega notas,
+# las columnas se mapean a estos grados para que CUALQUIER combinacion de
+# columnas suene consonante entre si (la pentatonica no tiene intervalos de
+# segunda menor). El bajo y los acordes siguen usando la escala completa para
+# mantener estructura armonica, pero el jugador siempre toca "notas seguras".
+PENTA_GRADOS = {
+    "mayor":       [0, 1, 2, 4, 5],   # C D E G A (penta mayor clasica)
+    "menor":       [0, 2, 3, 4, 6],   # C Eb F G Bb (penta menor clasica)
+    "arm_menor":   [0, 2, 3, 4, 6],   # C Eb F G B (penta con sensible, sin choque)
+    "pentatonica": [0, 1, 2, 3, 4],   # ya es pentatonica, primeros 5 grados
+    "blues":       [0, 1, 2, 3, 4],   # los 5 grados clasicos del blues
 }
 
 ACORDES_PATRON = {
@@ -304,23 +368,40 @@ MODIFICADORES = [
     {"id": "niebla",     "nombre": "NIEBLA",      "desc": "notas aparecen desde la mitad", "mult": 1.6},
     {"id": "rafagas",    "nombre": "RAFAGAS",     "desc": "tramos densos y silencios", "mult": 1.3},
     {"id": "sudden",     "nombre": "SUDDEN DEATH","desc": "1 error = game over",     "mult": 2.0},
+    {"id": "monocromo",  "nombre": "MONOCROMO",   "desc": "power-ups y acordes sin marca distintiva", "mult": 1.25},
+    {"id": "apagon",     "nombre": "APAGON",      "desc": "las notas se desvanecen por momentos", "mult": 1.7},
 ]
 mods_activos = set()   # ids de modificadores seleccionados (modo libre)
 
 # mods "faciles" que pueden salir en el dado de los stages 2 y 3
-MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando", "niebla", "rafagas"]
+MODS_FACILES = ["espejo", "inverso", "veloz", "acelerando", "niebla", "rafagas", "monocromo", "apagon"]
 
 # --- perks roguelike: se eligen entre stages y se acumulan ---
+# categorias: def = defensivo (proteccion), ofe = ofensivo (puntos),
+#             mec = mecanico (facilita el juego)
 PERKS = [
-    {"id": "escudo",     "nombre": "ESCUDO",     "desc": "absorbe 3 misses",        "cat": "def"},
-    {"id": "corazon",    "nombre": "CORAZON",    "desc": "+5 vida maxima",           "cat": "def"},
-    {"id": "ventana",    "nombre": "VENTANA",    "desc": "timing 25% mas amplio",    "cat": "def"},
-    {"id": "multi",      "nombre": "MULTI",      "desc": "puntos x1.5",             "cat": "ofe"},
-    {"id": "combo_save", "nombre": "COMBO SAVE", "desc": "1er miss no rompe combo",  "cat": "ofe"},
-    {"id": "perfecto",   "nombre": "PERFECTO+",  "desc": "perfectos valen doble",    "cat": "ofe"},
-    {"id": "lento",      "nombre": "LENTO",      "desc": "notas 15% mas lentas",     "cat": "mec"},
-    {"id": "iman",       "nombre": "IMAN",       "desc": "zona perfecto expandida",  "cat": "mec"},
+    {"id": "escudo",     "nombre": "ESCUDO",     "desc": "3 misses no te bajan vida", "cat": "def"},
+    {"id": "corazon",    "nombre": "CORAZON",    "desc": "vida maxima +5",            "cat": "def"},
+    {"id": "ventana",    "nombre": "VENTANA",    "desc": "ventana de acierto 25% mas grande", "cat": "def"},
+    {"id": "resurreccion","nombre": "RESURRECCION","desc": "al morir, revives con 5 de vida (1 vez)", "cat": "def"},
+    {"id": "regen",      "nombre": "REGENERACION","desc": "+1 vida cada 20 de combo", "cat": "def"},
+    {"id": "multi",      "nombre": "MULTI",      "desc": "todos los puntos x1.5",     "cat": "ofe"},
+    {"id": "combo_save", "nombre": "COMBO SAVE", "desc": "el 1er miss no rompe combo (cd 15s)", "cat": "ofe"},
+    {"id": "perfecto",   "nombre": "PERFECTO+",  "desc": "cada PERFECT vale doble puntos", "cat": "ofe"},
+    {"id": "racha",      "nombre": "RACHA",      "desc": "el multiplicador de combo sube mas rapido", "cat": "ofe"},
+    {"id": "hold_master","nombre": "HOLD MASTER","desc": "las notas largas dan puntos x2", "cat": "ofe"},
+    {"id": "cazador",    "nombre": "CAZADOR",    "desc": "power-ups temporales duran el doble", "cat": "ofe"},
+    {"id": "lento",      "nombre": "LENTO",      "desc": "las notas bajan 15% mas lento", "cat": "mec"},
+    {"id": "iman",       "nombre": "IMAN",       "desc": "zona PERFECT mas amplia (mas facil clavar)", "cat": "mec"},
 ]
+
+# color de cada categoria de perk, usado en la pantalla de seleccion y HUD.
+# def = cyan (proteccion), ofe = naranja (dano/puntos), mec = verde (utilidad)
+COLOR_CAT = {
+    "def": (100, 200, 255),
+    "ofe": (255, 150, 60),
+    "mec": (140, 230, 100),
+}
 
 # power-ups: notas especiales durante el gameplay que dan efectos temporales
 POWER_UPS = [
@@ -560,7 +641,10 @@ def sintetizar_kit(rng):
     """Genera un kit de batería completo proceduralmente"""
     print("  Sintetizando kit...")
     kit_eq = rng.choice(EQ_TIPOS)
-    kit_intensity = rng.uniform(0.15, 0.4)
+    # intensidad bajada de 0.15-0.40 a 0.08-0.22: el kit sigue teniendo caracter
+    # pero deja de correr riesgo de quedar en franja espectral opuesta al
+    # instrumento del jugador (que tambien vamos a bajar). Mejor mezcla total.
+    kit_intensity = rng.uniform(0.08, 0.22)
     kit = {}
     kit["kick"]    = synth_kick(rng)
     kit["snare"]   = synth_snare(rng)
@@ -950,7 +1034,6 @@ INSTRUMENTOS_JUGADOR = {
     "SUB PLUCK":  "sub_pluck",
     "NOISE PITCH":"noise_pitch",
     "ORGAN FULL": "organ_full",
-    "SHIMMER":    "shimmer",
     "ATMOS NOISE":"atmos_noise",
     "FROZEN STR": "frozen_strings",
     "DREAM PAD":  "dream_pad",
@@ -969,7 +1052,7 @@ INST_SUSTAIN = {
     "VOX PAD", "PHASE PAD", "BELLPAD", "PWM LEAD", "LEAD", "WOBBLE",
     "ORGAN FULL", "FM BRASS", "DETUNE", "SINE", "TRIANGLE", "GROWL",
     "SYNTHBASS", "DIST GTR",
-    "SHIMMER", "ATMOS NOISE", "FROZEN STR", "DREAM PAD", "SPACE CHOIR", "ANALOG STR",
+    "ATMOS NOISE", "FROZEN STR", "DREAM PAD", "SPACE CHOIR", "ANALOG STR",
 }
 # hold maximo para instrumentos percusivos (ms)
 HOLD_MAX_PERCUSIVO = 800
@@ -993,7 +1076,7 @@ INST_FORMA = {
     "TRUMPET": "brass", "FM BRASS": "brass", "GROWL": "brass", "DIST GTR": "brass",
     "CHOIR": "choir", "SPACE CHOIR": "choir", "FORMANT": "choir",
     "WOBBLE": "wobble", "FM 3OP": "wobble",
-    "SHIMMER": "atmos", "ATMOS NOISE": "atmos",
+    "ATMOS NOISE": "atmos",
 }
 
 def dibujar_icono_inst(surf, forma, cx, cy, r, color):
@@ -1068,6 +1151,59 @@ def forma_de_instrumento(inst):
 def midi_a_freq(midi):
     return 440.0 * (2.0 ** ((midi - 69) / 12.0))
 
+_hpf_mask_cache = {}
+def filtro_hpf(wave, cutoff_hz=130):
+    """HPF (filtro pasa-altos) que quita el rumor sub-grave del sample
+    melodico del jugador. En electronica el rango debajo de ~130Hz es
+    territorio del kick y del bajo: cualquier contenido melodico ahi genera
+    lodo espectral que enturbia la mezcla. Al filtrarlo, las notas del jugador
+    ocupan claramente el rango medio-agudo, el bajo el rango grave, y ambos
+    dejan de competir por el mismo espacio.
+
+    Implementacion: HPF en dominio frecuencia via rfft (O(n log n), preciso).
+    Un HPF FIR con pocos taps no corta bien a 130Hz (necesitaria cientos de
+    taps); esta version es exacta y mas rapida. Usa una rampa suave de 60Hz
+    alrededor del cutoff para evitar ringing/pre-echo del corte brickwall.
+    La mascara se cachea por (n, cutoff) para no recalcularla en cada llamada."""
+    n = len(wave)
+    if n < 100:
+        return wave
+    key = (n, cutoff_hz)
+    if key not in _hpf_mask_cache:
+        freqs = np.fft.rfftfreq(n, 1.0 / SR)
+        fade = 60.0
+        _hpf_mask_cache[key] = np.clip(
+            (freqs - (cutoff_hz - fade / 2)) / fade, 0.0, 1.0)
+    mask = _hpf_mask_cache[key]
+    W = np.fft.rfft(wave)
+    return np.fft.irfft(W * mask, n)
+
+def reverb_ambiente(wave, mezcla=0.20):
+    """Aplica una reverb corta de sala compartida (early reflections).
+    3 taps con LPF suave (absorcion en agudos, como en una sala real). Se usa
+    con los mismos parametros sobre bajo y notas del jugador para que ambos
+    'vivan' en el mismo espacio virtual: eso los pega perceptualmente y hace
+    que dejen de sonar como capas aisladas."""
+    n = len(wave)
+    if n < 400:
+        return wave
+    # 3 delays cortos (early reflections). Los tiempos NO son multiplos entre
+    # si para evitar comb-filtering audible. Ganancia decreciente en el
+    # tiempo, como el decay natural de una sala.
+    delays_ms = [27, 45, 75]
+    ganancias = [0.32, 0.20, 0.12]
+    # LPF una sola vez sobre toda la wave (mas rapido que uno por tap):
+    # simula la absorcion de agudos que hacen las paredes.
+    kernel = np.hanning(7)
+    kernel /= kernel.sum()
+    dark = np.convolve(wave, kernel, mode="same")
+    tail = np.zeros(n)
+    for d_ms, g in zip(delays_ms, ganancias):
+        d = int(SR * d_ms / 1000)
+        if d < n:
+            tail[d:] += dark[:n - d] * g
+    return wave * (1 - mezcla) + tail * mezcla
+
 def synth_bajo(freq, duracion, estilo="round"):
     """Sintetiza una nota de bajo. estilo: round, pluck, sub, reese"""
     n = int(SR * duracion)
@@ -1101,6 +1237,10 @@ def synth_bajo(freq, duracion, estilo="round"):
     out[0] = wave[0]
     for i in range(1, n):
         out[i] = coef * out[i-1] + (1 - coef) * wave[i]
+    # reverb ambiente compartida con las notas del jugador: los ubica en el
+    # mismo espacio virtual asi bajo y melodia dejan de sonar como capas
+    # aisladas y se sienten como parte de un mismo mix.
+    out = reverb_ambiente(out, mezcla=0.14)
     return out
 
 def synth_nota(tipo, freq, duracion, rng_params):
@@ -1454,25 +1594,6 @@ def synth_nota(tipo, freq, duracion, rng_params):
         wave /= 2.5
         click = np.exp(-t * 100) * 0.3
         wave += click
-    elif tipo == "shimmer":
-        # pad con chorus de altisimas voces que se mueven lentamente
-        num_v = rng_params.get("num_voices", 8)
-        wave = np.zeros(n)
-        for v in range(num_v):
-            d = (v - num_v / 2) * rng_params.get("detune_wide", 0.012)
-            spd = rng_params.get("lfo_spd", 0.4) + v * 0.17
-            ph_off = v * 0.73
-            p = 2 * np.pi * freq * (1 + d) * t + np.sin(2 * np.pi * spd * t + ph_off) * 0.08
-            # armonicos superiores suaves para el brillo
-            wave += np.sin(p) * 0.25 + np.sin(p * 2) * 0.08 + np.sin(p * 3) * 0.03
-        # filtro pasa-bajos en tiempo real (IIR simple)
-        cutoff = rng_params.get("cutoff_lp", 0.04)
-        filtered = np.zeros(n)
-        prev = 0.0
-        for i in range(n):
-            prev = prev + cutoff * (wave[i] - prev)
-            filtered[i] = prev
-        wave = filtered
     elif tipo == "atmos_noise":
         # ruido filtrado que evoluciona con un LFO lento (viento / espacio)
         np_rng2 = np.random.RandomState(int(freq * 100) % 999999)
@@ -1607,7 +1728,7 @@ def synth_nota(tipo, freq, duracion, rng_params):
         "dist_gtr": 0.55, "wavefold": 0.6, "phase_pad": 0.65,
         "fm_brass": 0.65, "glass_harm": 0.65, "sub_pluck": 0.65,
         "noise_pitch": 0.6, "organ_full": 0.6,
-        "shimmer": 0.65, "atmos_noise": 0.55, "frozen_strings": 0.65,
+        "atmos_noise": 0.55, "frozen_strings": 0.65,
         "dream_pad": 0.65, "space_choir": 0.60, "analog_string": 0.62,
         "alien": 0.55, "broken": 0.55,
     }
@@ -1857,12 +1978,6 @@ def generar_params_instrumento(rng, tipo):
     elif tipo == "alien":
         params["attack"] = rng.uniform(0.01, 0.05); params["decay"] = rng.uniform(2, 5)
         params["sustain"] = rng.uniform(0.3, 0.6)
-    elif tipo == "shimmer":
-        params["attack"] = rng.uniform(0.1, 0.4); params["decay"] = rng.uniform(0.8, 2)
-        params["sustain"] = rng.uniform(0.7, 0.95)
-        params["num_voices"] = rng.randint(6, 10); params["detune_wide"] = rng.uniform(0.008, 0.018)
-        params["lfo_spd"] = rng.uniform(0.2, 0.7); params["cutoff_lp"] = rng.uniform(0.03, 0.07)
-        params["vibrato"] = rng.uniform(0, 0.1)
     elif tipo == "atmos_noise":
         params["attack"] = rng.uniform(0.15, 0.5); params["decay"] = rng.uniform(0.5, 1.5)
         params["sustain"] = rng.uniform(0.7, 0.95)
@@ -2011,7 +2126,17 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
     inst_rng = random.Random(hash(nombre))
     params = generar_params_instrumento(inst_rng, tipo)
     inst_eq = inst_rng.choice(EQ_TIPOS)
-    inst_eq_int = inst_rng.uniform(0.1, 0.35)
+    # intensidad bajada de 0.10-0.35 a 0.05-0.18: sin exagerar la personalidad
+    # espectral evitamos que el instrumento y el kit queden en franjas opuestas
+    # (por ejemplo bright vs dark) y se sientan disociados.
+    inst_eq_int = inst_rng.uniform(0.05, 0.18)
+    # familias con textura espacial propia (pads, atmos, coros, cristales)
+    # NO llevan reverb ambiente: al ser sostenidas, las copias retardadas de
+    # los taps se superponen a la nota base y crean resonancias/artefactos
+    # audibles como "bings" o filtros de peine. Estos instrumentos ya suenan
+    # ambient de por si, no necesitan pegamento espacial.
+    familia = INST_FORMA.get(nombre, "")
+    aplicar_reverb = familia not in ("pad", "atmos", "choir", "glass")
     c_cortas = {}
     c_largas = {}
     # solo renderizar el rango de notas que las canciones usan
@@ -2026,7 +2151,16 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
         freq = midi_a_freq(midi)
         snd = synth_nota(tipo, freq, 0.3, params)
         arr = pygame.sndarray.array(snd).astype(np.float64) / 32767
-        c_cortas[midi] = np_to_sound(aplicar_eq(arr[:, 0], inst_eq, inst_eq_int), lpf=True)
+        # aplicar EQ + HPF + (opcionalmente) reverb ambiente. HPF quita el
+        # rumor sub-grave (<130Hz) para que el jugador no compita con el bajo
+        # por el mismo rango espectral. La reverb solo va a instrumentos
+        # "puntuales" (plucks, bells, leads cortos): en pads y atmos crea
+        # colas superpuestas que suenan como bings metalicos.
+        nota_c = aplicar_eq(arr[:, 0], inst_eq, inst_eq_int)
+        nota_c = filtro_hpf(nota_c, cutoff_hz=130)
+        if aplicar_reverb:
+            nota_c = reverb_ambiente(nota_c, mezcla=0.14)
+        c_cortas[midi] = np_to_sound(nota_c, lpf=True)
         params_hold = dict(params)
         # holds: envolvente casi plana para eliminar el pumping ciclico del loop.
         # antes: sustain=0.5, decay=1.5 -> la amplitud caia de 1.0 a 0.55 dentro
@@ -2046,6 +2180,10 @@ def renderizar_instrumento(nombre, tipo, dibujar_progreso=False, display=None):
         snd_l = synth_nota(tipo, freq, 1.9, params_hold)
         arr_l = pygame.sndarray.array(snd_l).astype(np.float64) / 32767
         mono_l = aplicar_eq(arr_l[:, 0], inst_eq, inst_eq_int)
+        # mismo HPF que en la nota corta: el sostenido tambien deja el rango
+        # sub-grave libre al bajo. Se aplica ANTES del skip/crossfade para
+        # que el filtro no introduzca artefactos en la costura del loop.
+        mono_l = filtro_hpf(mono_l, cutoff_hz=130)
         # descartar ataque + zona de estabilizacion
         skip = int(SR * 0.30)
         mono_l = mono_l[skip:].copy()
@@ -2626,6 +2764,49 @@ TOP_SCORES = 10
 # --- progreso de runs completados (genero x dificultad) ---
 PROGRESO_FILE = os.path.join(BASE_DIR, "progreso.json")
 
+# --- MODO CARRERA: desbloqueo progresivo de dificultades ---
+CARRERA_FILE = os.path.join(BASE_DIR, "carrera.json")
+
+def cargar_carrera():
+    """Carga el progreso del modo carrera. Devuelve dict con:
+      nivel_max: mayor nivel desbloqueado (1-15, empieza en 1)
+      ranks: {str(nivel): "S"/"A"/... } mejor rank por nivel
+      intentos: {str(nivel): int} veces que lo intentaste"""
+    try:
+        with open(CARRERA_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {"nivel_max": 1, "ranks": {}, "intentos": {}}
+
+def guardar_carrera(data):
+    try:
+        with open(CARRERA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error guardando carrera: {e}")
+
+def carrera_completar_nivel(nivel, rank):
+    """Registra que se completo un nivel de la carrera. Desbloquea el
+    siguiente y guarda el mejor rank."""
+    c = cargar_carrera()
+    nk = str(nivel)
+    # guardar mejor rank (S > A > B > C > D)
+    orden = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "?": 0}
+    viejo = c.get("ranks", {}).get(nk, "?")
+    if orden.get(rank, 0) > orden.get(viejo, 0):
+        c.setdefault("ranks", {})[nk] = rank
+    # desbloquear siguiente
+    if nivel >= c.get("nivel_max", 1) and nivel < 15:
+        c["nivel_max"] = nivel + 1
+    guardar_carrera(c)
+    return c
+
+def carrera_registrar_intento(nivel):
+    c = cargar_carrera()
+    nk = str(nivel)
+    c.setdefault("intentos", {})[nk] = c.get("intentos", {}).get(nk, 0) + 1
+    guardar_carrera(c)
+
 def cargar_progreso():
     """Devuelve un set de claves 'GENERO|nivel' completadas."""
     try:
@@ -2640,6 +2821,29 @@ def guardar_progreso(completados):
             json.dump(sorted(completados), f, indent=2)
     except Exception as e:
         print(f"Error guardando progreso: {e}")
+
+def calcular_rank_stage(partida):
+    """Rank de performance del stage segun precision ponderada, estilo
+    rhythm game clasico. PERFECTO=1.0, BIEN=0.7, OK=0.4, MAL/MISS=0.
+      S: >=95% | A: >=85% | B: >=70% | C: >=50% | D: <50%"""
+    p = partida.get("n_perfecto", 0)
+    b = partida.get("n_bien", 0)
+    o = partida.get("n_ok", 0)
+    m = partida.get("n_mal", 0)
+    mi = partida.get("n_miss", 0)
+    total = p + b + o + m + mi
+    if total == 0:
+        return "?"
+    acc = (p * 1.0 + b * 0.7 + o * 0.4) / total
+    if acc >= 0.95:
+        return "S"
+    elif acc >= 0.85:
+        return "A"
+    elif acc >= 0.70:
+        return "B"
+    elif acc >= 0.50:
+        return "C"
+    return "D"
 
 def clave_run(genero, nivel):
     return f"{genero}|{nivel}"
@@ -2735,9 +2939,13 @@ def get_dificultad(seed):
 # --- meta de puntuacion por stage (objetivo roguelike) ---
 # la meta base escala con el nivel de dificultad; stages sucesivos piden mas
 META_BASE = {
-    1: 120,  2: 180,  3: 300,  4: 450,  5: 600,
-    6: 800,  7: 1100, 8: 1500, 9: 2000, 10: 2800,
-    11: 3500, 12: 4500, 13: 6000, 14: 8000, 15: 10000,
+    # niveles mas largos en general, y progresivamente MAS largos a partir
+    # de NORMAL (nivel 3): el factor de escala sube ~x1.2 en facil hasta
+    # ~x2.5 en GOD/CHAOS. La meta controla la duracion real del stage
+    # (la cancion loopea hasta alcanzarla).
+    1: 150,   2: 220,   3: 420,   4: 680,   5: 950,
+    6: 1350,  7: 2000,  8: 2850,  9: 4000,  10: 5900,
+    11: 7700, 12: 10500, 13: 14500, 14: 20000, 15: 25000,
 }
 META_MULT_STAGE = {1: 1.0, 2: 1.3, 3: 1.6, 4: 2.0}
 
@@ -2777,28 +2985,40 @@ GENEROS = {
         "tempo_mod": {"half": 0.15, "double": 0.15},
         "densidad": 1.0,
         "swing": 0.0,
+        "registro": 0,
+        # minimal repetitivo: pocas notas, siempre en el mismo lugar (hipnotico)
+        "pat_melodia": [
+            [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],   # 1, 3 (estable, maquinal)
+            [1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0],   # 1, &2, 3, &4 (loop tipico)
+            [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],   # puro offbeat (stab tipico)
+        ],
     },
-    "HIP HOP": {
-        "bpm": (82, 96),
-        "escalas": ["menor", "blues", "pentatonica"],
+    "HOUSE": {
+        "bpm": (120, 128),
+        "escalas": ["mayor", "menor", "arm_menor"],
         "drums": {
-            "kick":  [[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],   # boom-bap
-                      [1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0]],
+            "kick":  [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],   # 4-on-the-floor
             "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]],
-            "hihat": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,1],
-                      [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0]],
-            "hihat_o":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+            "hihat": [[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
+                      [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]],
+            "hihat_o":[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],   # abierto en offbeats
             "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
         },
-        "bajo_estilos": ["sub", "round", "pluck"],
-        "bajo_patrones": [[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
-                          [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
-        "instrumentos": ["FM EP", "BASS", "SYNTHBASS", "SUB PLUCK", "ORGAN",
-                         "VIBRAPHONE", "PLUCK SOFT", "DIST GTR",
-                         "ANALOG STR", "DREAM PAD"],
-        "tempo_mod": {"half": 0.20, "double": 0.05},
-        "densidad": 0.75,
-        "swing": 0.12,
+        "bajo_estilos": ["round", "pluck", "sub"],
+        "bajo_patrones": [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
+                          [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0]],   # offbeat clasico
+        "instrumentos": ["ORGAN", "FM EP", "PLUCK", "VOX PAD", "BELLPAD",
+                         "SUB PLUCK", "PLUCK SOFT", "DREAM PAD"],
+        "tempo_mod": {"half": 0.10, "double": 0.10},
+        "densidad": 0.9,
+        "swing": 0.03,
+        "registro": 0,
+        # groove offbeat: notas en los "y" (stabs de organo clasicos de house)
+        "pat_melodia": [
+            [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],   # todos los offbeats (stab)
+            [0,0,1,0,0,0,0,0,0,0,1,0,0,0,1,0],   # &1, &3, &4
+            [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],   # 1, &2, &3 (groovy)
+        ],
     },
     "DNB": {
         "bpm": (160, 178),
@@ -2820,6 +3040,13 @@ GENEROS = {
         "tempo_mod": {"half": 0.25, "double": 0.0},
         "densidad": 1.1,
         "swing": 0.0,
+        "registro": -12,
+        # fragmentado agresivo: rafagas cortas con silencios (estilo neurofunk)
+        "pat_melodia": [
+            [1,0,1,0,0,0,0,0,1,0,1,0,0,0,0,0],   # doble golpe 1-&1, 3-&3
+            [1,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0],   # sincopa 16avo
+            [0,0,0,0,1,0,1,0,0,0,0,0,1,0,1,0],   # rafagas en 2 y 4
+        ],
     },
     "SYNTHWAVE": {
         "bpm": (100, 118),
@@ -2837,64 +3064,144 @@ GENEROS = {
                           [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0]],
         "instrumentos": ["SUPERSAW", "PAD", "PWM LEAD", "DETUNE", "FM BRASS",
                          "PHASE PAD", "LEAD", "BELLPAD", "SAW", "VOX PAD",
-                         "SHIMMER", "ANALOG STR", "DREAM PAD"],
+                         "ANALOG STR", "DREAM PAD"],
         "tempo_mod": {"half": 0.10, "double": 0.10},
         "densidad": 0.95,
         "swing": 0.0,
         "arpegios": True,
+        "registro": 0,
+        # lineas sostenidas y amplias (lead melodico retro)
+        "pat_melodia": [
+            [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],   # notas largas 1, 3
+            [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0],   # 1, &2, 4
+            [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],   # negras constantes (drive)
+        ],
     },
-    "AMBIENT": {
-        "bpm": (62, 86),
-        "escalas": ["mayor", "menor", "pentatonica"],
-        "drums": {
-            "kick":  [[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-                      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],
-            "snare": [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                      [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
-            "hihat": [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                      [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
-            "hihat_o":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-            "clap":  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        },
-        "bajo_estilos": ["sub", "round"],
-        "bajo_patrones": [[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                          [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],
-        "instrumentos": ["PAD", "PHASE PAD", "VOX PAD", "GLASS", "BELLPAD",
-                         "CHOIR", "GLASS HARM", "FLUTE", "HARP", "BELL FM",
-                         "SHIMMER", "ATMOS NOISE", "FROZEN STR", "DREAM PAD", "SPACE CHOIR"],
-        "tempo_mod": {"half": 0.40, "double": 0.0},
-        "densidad": 0.4,
-        "swing": 0.0,
-    },
-    "REGGAETON": {
-        "bpm": (90, 100),
+    "TECH HOUSE": {
+        "bpm": (122, 128),
         "escalas": ["menor", "arm_menor", "pentatonica"],
         "drums": {
-            "kick":  [[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]],   # dembow base
-            "snare": [[0,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0]],    # dembow
-            "hihat": [[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]],
-            "hihat_o":[0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0],
-            "clap":  [0,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0],     # acompaña al snare
+            "kick":  [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],   # 4x4 percusivo
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+                      [0,0,0,0,1,0,0,1,0,0,0,0,1,0,0,0]],   # con ghost
+            "hihat": [[1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0],   # denso y sincopado
+                      [0,1,1,0,1,0,1,1,0,1,1,0,1,0,1,1]],
+            "hihat_o":[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
         },
-        "bajo_estilos": ["sub", "round", "pluck"],
-        "bajo_patrones": [[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-                          [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],
-        "instrumentos": ["SYNTHBASS", "SUB PLUCK", "PLUCK", "LEAD", "DETUNE",
-                         "ACID", "SAW", "PWM LEAD", "KALIMBA"],
-        "tempo_mod": {"half": 0.05, "double": 0.05},
-        "densidad": 0.85,
+        "bajo_estilos": ["sub", "reese", "round"],
+        "bajo_patrones": [[1,0,0,0,1,0,1,0,1,0,0,0,1,0,1,0],
+                          [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0]],
+        "instrumentos": ["ACID", "RESO", "SYNTHBASS", "METALLIC", "NOISE PITCH",
+                         "PLUCK SOFT", "SUB PLUCK", "PLUCK", "SAW"],
+        "tempo_mod": {"half": 0.10, "double": 0.10},
+        "densidad": 1.0,
         "swing": 0.0,
+        "registro": 0,
+        # percusivo repetitivo: la melodia funciona como otro elemento del groove
+        "pat_melodia": [
+            [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],   # sincopa constante (rolling)
+            [0,0,1,0,1,0,0,0,0,0,1,0,1,0,0,0],   # &1-2, &3-4
+            [1,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0],   # groove con 16avo
+        ],
+    },
+    "JUNGLE": {
+        "bpm": (155, 172),
+        "escalas": ["menor", "arm_menor"],
+        "drums": {
+            # amen break picado: kick + variaciones, snare con ghost notes irregulares
+            "kick":  [[1,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0],
+                      [1,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0]],
+            "snare": [[0,0,0,0,1,0,0,1,0,0,1,0,1,0,0,1],   # denso con ghosts
+                      [0,0,1,0,1,0,0,0,0,1,0,1,1,0,1,0]],
+            "hihat": [[1,1,0,1,1,0,1,1,1,0,1,1,1,1,0,1]],
+            "hihat_o":[0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["reese", "sub"],
+        "bajo_patrones": [[1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0],
+                          [1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1]],
+        "instrumentos": ["HOOVER", "GROWL", "SUB PLUCK", "RESO", "ATMOS NOISE",
+                         "FORMANT", "ACID", "SYNC LEAD"],
+        "tempo_mod": {"half": 0.25, "double": 0.0},
+        "densidad": 1.15,
+        "swing": 0.08,
+        "registro": -12,
+        # fragmentado estilo ragga: rafagas irregulares con huecos
+        "pat_melodia": [
+            [1,0,1,0,0,0,0,0,0,1,0,1,0,0,0,0],   # doblete + doblete corrido
+            [1,0,0,0,0,1,0,0,1,0,0,0,0,1,0,0],   # sincopa irregular
+            [0,0,1,0,1,0,1,0,0,0,0,0,1,0,0,0],   # rafaga &1-2-&2, 4
+        ],
+    },
+    "TRANCE": {
+        "bpm": (132, 140),
+        "escalas": ["menor", "arm_menor", "mayor"],
+        "drums": {
+            "kick":  [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0]],   # 4x4 limpio
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]],
+            "hihat": [[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
+                      [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]],
+            "hihat_o":[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],   # abierto offbeats
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["pluck", "sub", "round"],
+        "bajo_patrones": [[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],   # offbeat entre kicks
+                          [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]],
+        "instrumentos": ["SUPERSAW", "DETUNE", "SAW STACK", "PWM LEAD",
+                         "DREAM PAD", "BELLPAD", "VOX PAD", "SYNC LEAD", "PAD"],
+        "tempo_mod": {"half": 0.15, "double": 0.10},
+        "densidad": 1.0,
+        "swing": 0.0,
+        "arpegios": True,
+        "registro": 12,
+        # etereo sostenido: notas largas que flotan (el arpegio pone el movimiento)
+        "pat_melodia": [
+            [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],   # 1, 3 (colchon)
+            [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],   # 1, 4 (espacioso)
+            [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],   # offbeat (rolling trance)
+        ],
+    },
+    "UK GARAGE": {
+        "bpm": (130, 138),
+        "escalas": ["menor", "arm_menor", "pentatonica"],
+        "drums": {
+            # 2-step: kick sincopado (NO 4x4), snare/clap en 2 y 4
+            "kick":  [[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+                      [1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0]],
+            "snare": [[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]],
+            "hihat": [[1,0,1,1,1,0,1,0,1,1,1,0,1,0,1,1]],   # shuffleado
+            "hihat_o":[0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0],
+            "clap":  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+        },
+        "bajo_estilos": ["sub", "pluck", "round"],
+        "bajo_patrones": [[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+                          [1,0,0,1,0,0,0,0,1,0,0,0,0,0,1,0]],
+        "instrumentos": ["SUB PLUCK", "ORGAN", "FM EP", "PLUCK SOFT", "VOX PAD",
+                         "FORMANT", "BELLPAD", "PLUCK"],
+        "tempo_mod": {"half": 0.10, "double": 0.05},
+        "densidad": 0.85,
+        "swing": 0.15,
+        "registro": 0,
+        # 2-step melodico: sincopa shuffleada, huecos ritmicos marcados
+        "pat_melodia": [
+            [1,0,0,1,0,0,0,0,1,0,0,1,0,0,0,0],   # 2-step clasico
+            [0,0,1,0,0,1,0,0,0,0,1,0,0,0,1,0],   # sincopa desplazada
+            [1,0,0,0,0,1,0,0,0,0,1,0,0,1,0,0],   # skippy (saltarin)
+        ],
     },
 }
 
 # paletas de color por genero (color de acento, se mezcla con blanco/gris)
 COLOR_GENERO = {
-    "TECHNO":    (0, 220, 255),    # cyan electrico
-    "HIP HOP":   (255, 160, 40),   # naranja calido
-    "DNB":       (180, 60, 255),   # violeta neon
-    "SYNTHWAVE": (255, 60, 180),   # rosa magenta retro
-    "AMBIENT":   (120, 230, 180),  # verde agua suave
-    "REGGAETON": (255, 220, 40),   # amarillo vibrante
+    "TECHNO":     (0, 220, 255),    # cyan electrico
+    "HOUSE":      (255, 200, 80),   # dorado calido
+    "TECH HOUSE": (100, 220, 100),  # verde electrico
+    "DNB":        (180, 60, 255),   # violeta neon
+    "JUNGLE":     (140, 220, 80),   # verde selva/lima
+    "SYNTHWAVE":  (255, 60, 180),   # rosa magenta retro
+    "TRANCE":     (140, 220, 255),  # celeste luminoso
+    "UK GARAGE":  (80, 220, 200),   # turquesa aqua
 }
 COLOR_DEFECTO = (255, 255, 255)
 
@@ -2903,10 +3210,11 @@ def color_genero(partida):
     return COLOR_GENERO.get(g, COLOR_DEFECTO)
 
 def elegir_genero(rng):
-    # pesos: AMBIENT sale mucho menos (~0.5% vs ~20% cada otro)
+    # 8 generos de electronica, reparto uniforme (~12.5% cada uno)
     pesos = {
-        "TECHNO": 20, "HIP HOP": 20, "DNB": 20,
-        "SYNTHWAVE": 20, "AMBIENT": 1, "REGGAETON": 20,
+        "TECHNO": 10, "HOUSE": 10, "TECH HOUSE": 10,
+        "DNB": 10, "JUNGLE": 10, "SYNTHWAVE": 10,
+        "TRANCE": 10, "UK GARAGE": 10,
     }
     generos = list(pesos.keys())
     weights = [pesos[g] for g in generos]
@@ -2969,10 +3277,8 @@ def generar_patrones_drums(rng, genero=None):
         pats["clap"]    = list(g["clap"])
         pats["clave"]   = [0] * 16
         pats["agogo"]   = [0] * 16
-        # detalles percusivos extra solo en algunos generos
-        if genero in ("REGGAETON", "HIP HOP"):
-            for p in rng.sample(range(16), rng.randint(1, 3)):
-                pats["clave"][p] = 1
+        # (clave/agogo se dejan en 0: los 9 generos actuales son todos de
+        # electronica y no usan percusion latina auxiliar)
         pats["fill"]    = [0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1]
         return pats
     return _generar_patrones_drums_legacy(rng)
@@ -3180,33 +3486,43 @@ FORMAS_CANCION = {
     "corta":      ["intro", "verso", "estribillo", "outro"],
     "minima":     ["verso", "estribillo", "verso", "estribillo"],
     "epica":      ["intro", "verso", "estribillo", "verso", "estribillo", "puente", "estribillo", "estribillo", "outro"],
+    "maraton":    ["intro", "verso", "estribillo", "verso", "estribillo", "puente",
+                   "verso", "estribillo", "estribillo", "outro"],
 }
 
 def elegir_forma(rng, nivel_dif):
     """Elige un arquetipo de forma segun la seed y el nivel de dificultad.
     Niveles bajos -> formas mas simples y cortas; altos -> mas elaboradas.
-    La seleccion es variable por seed: dos canciones del mismo nivel pueden
-    tener formas distintas (una simple, otra con puente)."""
-    if nivel_dif <= 3:
-        pool = ["corta", "corta", "minima", "simple"]
-    elif nivel_dif <= 7:
-        pool = ["simple", "simple", "pop", "corta", "con_pre"]
-    elif nivel_dif <= 11:
-        pool = ["pop", "pop", "con_pre", "simple", "epica"]
+    A partir de NORMAL (nivel 3) las formas crecen progresivamente: como los
+    niveles ahora duran mas (metas mas altas), la cancion base mas larga hace
+    que el loop se repita menos veces y la repeticion se note menos."""
+    if nivel_dif <= 2:
+        pool = ["corta", "minima", "simple", "simple"]
+    elif nivel_dif <= 5:
+        pool = ["simple", "simple", "pop", "con_pre"]
+    elif nivel_dif <= 9:
+        pool = ["pop", "pop", "con_pre", "epica", "epica"]
     else:
-        pool = ["pop", "con_pre", "epica", "epica"]
+        pool = ["epica", "epica", "maraton", "maraton", "pop"]
     return FORMAS_CANCION[rng.choice(pool)]
 
 def compases_por_seccion(nombre, rng, nivel_dif):
-    """Cuantos compases dura cada tipo de seccion (variable por seed)."""
+    """Cuantos compases dura cada tipo de seccion (variable por seed).
+    Escala progresivamente con el nivel desde NORMAL."""
     if nombre in ("intro", "outro"):
         return rng.choice([2, 2, 4]) if nivel_dif <= 6 else rng.choice([2, 4, 4])
     if nombre == "preestribillo":
         return rng.choice([2, 2, 4])
     if nombre == "puente":
+        return rng.choice([4, 4, 8]) if nivel_dif <= 9 else rng.choice([4, 8, 8])
+    # verso y estribillo: bloques que crecen con el nivel
+    if nivel_dif <= 2:
+        return rng.choice([4, 4])
+    elif nivel_dif <= 5:
         return rng.choice([4, 4, 8])
-    # verso y estribillo: bloques de 4 u 8 compases
-    return rng.choice([4, 4, 8]) if nivel_dif >= 6 else rng.choice([4, 4])
+    elif nivel_dif <= 9:
+        return rng.choice([4, 8, 8])
+    return rng.choice([8, 8])
 
 
 def generar_cancion(seed, dif, instrumento_forzado=None):
@@ -3237,12 +3553,18 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     densidad = gdef.get("densidad", 1.0) * dif.get("dens", 1.0)
     swing    = gdef.get("swing", 0.0)
 
-    # notas por columna: grados CONSECUTIVOS de la escala (no cada 2).
-    # Esto es clave para la musicalidad: columnas vecinas = notas vecinas, lo
-    # que permite el movimiento por grado conjunto (paso a paso), base de toda
-    # melodia cantable. Antes se saltaba de a 2 grados (i*2) y la melodia salia
-    # como un arpegio monotono tonica-tercera-quinta.
-    notas_columnas = [nota_midi(tonica + 12, escala, i) for i in range(num_columnas)]
+    # notas por columna: grados PENTATONICOS de la escala en vez de grados
+    # consecutivos. Esto garantiza que cualquier combinacion de columnas que
+    # apreta el jugador suene consonante (no hay intervalos de segunda menor
+    # entre columnas adyacentes). El bajo y los acordes siguen usando la
+    # escala completa (menor/mayor/blues/etc), asi la estructura armonica de
+    # la cancion se mantiene, pero el jugador siempre toca "notas seguras".
+    penta = PENTA_GRADOS.get(nombre_escala, [0, 1, 2, 4, 5])
+    def _grado_pent(i):
+        # extender la penta a mas de 5 columnas subiendo por octavas
+        octava_dg = 7  # 7 grados diatonicos por octava en la escala completa
+        return penta[i % 5] + (i // 5) * octava_dg
+    notas_columnas = [nota_midi(tonica + 12, escala, _grado_pent(i)) for i in range(num_columnas)]
     kit = elegir_kit(rng)
     # instrumento: si viene forzado (runs, para garantizar variedad) se respeta.
     # si no: 2% raro (si hay raros), si no del pool del genero
@@ -3370,6 +3692,22 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         return [min(num_columnas - 1, int(round(g * (num_columnas - 1) / max(1, maxg))))
                 for g in frase]
 
+    # --- DESARROLLO DEL MOTIVO: transformaciones clasicas de composicion ---
+    # En vez de repetir el motivo identico (aburrido) o sortear otro random
+    # (incoherente), las repeticiones usan variaciones que el oido reconoce
+    # como "parientes" del original: misma identidad, nuevo interes.
+    def _clamp_cols(m):
+        return [max(0, min(num_columnas - 1, c)) for c in m]
+
+    def transponer_motivo(m, delta):
+        """El mismo contorno, movido delta columnas arriba/abajo."""
+        return _clamp_cols([c + delta for c in m])
+
+    def invertir_motivo(m):
+        """Espejo del contorno: donde subia, baja (inversion clasica)."""
+        pivote = m[0]
+        return _clamp_cols([pivote - (c - pivote) for c in m])
+
     # --- MOTIVOS MEMORABLES por material ---
     # Cada "material" (A=verso, B=estribillo, C=puente) tiene su propio motivo
     # generado UNA vez. El del estribillo (B) es el "gancho": se reutiliza
@@ -3433,6 +3771,21 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         pat_jugador_simples = pat_avanzados
         pat_jugador_complejos = pat_avanzados
 
+    # PERFILES RITMICOS POR GENERO: cada genero define patrones melodicos
+    # caracteristicos (offbeat de house, rolling de tech house, 2-step de
+    # garage, etc). Se DUPLICAN dentro del pool para que salgan con mucha
+    # frecuencia (~50-60% de las veces) sin eliminar la variedad del pool
+    # base por dificultad. Asi la melodia "suena al genero" ademas de la
+    # bateria y el bajo.
+    pat_genero = gdef.get("pat_melodia", [])
+    if pat_genero:
+        pat_jugador_simples = pat_jugador_simples + pat_genero * 2
+        pat_jugador_complejos = pat_jugador_complejos + pat_genero * 2
+
+    # REGISTRO POR GENERO: dnb/jungle tocan una octava abajo (agresivo,
+    # cerca del bajo), trance una octava arriba (etereo), el resto al medio.
+    registro_genero = gdef.get("registro", 0)
+
     notas_jugador = []
 
     # --- D: ANCLA CON EL KICK ---
@@ -3461,9 +3814,17 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         candidatos = [pool[rng.randint(0, len(pool) - 1)] for _ in range(3)]
         return max(candidatos, key=_score_kick)
 
-    def crear_compas(motivo, pat, permitir_hold=True):
+    def crear_compas(motivo, pat, permitir_hold=True, cierre=None):
         """Genera un compas (16 pasos) colocando las notas del motivo en las
-        posiciones activas del patron ritmico. Devuelve lista de 16 (None o dict)."""
+        posiciones activas del patron ritmico. Devuelve lista de 16 (None o dict).
+
+        cierre: ajusta la ULTIMA nota real del compas (importante: el motivo
+        cicla, asi que la ultima nota del compas no es la ultima del motivo):
+          'pregunta'      -> termina en columna inestable (>=2), frase abierta
+          'semicadencia'  -> termina en la 5ta (columna 3): pausa SIN cerrar,
+                             como una coma. Para respuestas intermedias.
+          'respuesta'     -> termina en columna 0 (tonica): cierre real, como
+                             un punto final. SOLO la ultima frase de la seccion."""
         nota_idx = 0
         compas = []
         for s in range(16):
@@ -3473,6 +3834,29 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             col = motivo[nota_idx % len(motivo)]
             nota_idx += 1
             compas.append({"col": col, "hold": 0})
+        # pregunta/semicadencia/respuesta: ajustar la ultima nota activa
+        activas_pr = [i for i, n in enumerate(compas) if n is not None]
+        if cierre and activas_pr:
+            ult = activas_pr[-1]
+            if cierre == "respuesta":
+                compas[ult]["col"] = 0
+                # la anteultima se acerca (aproximacion por grado conjunto)
+                if len(activas_pr) >= 2:
+                    ant = activas_pr[-2]
+                    if compas[ant]["col"] > 1:
+                        compas[ant]["col"] = 1
+                # ECO de cierre: si el final del compas quedo vacio, un eco
+                # suave de la ultima nota una octava arriba contesta la frase
+                # (call-and-response entre registros, clasico de electronica
+                # melodica). Solo si hay hueco real: no ensucia compases densos.
+                if ult <= 11 and all(compas[s] is None for s in range(ult + 1, 16)):
+                    s_eco = ult + 4 if ult + 4 <= 14 else 14
+                    compas[s_eco] = {"col": 0, "hold": 0, "eco": True}
+            elif cierre == "semicadencia":
+                # 5ta pentatonica (columna 3 si existe): reposo sin cierre
+                compas[ult]["col"] = min(num_columnas - 1, 3)
+            elif cierre == "pregunta" and compas[ult]["col"] <= 1:
+                compas[ult]["col"] = min(num_columnas - 1, 2)
         if permitir_hold:
             # prob de hold escala con el nivel: 0.32 (facil) -> 0.55 (chaos)
             # holds escalados por nivel: en fácil casi no hay (el principiante
@@ -3494,9 +3878,20 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         return compas
 
     def crear_bloque_seccion(material, num_compases, complejo):
-        """Crea el contenido melodico (lista de compases) de una seccion segun
-        su material. El estribillo (B) usa SIEMPRE el mismo patron ritmico y
-        motivo, para que el gancho sea reconocible cada vez que vuelve."""
+        """Crea el contenido melodico (lista de compases) de una seccion.
+
+        ESTRUCTURA DE FRASE (pregunta/respuesta): los compases se organizan
+        en pares antecedente/consecuente. El compas impar plantea el motivo
+        terminando en nota inestable (pregunta, queda 'abierta'); el par lo
+        repite variado terminando en la tonica (respuesta, 'cierra'). Es la
+        estructura de frase mas universal de la musica tonal.
+
+        DESARROLLO DEL MOTIVO: en frases sucesivas el motivo no se repite
+        literal: se transforma (transposicion / inversion / retrogradacion).
+        El oido reconoce el parentesco -> cohesion; no es identico -> interes.
+
+        El estribillo (B) usa SIEMPRE la misma pregunta/respuesta y el mismo
+        patron ritmico, para que el gancho sea reconocible cada vez."""
         if material == "B":
             motivo = motivos_b[0]
         elif material == "C":
@@ -3513,9 +3908,54 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
             pat1 = _elegir_pat(pats)
             pat2 = _elegir_pat(pats)
         bloque = []
+        # PLAN DIRECCIONAL de desarrollo: en vez del ciclo mecanico
+        # literal/transposicion-aleatoria/inversion/retrogradacion, cada
+        # seccion sortea UN plan con direccion narrativa. La SECUENCIA
+        # (repetir el motivo un grado mas arriba) es el recurso clasico
+        # para construir tension; el descenso o el literal la sueltan.
+        #   ascenso: sube por secuencia hasta el climax y vuelve (trance!)
+        #   arco:    sube, invierte en el pico (sorpresa), baja
+        #   vaiven:  balancea abajo/arriba (hipnotico, para techno/house)
+        planes = [
+            ["lit", "sec+1", "sec+2", "lit"],     # ascenso y retorno
+            ["lit", "sec+1", "inv",   "sec-1"],   # arco con inversion
+            ["lit", "sec-1", "sec+1", "lit"],     # vaiven
+        ]
+        plan = rng.choice(planes)
+
+        def _aplicar(m, paso):
+            if paso == "sec+1":
+                return transponer_motivo(m, 1)
+            if paso == "sec+2":
+                return transponer_motivo(m, 2)
+            if paso == "sec-1":
+                return transponer_motivo(m, -1)
+            if paso == "inv":
+                return invertir_motivo(m)
+            return list(m)   # "lit"
+
+        num_frases = max(1, num_compases // 2)
         for c in range(num_compases):
+            frase_idx = c // 2          # que frase (par de compases) es
+            es_respuesta = (c % 2 == 1)  # impar del par = consecuente
+            es_ultima_frase = (frase_idx == num_frases - 1)
+            if material == "B":
+                m_base = motivo          # gancho: sin desarrollo
+            else:
+                m_base = _aplicar(motivo, plan[frase_idx % len(plan)])
             pat = pat1 if c % 2 == 0 else pat2
-            bloque.append(crear_compas(motivo, pat))
+            # JERARQUIA DE CADENCIAS: las respuestas intermedias hacen
+            # SEMICADENCIA (reposo en la 5ta, la frase respira pero sigue);
+            # solo la ULTIMA respuesta de la seccion cierra en tonica.
+            # Asi la seccion tiene direccion de largo plazo en vez de
+            # "terminar" cada 2 compases.
+            if not es_respuesta:
+                cierre = "pregunta"
+            elif es_ultima_frase:
+                cierre = "respuesta"
+            else:
+                cierre = "semicadencia"
+            bloque.append(crear_compas(m_base, pat, cierre=cierre))
         return bloque
 
     # pre-generar el bloque del estribillo UNA vez (gancho memorable reutilizable)
@@ -3529,7 +3969,19 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         # compas_armonico: si se pasa, fija el grado de la progresion (para que el
         #   estribillo suene armonicamente identico en cada retorno = gancho memorable)
         # det: modo determinista (sin rng), refuerza que el gancho sea reconocible
-        oct_off = perfil["registro"]
+        oct_off = perfil["registro"] + registro_genero
+        # clamp real: el cache renderiza midi 36-97. En el peor caso (trance
+        # +12, estribillo +12, 8 columnas con tonica alta) la nota mas aguda
+        # llega a ~105 y no estaria renderizada -> silencio. Si el offset
+        # empuja la columna mas aguda fuera del cache, bajar una octava.
+        _midi_max_col = max(notas_columnas) + oct_off
+        while _midi_max_col > 97 and oct_off >= -12:
+            oct_off -= 12
+            _midi_max_col -= 12
+        _midi_min_col = min(notas_columnas) + oct_off
+        while _midi_min_col < 36:
+            oct_off += 12
+            _midi_min_col += 12
         energia = perfil["energia"]
         dens_local = densidad * perfil["densidad_mult"]
         # compensacion por columnas: al sumar una columna, la densidad efectiva
@@ -3560,6 +4012,34 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         es_stream = es_cierre_seccion and _nivel_gc >= 11 and not det
         stream_len = 6 if _nivel_gc >= 14 else 4
         stream_ini = 16 - stream_len
+
+        # ARPEGIO (trance/synthwave): en el estribillo, un compas entero se
+        # reemplaza por una corrida de corcheas subiendo y bajando por las
+        # columnas (el sello sonoro del genero). Como las columnas ya son
+        # pentatonicas, cualquier corrida suena musical. Solo en energia alta
+        # (estribillo), nunca en el compas determinista del gancho (det), y
+        # con densidad jugable: corcheas (8 notas/compas), no 16avos.
+        if (gdef.get("arpegios") and energia >= 0.9 and not det
+                and not es_cierre_seccion and rng.random() < 0.45):
+            n_pasos = 8   # corcheas
+            col_a = rng.randint(0, max(0, num_columnas - 1))
+            dir_a = 1 if col_a < num_columnas // 2 else -1
+            for k in range(n_pasos):
+                s_a = k * 2
+                t_a = t_intro_fin + compas_global * 4 * beat + s_a * paso16
+                # (sin swing: el arpegio de trance/synthwave es recto por definicion)
+                # rebotar en los bordes (sube hasta el tope, baja, vuelve)
+                col_k = col_a + k * dir_a
+                ciclo = max(1, 2 * (num_columnas - 1))
+                col_k = col_k % ciclo
+                if col_k >= num_columnas:
+                    col_k = ciclo - col_k
+                midi_a = notas_columnas[col_k] + oct_off
+                notas_jugador.append({
+                    "cols": [col_k], "midis": [midi_a],
+                    "tiempo": t_a, "es_acorde": False, "parte": parte, "hold": 0,
+                })
+            return  # el compas ya esta lleno con el arpegio
         # B: estado del salto expresivo (si la nota anterior salto, esta resuelve)
         _salto = {"resolver": 0, "desde": None}
         for s in range(16):
@@ -3601,16 +4081,26 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                         "tiempo": t, "es_acorde": True, "parte": parte, "hold": 0,
                     })
                     continue
-            # densidad segun energia de la seccion (nunca saltea el downbeat)
+            # densidad segun energia de la seccion (nunca saltea el downbeat
+            # ni las notas ECO, que son el remate de la frase)
             # en estribillo NO se saltean notas por rng: el patron es fijo y completo
-            if not det and dens_local < 1.0 and s != 0 and rng.random() > dens_local:
+            _es_eco = bool(contenido[s].get("eco"))
+            if (not det and dens_local < 1.0 and s != 0 and not _es_eco
+                    and rng.random() > dens_local):
                 continue
-            midi_nota = notas_columnas[col] + oct_off
+            # eco de fin de frase: la misma nota una octava arriba (contesta
+            # la frase desde el registro agudo, call-and-response)
+            _oct_eco = 12 if _es_eco else 0
+            midi_nota = notas_columnas[col] + oct_off + _oct_eco
+            # proteger el eco del rango del cache (36-97)
+            if midi_nota > 97:
+                midi_nota -= 12
             # --- B: SALTOS EXPRESIVOS con resolucion conjunta contraria ---
             # regla clasica de contrapunto: un salto grande (4a/5a/8va) se
             # resuelve moviendose por grado conjunto en direccion CONTRARIA.
             # crea momentos memorables sin perder cohesion melodica.
-            if _salto["resolver"] != 0 and not det:
+            # (las notas ECO quedan afuera: son el remate fijo de la frase)
+            if _salto["resolver"] != 0 and not det and not _es_eco:
                 # esta nota RESUELVE el salto anterior: grado conjunto contrario
                 base = _salto["desde"]
                 _clases_esc = {(tonica + g) % 12 for g in escala}
@@ -3618,7 +4108,7 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                 midi_nota = base + paso_res * _salto["resolver"]
                 col = max(0, min(num_columnas - 1, col + _salto["resolver"]))
                 _salto["resolver"] = 0
-            elif (not det and s % 4 == 2 and s <= 10 and hd == 0
+            elif (not det and not _es_eco and s % 4 == 2 and s <= 10 and hd == 0
                     and rng.random() < 0.12):
                 # salto expresivo: 4a, 5a u 8va
                 arriba = midi_nota < tonica + 24
@@ -3940,6 +4430,15 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     }
 
     # parametros de la figura de lissajous de fondo (unica por seed)
+    # NOMBRES DEL ENEMIGO: generados por seed para que cada cancion tenga
+    # "su" antagonista con identidad. Se muestra en el HUD y en las
+    # pantallas de stage/game over para reforzar la narrativa.
+    _prefijos = ["NULL", "VOID", "ECHO", "STATIC", "PHASE", "GLITCH",
+                 "PULSE", "FLUX", "DRIFT", "NOISE", "SHADE", "SINE",
+                 "WARP", "SURGE", "DECAY", "LOOP", "FRAY", "HAZE"]
+    _sufijos = ["CORE", "WAVE", "NODE", "FORM", "MIND", "FEED",
+                "SYNC", "GRID", "BYTE", "CELL", "LINK", "TONE"]
+    _nombre_enemigo = rng.choice(_prefijos) + "-" + rng.choice(_sufijos)
     lissajous = {
         "tipo": rng.choice(["lissajous", "lissajous", "rosa", "espiro", "mariposa"]),
         "a": rng.randint(1, 9),         # frecuencia horizontal
@@ -3949,6 +4448,7 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
         "puntos": rng.choice([160, 200, 240, 300]),
         "k": rng.randint(2, 7),         # parametro para rosa/espiro
         "ratio": rng.uniform(0.3, 0.8), # parametro para espiro
+        "nombre": _nombre_enemigo,
     }
 
     # --- CAPA 3: eventos sorpresa en vivo ---
@@ -4019,6 +4519,65 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
                 "parte": "nudo", "hold": 0,
                 "power_up": tipo_pu["id"],
             })
+
+    # BOMBAS: notas rojas que NO deben tocarse. Si el jugador las pega,
+    # explotan y pierde vida. Si las esquiva, no pasa nada (no cuentan como
+    # miss). Solo aparecen a partir de NORMAL+ (nivel 4) porque en niveles
+    # faciles el jugador se apoya en pegar todo, y castigarlo por eso seria
+    # frustrante. Cada bomba se aisla temporalmente SOLO de otras notas en
+    # SU MISMA columna (250ms). En otras columnas puede haber notas al mismo
+    # tiempo — la bomba se distingue por su color rojo parpadeante, no por
+    # estar aislada de todo (en canciones densas eso era casi imposible).
+    nivel_dif = dif.get("nivel", 1)
+    if nivel_dif >= 4:
+        cant_bombas = rng.randint(3, 5) + max(0, (nivel_dif - 4) // 3)
+        t_min = t_intro_fin + 800
+        t_max = max(t_min + 800, t_desenlace_fin - 1200)
+        GAP_COL = 250
+        # indexar notas existentes por columna para busqueda O(k) por intento
+        notas_por_col = {}
+        for _n in notas_jugador:
+            for _c in _n["cols"]:
+                notas_por_col.setdefault(_c, []).append(_n["tiempo"])
+        colocadas = 0
+        intentos = 0
+        while colocadas < cant_bombas and intentos < 60:
+            intentos += 1
+            col_b = rng.randint(0, num_columnas - 1)
+            t_b = rng.randint(t_min, t_max)
+            # solo mira la MISMA columna: la bomba tiene que estar sola en su
+            # carril durante 250ms alrededor, para que el jugador tenga tiempo
+            # de reaccionar y NO apretar esa tecla justo cuando pasa.
+            if any(abs(t - t_b) < GAP_COL for t in notas_por_col.get(col_b, [])):
+                continue
+            notas_jugador.append({
+                "cols": [col_b], "midis": [notas_columnas[col_b]],
+                "tiempo": int(t_b), "es_acorde": False,
+                "parte": "nudo", "hold": 0,
+                "es_bomba": True,
+            })
+            # registrar la bomba tambien, asi otras bombas no caen juntas
+            notas_por_col.setdefault(col_b, []).append(t_b)
+            colocadas += 1
+
+    # SIDECHAIN AL KICK: pre-calcular que eventos del bajo caen dentro de la
+    # ventana de sidechain de un kick. En electronica, el bajo se atenua
+    # brevemente cuando pega el kick, creando el "pompeo" caracteristico que
+    # une percusion y bajo en una sola sensacion ritmica. Aca marcamos con
+    # duckea=True los eventos del bajo cuyo tiempo cae en [t_kick, t_kick+90ms]
+    # asi el dispatch en runtime aplica volumen atenuado sin CPU extra.
+    SIDECHAIN_MS = 90
+    kicks_tiempos = sorted(pe["tiempo"] for pe in percusion if pe["sample"] == "kick")
+    if kicks_tiempos and cancion_bajo.get("eventos"):
+        j = 0  # puntero al kick candidato
+        for ev in cancion_bajo["eventos"]:
+            t_ev = ev["tiempo"]
+            # avanzar j mientras el kick actual sea muy anterior a ev
+            while j + 1 < len(kicks_tiempos) and kicks_tiempos[j + 1] <= t_ev:
+                j += 1
+            # ev cae en ventana si el kick j esta antes y a menos de SIDECHAIN_MS
+            if kicks_tiempos[j] <= t_ev <= kicks_tiempos[j] + SIDECHAIN_MS:
+                ev["duckea"] = True
 
     return {
         "bpm":            BPM,
@@ -4139,7 +4698,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     if stage_info:
         st_txt = fuente.render(f"STAGE {stage_info['n']}/{NUM_STAGES}", True, BLANCO)
         pantalla.blit(st_txt, (ANCHO // 2 - st_txt.get_width() // 2, 195))
-    gen_txt = fuente.render(f"{cancion.get('genero', '')}", True, COLOR_GENERO.get(cancion.get('genero',''), BLANCO))
+    gen_txt = fuente.render(f"SEED {seed}", True, COLOR_GENERO.get(cancion.get('genero',''), BLANCO))
     pantalla.blit(gen_txt, (ANCHO // 2 - gen_txt.get_width() // 2, 235))
     modo_txt = fuente.render(f"INSTRUMENTO: {inst}", True, GRIS_MED)
     pantalla.blit(modo_txt, (ANCHO // 2 - modo_txt.get_width() // 2, 285))
@@ -4239,6 +4798,8 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         "ultimo_hit":     None,
         "combo":          0,
         "max_combo":      0,
+        # contadores de precision para el rank de performance del stage
+        "n_perfecto": 0, "n_bien": 0, "n_ok": 0, "n_mal": 0, "n_miss": 0,
         "vida":           20,
         "vida_max":       20,
         "game_over":      False,
@@ -4255,6 +4816,13 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         "escudo_cargas":  0,
         "combo_save_cd":  0,       # cooldown en ms (0 = listo)
         "efectos_activos": {},     # {id: tiempo_fin_ms} para power-ups temporales
+        # cola de samples del jugador para cuantizar el disparo al beat.
+        # Cuando el jugador pega TEMPRANO (dentro de una ventana pequena de
+        # ~45ms), el sample no se toca inmediatamente sino en el tiempo
+        # target de la nota. Asi las notas melodicas caen en grid con la
+        # percusion/bajo y se integran a la cancion en vez de sentirse
+        # como una capa aparte. Formato: [(t_target_ms, snd, volL, volR), ...]
+        "snd_pendientes": [],
     }
     # aplicar perks al estado de la partida
     perks_ids = [p["id"] for p in (perks or [])]
@@ -4277,6 +4845,16 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
             p["velocidad"] *= 0.85
         elif pid == "iman":
             p["perk_iman"] = True  # perfecto window 30 -> 50ms
+        elif pid == "resurreccion":
+            p["perk_resurreccion"] = True  # revive 1 vez con 5 de vida (se consume)
+        elif pid == "regen":
+            p["perk_regen"] = True         # +1 vida cada 20 de combo
+        elif pid == "racha":
+            p["combo_div"] = 4             # multiplicador de combo cada 4 (vs 5)
+        elif pid == "hold_master":
+            p["hold_bonus"] = 10           # holds completos +10 (vs +5)
+        elif pid == "cazador":
+            p["perk_cazador"] = True       # power-ups duran el doble
     # calcular meta del stage (en modo run; en modo libre meta=0 = sin limite)
     if stage_info:
         nivel = dif.get("nivel", 1)
@@ -4533,8 +5111,11 @@ def tick_background(partida, ahora):
         sample = kit.get(p["sample"])
         # silencio_drums: saltear toda la percusion en ese tramo
         saltar = (evento_activo == "silencio_drums")
-        # solo_drums: la percusion suena mas fuerte
-        boost = 1.6 if evento_activo == "solo_drums" else 1.2
+        # boost de percusion: bajado de 1.8/2.4 a 1.5/2.0 en conjunto con la
+        # bajada del volumen del jugador (0.80 -> 0.62 arriba). El ratio
+        # jugador/percu queda mas favorable a la percu, y baja el nivel absoluto
+        # (mas headroom, mezcla mas "de estudio" y menos saturada).
+        boost = 2.0 if evento_activo == "solo_drums" else 1.5
         if sample and not saltar:
             vol = min(1.0, p["vol"] * boost) * config["volumen"]
             gl, gr = pan_perc.get(p["sample"], (1.0, 1.0))
@@ -4546,15 +5127,35 @@ def tick_background(partida, ahora):
     # reproducir linea de bajo (boost_bajo lo sube)
     bajo = c["bajo"]["eventos"]
     cache_bajo = c.get("cache_bajo", {})
-    vol_bajo = 1.5 if evento_activo == "boost_bajo" else 1.0
+    # bajado de 1.2/1.8 a 1.05/1.5 en linea con el resto del rebalanceo
+    vol_bajo = 1.5 if evento_activo == "boost_bajo" else 1.05
     while partida["indice_bajo"] < len(bajo) and ahora >= bajo[partida["indice_bajo"]]["tiempo"] + loop_off:
         ev = bajo[partida["indice_bajo"]]
         snd_b = cache_bajo.get(ev["midi"])
         if snd_b:
             ch_b = snd_b.play()
             if ch_b:
-                ch_b.set_volume(min(1.0, config["volumen"] * vol_bajo))
+                # sidechain: si este evento del bajo cae en la ventana de un
+                # kick (pre-marcado en generar_cancion), atenuar 40% para el
+                # efecto de "pompeo" clasico de electronica. Une bajo y kick
+                # en una sola sensacion ritmica en vez de dos capas separadas.
+                duck = 0.60 if ev.get("duckea") else 1.0
+                ch_b.set_volume(min(1.0, config["volumen"] * vol_bajo * duck))
         partida["indice_bajo"] += 1
+
+def _explotar_notas_muerte(partida):
+    """Al morir, todas las notas que estaban cayendo explotan en particulas
+    rojas — el tablero 'colapsa' visualmente en vez de congelarse."""
+    num_cols = partida["dificultad"]["columnas"]
+    ancho_col = ANCHO // num_cols
+    for grupo in partida["notas_cayendo"]:
+        gy = grupo.get("y")
+        if gy is None or gy < -40 or gy > ALTO + 40:
+            continue
+        for c in grupo["cols"]:
+            cx = c * ancho_col + ancho_col // 2
+            crear_explosion(cx, int(gy) + 14, 22, color=(255, 70, 70), potencia=1.3)
+    partida["notas_cayendo"] = []
 
 def _explotar_figura(partida):
     """Genera una explosion de particulas a partir de la figura de fondo."""
@@ -4674,6 +5275,19 @@ def dibujar_fondo_lissajous(partida, ahora):
     brillo_combo = min(combo / 30.0, 1.0)
     pulso = max(pulso, brillo_combo * 0.5)
 
+    # REACCION DEL ENEMIGO: cuando el jugador falla, la figura se recupera
+    # brevemente (brilla mas fuerte y deja de temblar por un instante).
+    # Refuerza la idea de que los misses le dan fuerza al enemigo.
+    ultimo_hit = partida.get("ultimo_hit") or {}
+    _hit_texto = ultimo_hit.get("texto", "")
+    _hit_age = ahora - ultimo_hit.get("tiempo", 0)
+    if _hit_texto in ("MAL", "BOMBA") and _hit_age < 600:
+        # el enemigo se fortalece cuando fallas: brilla fuerte y deja de temblar
+        recuperacion = 1.0 - (_hit_age / 600.0)
+        pulso = max(pulso, recuperacion * 0.9)
+        jitter *= max(0.1, 1.0 - recuperacion)  # deja de temblar
+        dano_ef *= max(0.3, 1.0 - recuperacion * 0.5)  # se "repara" visualmente
+
     cx_c = ANCHO / 2
     cy_c = (ZONA_Y) / 2 + 20
     rx = (ANCHO * 0.42) * escala
@@ -4747,6 +5361,43 @@ def dibujar_juego(partida, ahora):
     zy        = partida.get("zona_y", ZONA_Y)  # zona de golpe (arriba si inverso)
     es_inv    = partida.get("es_inverso", False)
 
+    # APAGON: fade de las NOTAS (solo notas, no fondo ni HUD) hacia negro por
+    # ~500ms, cada 2-4s. La opacidad se calcula abajo antes de dibujar los
+    # grupos; aca solo se actualiza el estado y se guarda el alpha en partida.
+    if ("apagon" in partida.get("mods", set())
+            and not partida.get("terminada") and not partida.get("game_over")):
+        if "apagon_fin" not in partida:
+            partida["apagon_fin"] = 0
+            partida["apagon_inicio"] = 0
+            partida["apagon_prox"] = ahora + random.randint(1500, 3000)
+        # arrancar uno nuevo?
+        if ahora >= partida["apagon_prox"] and ahora >= partida["apagon_fin"]:
+            dur = random.randint(450, 700)
+            partida["apagon_inicio"] = ahora
+            partida["apagon_fin"] = ahora + dur
+            partida["apagon_prox"] = ahora + dur + random.randint(2000, 4000)
+        # calcular opacidad de las notas: fade-in ~120ms, fade-out ~180ms
+        # (0.0 = totalmente invisibles, 1.0 = normales). Se lee en el loop
+        # de dibujo de notas mas abajo.
+        _ai = partida.get("apagon_inicio", 0)
+        _af = partida.get("apagon_fin", 0)
+        if ahora < _af:
+            _dur_ap = max(1, _af - _ai)
+            _pct = (ahora - _ai) / _dur_ap
+            fade_in_pct = 120.0 / _dur_ap
+            fade_out_pct = 180.0 / _dur_ap
+            if _pct < fade_in_pct:
+                _alpha = 1.0 - (_pct / fade_in_pct)
+            elif _pct > (1.0 - fade_out_pct):
+                _alpha = 1.0 - ((1.0 - _pct) / fade_out_pct)
+            else:
+                _alpha = 0.0
+            partida["_apagon_alpha_notas"] = max(0.0, min(1.0, _alpha))
+        else:
+            partida["_apagon_alpha_notas"] = 1.0
+    else:
+        partida["_apagon_alpha_notas"] = 1.0
+
     # fondo procedural (figura de lissajous tenue) - el "enemigo"
     si_fondo = partida.get("stage_info")
     figura_explotada = (si_fondo and si_fondo["n"] >= NUM_STAGES and partida.get("terminada"))
@@ -4786,6 +5437,9 @@ def dibujar_juego(partida, ahora):
 
     es_invisible = "invisible" in partida.get("mods", set())
     es_niebla = "niebla" in partida.get("mods", set())
+    es_monocromo = "monocromo" in partida.get("mods", set())
+    # alpha del apagon (0..1, aplicado como multiplicador al color de las notas)
+    apagon_a = partida.get("_apagon_alpha_notas", 1.0)
     for grupo in partida["notas_cayendo"]:
         # modificador INVISIBLE: las notas se ven al principio y desaparecen al caer
         if es_invisible:
@@ -4854,16 +5508,21 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, GRIS_MED, (bar_x, bar_y, 12, bar_h))
                     pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, 12, bar_h), 1)
             if col in pendientes:
-                # aplicar fade de niebla al color de la nota
-                if es_niebla and alpha_niebla < 1.0:
-                    cn = (int(col_nota[0] * alpha_niebla),
-                          int(col_nota[1] * alpha_niebla),
-                          int(col_nota[2] * alpha_niebla))
+                # aplicar fade combinado: niebla (distancia) + apagon (tiempo)
+                alpha_total = alpha_niebla * apagon_a
+                if alpha_total < 1.0:
+                    cn = (int(col_nota[0] * alpha_total),
+                          int(col_nota[1] * alpha_total),
+                          int(col_nota[2] * alpha_total))
                 else:
                     cn = col_nota
                 # power-up: nota especial con animacion propia por tipo
                 pu_id = grupo.get("power_up")
-                if pu_id:
+                if pu_id and es_monocromo:
+                    # MONOCROMO: el power-up se disfraza de nota comun, sin
+                    # pista visual de que tipo es (ni siquiera de que ES uno)
+                    pygame.draw.rect(pantalla, cn, (x + 6, gy, ancho_col - 12, 28))
+                elif pu_id:
                     _mt = math
                     pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
                     pc = pu_def["color"] if pu_def else BLANCO
@@ -4872,8 +5531,10 @@ def dibujar_juego(partida, ahora):
                     ny = gy - 6
                     ccx = x + ancho_col // 2          # centro X de la nota
                     ccy = int(ny + nota_h // 2)       # centro Y
-                    brill = 0.75 + 0.25 * _mt.sin(t_anim * 6.0)
+                    brill = (0.75 + 0.25 * _mt.sin(t_anim * 6.0)) * apagon_a
                     cn = (int(pc[0] * brill), int(pc[1] * brill), int(pc[2] * brill))
+                    # borde blanco tambien se atenua con el apagon
+                    borde_pu = (int(255 * apagon_a),) * 3
 
                     if pu_id == "estrella":
                         # AUTO: rayos giratorios (aura de invencibilidad)
@@ -4885,7 +5546,7 @@ def dibujar_juego(partida, ahora):
                             y2 = ccy + _mt.sin(ang) * (nota_h // 2 + 18)
                             pygame.draw.line(pantalla, cn, (x1, y1), (x2, y2), 3)
                         pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
-                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+                        pygame.draw.rect(pantalla, borde_pu, (x + 2, ny, ancho_col - 4, nota_h), 2)
 
                     elif pu_id == "vida":
                         # +HP: latido de corazon (doble pulso ritmico "tu-tum")
@@ -4899,16 +5560,16 @@ def dibujar_juego(partida, ahora):
                         pygame.draw.rect(pantalla, cn,
                                          (x + 2 - exp, ny - exp,
                                           ancho_col - 4 + exp * 2, nota_h + exp * 2))
-                        pygame.draw.rect(pantalla, BLANCO,
+                        pygame.draw.rect(pantalla, borde_pu,
                                          (x + 2 - exp, ny - exp,
                                           ancho_col - 4 + exp * 2, nota_h + exp * 2), 2)
 
                     elif pu_id == "reloj":
                         # SLOW: aguja de reloj girando LENTA + anillo
                         pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
-                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+                        pygame.draw.rect(pantalla, borde_pu, (x + 2, ny, ancho_col - 4, nota_h), 2)
                         rad = min(ancho_col // 2 - 8, nota_h // 2 + 8)
-                        pygame.draw.circle(pantalla, BLANCO, (ccx, ccy), rad, 2)
+                        pygame.draw.circle(pantalla, borde_pu, (ccx, ccy), rad, 2)
                         ang_ag = t_anim * 1.2  # giro lento = el efecto que da
                         ax = ccx + _mt.cos(ang_ag - 1.5708) * (rad - 3)
                         ay = ccy + _mt.sin(ang_ag - 1.5708) * (rad - 3)
@@ -4923,18 +5584,41 @@ def dibujar_juego(partida, ahora):
                                          (x + 2 + sep, ny - sep // 2, ancho_col - 4, nota_h))
                         # nota principal
                         pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
-                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+                        pygame.draw.rect(pantalla, borde_pu, (x + 2, ny, ancho_col - 4, nota_h), 2)
 
                     else:
                         pygame.draw.rect(pantalla, cn, (x + 2, ny, ancho_col - 4, nota_h))
-                        pygame.draw.rect(pantalla, BLANCO, (x + 2, ny, ancho_col - 4, nota_h), 2)
+                        pygame.draw.rect(pantalla, borde_pu, (x + 2, ny, ancho_col - 4, nota_h), 2)
 
                     # label centrado (comun a todos)
                     iconos_pu = {"estrella": "AUTO", "vida": "+HP", "reloj": "SLOW", "doble": "x2"}
                     pu_lbl = fuente.render(iconos_pu.get(pu_id, "?"), True, NEGRO)
                     pantalla.blit(pu_lbl, (ccx - pu_lbl.get_width() // 2,
                                            ccy - pu_lbl.get_height() // 2))
-                elif grupo.get("es_acorde"):
+                elif grupo.get("es_bomba"):
+                    # BOMBA: rojo intenso con parpadeo y simbolo X centrado.
+                    # Bajo MONOCROMO: se disfraza el CUERPO (color normal, sin
+                    # parpadeo ni borde blanco alarmante) pero la X blanca
+                    # centrada se mantiene: la X es la unica pista de peligro
+                    # y sin eso el jugador no tendria forma de evitarla.
+                    _blco_ap = (int(255 * apagon_a),) * 3
+                    _cx = x + ancho_col // 2
+                    _cy = gy + 14
+                    _r = 8
+                    if es_monocromo:
+                        # cuerpo como nota comun (color del genero, sin marca)
+                        pygame.draw.rect(pantalla, cn, (x + 6, gy, ancho_col - 12, 28))
+                    else:
+                        _tb = ahora_ms / 1000.0
+                        _pulso = (0.6 + 0.4 * math.sin(_tb * 10.0)) * apagon_a
+                        _rojo = (int(255 * _pulso), int(40 * _pulso), int(40 * _pulso))
+                        pygame.draw.rect(pantalla, _rojo, (x + 4, gy - 4, ancho_col - 8, 36))
+                        _grosor = 2 if _pulso > 0.75 else 3
+                        pygame.draw.rect(pantalla, _blco_ap, (x + 4, gy - 4, ancho_col - 8, 36), _grosor)
+                    # X central (siempre visible, con o sin MONOCROMO)
+                    pygame.draw.line(pantalla, _blco_ap, (_cx - _r, _cy - _r), (_cx + _r, _cy + _r), 3)
+                    pygame.draw.line(pantalla, _blco_ap, (_cx + _r, _cy - _r), (_cx - _r, _cy + _r), 3)
+                elif grupo.get("es_acorde") and not es_monocromo:
                     pygame.draw.rect(pantalla, cn, (x + 6,  gy,     ancho_col - 12, 28))
                     pygame.draw.rect(pantalla, NEGRO,  (x + 9,  gy + 3, ancho_col - 18, 22))
                     pygame.draw.rect(pantalla, cn, (x + 11, gy + 5, ancho_col - 22, 18))
@@ -4942,7 +5626,10 @@ def dibujar_juego(partida, ahora):
                     pygame.draw.rect(pantalla, cn, (x + 6, gy, ancho_col - 12, 28))
             xs.append(x + ancho_col // 2)
         if len(xs) > 1:
-            pygame.draw.line(pantalla, col_nota, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
+            _col_link = (int(col_nota[0] * apagon_a),
+                         int(col_nota[1] * apagon_a),
+                         int(col_nota[2] * apagon_a)) if apagon_a < 1.0 else col_nota
+            pygame.draw.line(pantalla, _col_link, (xs[0], gy + 14), (xs[-1], gy + 14), 2)
 
     pantalla.set_clip(clip_anterior)
 
@@ -5031,6 +5718,25 @@ def dibujar_juego(partida, ahora):
         pygame.draw.rect(pantalla, cy, rect_cel, grosor)
 
     # === HUD MINIMALISTA: solo lo esencial de gameplay ===
+    # IZQUIERDA: nombre del enemigo (la figura del fondo)
+    _liss = partida["cancion"].get("lissajous", {})
+    _nombre_enem = _liss.get("nombre", "???")
+    _si_hud = partida.get("stage_info")
+    _st_n = _si_hud["n"] if _si_hud else 1
+    _dano_hud = (_st_n - 1) / max(1, NUM_STAGES - 1)
+    # el nombre tiembla y se opaca conforme se daña
+    _ne_alpha = max(80, int(255 * (1.0 - _dano_hud * 0.6)))
+    _ne_col = (min(255, 100 + int(_dano_hud * 155)), max(0, 100 - int(_dano_hud * 60)),
+               max(0, 100 - int(_dano_hud * 60)))
+    _ne_txt = fuente_chica.render(_nombre_enem, True, _ne_col)
+    _ne_txt.set_alpha(_ne_alpha)
+    _ne_x = 12
+    _ne_y = 8
+    if _dano_hud > 0.5:
+        _ne_x += random.randint(-1, 1)
+        _ne_y += random.randint(-1, 1)
+    pantalla.blit(_ne_txt, (_ne_x, _ne_y))
+
     # CENTRO: puntos + combo
     pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
@@ -5131,25 +5837,78 @@ def dibujar_juego(partida, ahora):
         pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, hit_y))
 
     if partida.get("game_over"):
-        go_txt = fuente_grande.render("GAME OVER", True, BLANCO)
-        pantalla.blit(go_txt, (ANCHO // 2 - go_txt.get_width() // 2, ALTO // 2 - 50))
+        # --- ANIMACION DE MUERTE ---
+        # t=0: flash rojo fuerte que se desvanece en 500ms
+        # t=200-700: "GAME OVER" cae desde arriba con rebote (ease-out-bounce)
+        # t=700+: stats y controles aparecen con fade-in escalonado
+        go_t = pygame.time.get_ticks() - partida.get("game_over_t", 0)
+
+        # flash rojo inicial (500ms de decaimiento)
+        if go_t < 500:
+            alpha_flash = int(110 * (1.0 - go_t / 500.0))
+            flash_s = pygame.Surface((ANCHO, ALTO))
+            flash_s.set_alpha(alpha_flash)
+            flash_s.fill((255, 30, 30))
+            pantalla.blit(flash_s, (0, 0))
+
+        # GAME OVER cae desde arriba con rebote
+        y_final = ALTO // 2 - 50
+        t_caida = max(0.0, min(1.0, (go_t - 200) / 500.0))
+        if t_caida <= 0:
+            go_y = -80
+        else:
+            # ease-out-bounce simplificado: cae, rebota una vez, asienta
+            n1, d1 = 7.5625, 2.75
+            tb = t_caida
+            if tb < 1 / d1:
+                b = n1 * tb * tb
+            elif tb < 2 / d1:
+                tb -= 1.5 / d1
+                b = n1 * tb * tb + 0.75
+            elif tb < 2.5 / d1:
+                tb -= 2.25 / d1
+                b = n1 * tb * tb + 0.9375
+            else:
+                tb -= 2.625 / d1
+                b = n1 * tb * tb + 0.984375
+            go_y = int(-80 + (y_final + 80) * b)
+        # temblor sutil los primeros 800ms (la pantalla "acusa el golpe")
+        gx_shake = random.randint(-2, 2) if go_t < 800 else 0
+        go_txt = fuente_grande.render("GAME OVER", True, (255, 80, 80) if go_t < 800 else BLANCO)
+        pantalla.blit(go_txt, (ANCHO // 2 - go_txt.get_width() // 2 + gx_shake, go_y))
+
+        # nombre del enemigo que te mato (aparece con fade despues del titulo)
+        _enem_n = partida["cancion"].get("lissajous", {}).get("nombre", "???")
+        _enem_txt = fuente_chica.render(f"DERROTADO POR {_enem_n}", True, (255, 100, 100))
+        if go_t > 500:
+            _ea = min(255, int(255 * (go_t - 500) / 400.0))
+            _enem_txt.set_alpha(_ea)
+            pantalla.blit(_enem_txt, (ANCHO // 2 - _enem_txt.get_width() // 2, go_y + 55))
+
+        # stats y controles: fade-in escalonado despues de que aterriza el texto
+        def _blit_fade(surf, x, y, t_aparece):
+            if go_t < t_aparece:
+                return
+            alpha = min(255, int(255 * (go_t - t_aparece) / 300.0))
+            surf.set_alpha(alpha)
+            pantalla.blit(surf, (x, y))
         sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
-        pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2 + 10))
+        _blit_fade(sc_txt, ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2 + 30, 750)
         if run_actual is not None:
             esc2 = fuente_chica.render("ESPACIO = RESULTADO DEL RUN", True, GRIS)
         else:
             esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
-        pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 50))
+        _blit_fade(esc2, ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 70, 950)
         ruta = partida.get("export_ruta")
         if ruta:
             ok_txt = fuente_chica.render("GUARDADA EN export/", True, BLANCO)
-            pantalla.blit(ok_txt, (ANCHO // 2 - ok_txt.get_width() // 2, ALTO // 2 + 75))
+            _blit_fade(ok_txt, ANCHO // 2 - ok_txt.get_width() // 2, ALTO // 2 + 95, 950)
         elif partida.get("exportando"):
             ex_txt = fuente_chica.render("GUARDANDO...", True, GRIS_MED)
-            pantalla.blit(ex_txt, (ANCHO // 2 - ex_txt.get_width() // 2, ALTO // 2 + 75))
+            _blit_fade(ex_txt, ANCHO // 2 - ex_txt.get_width() // 2, ALTO // 2 + 95, 950)
         else:
             dl_txt = fuente_chica.render("D = DESCARGAR CANCION", True, BLANCO)
-            pantalla.blit(dl_txt, (ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 75))
+            _blit_fade(dl_txt, ANCHO // 2 - dl_txt.get_width() // 2, ALTO // 2 + 95, 950)
 
     elif partida["terminada"] and not partida["notas_cayendo"]:
         col_g = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
@@ -5157,7 +5916,13 @@ def dibujar_juego(partida, ahora):
         if partida.get("es_tutorial"):
             fin = fuente.render("TUTORIAL COMPLETADO!", True, col_g)
         elif meta > 0:
-            fin = fuente.render("META ALCANZADA!", True, col_g)
+            _enem_n_fin = partida["cancion"].get("lissajous", {}).get("nombre", "???")
+            _si_fin = partida.get("stage_info")
+            _st_fin = _si_fin["n"] if _si_fin else 1
+            if _st_fin >= NUM_STAGES and run_actual is not None:
+                fin = fuente.render(f"{_enem_n_fin} DESTRUIDO!", True, col_g)
+            else:
+                fin = fuente.render(f"{_enem_n_fin} DAÑADO!", True, col_g)
         else:
             fin = fuente.render("FIN", True, BLANCO)
         pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2 - 40))
@@ -5195,17 +5960,17 @@ def dibujar_juego(partida, ahora):
 
 # ═══════════════════════════════════════════════════════ >>PANTALLAS<< ═══
 
-TUTORIAL_NUM_PAGINAS = 7
+TUTORIAL_NUM_PAGINAS = 9
 tutorial_pagina = 0
 
 def dibujar_tutorial(pagina):
-    """Tutorial de 7 paginas con graficos en vivo. La ultima ofrece practica."""
+    """Tutorial de 9 paginas con graficos en vivo."""
     pantalla.fill(NEGRO)
     t_anim = pygame.time.get_ticks() / 1000.0
     cx = ANCHO // 2
 
-    titulos = ["OBJETIVO", "NOTAS", "HOLDS Y ACORDES", "VIDA Y COMBO",
-               "POWER-UPS", "PERKS", "MODIFICADORES"]
+    titulos = ["COMO JUGAR", "NOTAS", "HOLDS Y ACORDES", "VIDA Y COMBO",
+               "POWER-UPS", "BOMBAS", "PERKS", "MODIFICADORES", "MODOS DE JUEGO"]
     titulo = fuente_grande.render(titulos[pagina], True, BLANCO)
     pantalla.blit(titulo, (cx - titulo.get_width() // 2, 36))
     pygame.draw.line(pantalla, GRIS, (60, 96), (ANCHO - 60, 96), 1)
@@ -5216,26 +5981,26 @@ def dibujar_tutorial(pagina):
         pantalla.blit(txt, (cx - txt.get_width() // 2, y))
 
     if pagina == 0:
-        # OBJETIVO
-        linea("CADA STAGE TIENE UNA META DE PUNTOS", 130, BLANCO, fuente)
-        linea("LA CANCION SE REPITE HASTA QUE LA ALCANCES", 165)
-        linea("(O HASTA QUE TE QUEDES SIN VIDA)", 185)
-        # barra de meta animada
-        bar_w, bar_x, bar_y = 360, cx - 180, 250
+        # COMO JUGAR
+        linea("CADA STAGE TIENE UNA META DE PUNTOS", 125, BLANCO, fuente)
+        linea("LA CANCION SE REPITE HASTA QUE LA ALCANCES", 160)
+        linea("(O HASTA QUE TE QUEDES SIN VIDA)", 180)
+        bar_w, bar_x, bar_y = 360, cx - 180, 235
         prog = (math.sin(t_anim * 0.8) * 0.5 + 0.5)
         pygame.draw.rect(pantalla, GRIS, (bar_x, bar_y, bar_w, 16))
         pygame.draw.rect(pantalla, (255, 180, 60), (bar_x, bar_y, int(bar_w * prog), 16))
         pygame.draw.rect(pantalla, BLANCO, (bar_x, bar_y, bar_w, 16), 1)
-        linea(f"{int(prog*325)}/325", 275, GRIS_MED)
-        linea("LA BARRA DE META ESTA ARRIBA A LA DERECHA", 320)
-        linea("LOS MULTIPLICADORES TE AYUDAN A LLEGAR ANTES", 345)
-        linea("UN RUN SON 4 STAGES: LA META CRECE EN CADA UNO", 385, BLANCO)
+        linea(f"{int(prog*325)}/325", 260, GRIS_MED)
+        linea("LA FIGURA DEL FONDO ES TU ENEMIGO", 310, BLANCO)
+        linea("SE DANA CON TU COMBO Y SE RECUPERA SI FALLAS", 335)
+        linea("UN RUN SON 4 STAGES: LA META CRECE EN CADA UNO", 375, (255, 180, 60))
+        linea("TECLAS: A S D F G H J K (SEGUN COLUMNAS)", 420, BLANCO)
+        linea("ESC = PAUSAR DURANTE EL JUEGO", 445)
 
     elif pagina == 1:
         # NOTAS
         linea("LAS NOTAS CAEN POR COLUMNAS", 125, BLANCO, fuente)
         linea("APRETA LA TECLA CUANDO LA NOTA CRUZA LA LINEA", 160)
-        # mini demo: 3 columnas, nota animada cayendo
         demo_x, demo_y, demo_w, demo_h = cx - 150, 195, 300, 190
         col_w = demo_w // 3
         for i in range(1, 3):
@@ -5243,29 +6008,26 @@ def dibujar_tutorial(pagina):
         pygame.draw.rect(pantalla, GRIS, (demo_x, demo_y, demo_w, demo_h), 1)
         linea_y = demo_y + demo_h - 40
         pygame.draw.line(pantalla, (255, 180, 60), (demo_x, linea_y), (demo_x + demo_w, linea_y), 2)
-        # nota cayendo en loop
         fall = (t_anim * 0.5) % 1.0
         ny = demo_y + 10 + fall * (linea_y - demo_y - 20)
         pygame.draw.rect(pantalla, BLANCO, (demo_x + col_w + 8, ny, col_w - 16, 20))
         for i, lbl in enumerate(["A", "S", "D"]):
             l = fuente_chica.render(lbl, True, GRIS_MED)
             pantalla.blit(l, (demo_x + i * col_w + col_w // 2 - l.get_width() // 2, linea_y + 12))
-        # precision
-        linea("PRECISION:", 400, BLANCO)
-        linea("PERFECTO (justo) > BIEN > OK > MAL (resta puntos)", 422)
-        linea("EN FACIL LA TECLA SE ILUMINA CUANDO HAY QUE APRETAR", 452, (255, 180, 60))
+        linea("PRECISION:", 395, BLANCO)
+        linea("PERFECTO > BIEN > OK > MAL (rompe combo)", 417)
+        linea("APRETAR SIN NOTA CERCA: -1 PUNTO", 439, GRIS)
+        linea("EN FACIL LA TECLA SE ILUMINA CUANDO HAY QUE APRETAR", 465, (255, 180, 60))
 
     elif pagina == 2:
         # HOLDS Y ACORDES
         linea("NOTA LARGA (HOLD): MANTENE LA TECLA APRETADA", 130, BLANCO, fuente)
-        # dibujo de hold: barra vertical + nota
         hx = cx - 130
         pygame.draw.rect(pantalla, GRIS_MED, (hx - 6, 170, 12, 90))
         pygame.draw.rect(pantalla, BLANCO, (hx - 6, 170, 12, 90), 1)
         pygame.draw.rect(pantalla, BLANCO, (hx - 30, 260, 60, 22))
         linea2 = fuente_chica.render("MANTENE HASTA QUE LA BARRA TERMINE (+3 PTS)", True, GRIS_MED)
         pantalla.blit(linea2, (cx - 60, 215))
-        # acorde
         linea("ACORDE: VARIAS COLUMNAS AL MISMO TIEMPO", 320, BLANCO, fuente)
         ax = cx - 110
         for i in range(3):
@@ -5279,27 +6041,27 @@ def dibujar_tutorial(pagina):
 
     elif pagina == 3:
         # VIDA Y COMBO
-        linea("VIDA: CADA MISS TE RESTA 2 PUNTOS DE VIDA", 130, BLANCO, fuente)
-        # barra HP
+        linea("VIDA: CADA NOTA QUE SE PASA TE RESTA 2 DE VIDA", 130, BLANCO, fuente)
         pygame.draw.rect(pantalla, GRIS, (cx - 100, 165, 200, 10))
         hp = (math.sin(t_anim) * 0.3 + 0.6)
         pygame.draw.rect(pantalla, BLANCO, (cx - 100, 165, int(200 * hp), 10))
         pygame.draw.rect(pantalla, BLANCO, (cx - 100, 165, 200, 10), 1)
-        linea("SI LLEGA A CERO: GAME OVER", 190)
-        linea("COMBO: HITS SEGUIDOS SIN FALLAR", 250, BLANCO, fuente)
+        linea("MISS = -2 VIDA (NO RESTA PUNTOS)", 190, GRIS_MED)
+        linea("SI LA VIDA LLEGA A CERO: GAME OVER", 210)
+        linea("COMBO: HITS SEGUIDOS SIN FALLAR", 270, BLANCO, fuente)
         combo_n = int((t_anim * 4) % 30) + 1
         ctxt = fuente.render(f"{combo_n}x COMBO", True, (255, 180, 60))
-        pantalla.blit(ctxt, (cx - ctxt.get_width() // 2, 285))
-        linea("CADA 5 DE COMBO SUBE EL MULTIPLICADOR DE PUNTOS", 325)
-        linea("UN MISS ROMPE EL COMBO (SALVO CON EL PERK COMBO SAVE)", 350)
-        linea("TOCA CON PRECISION PARA MANTENER LA RACHA", 395, (255, 180, 60))
+        pantalla.blit(ctxt, (cx - ctxt.get_width() // 2, 305))
+        linea("CADA 5 DE COMBO SUBE EL MULTIPLICADOR DE PUNTOS", 345)
+        linea("UN MISS ROMPE EL COMBO (SALVO CON EL PERK COMBO SAVE)", 370)
+        linea("TU COMBO DANA AL ENEMIGO: CUANTO MAS ALTO, MAS SUFRE", 415, (255, 180, 60))
 
     elif pagina == 4:
         # POWER-UPS
         linea("NOTAS ESPECIALES QUE APARECEN EN LA CANCION", 125, BLANCO, fuente)
-        linea("ATRAPALAS PARA ACTIVAR EFECTOS TEMPORALES", 155)
+        linea("ATRAPALAS TOCANDO LA NOTA COMO CUALQUIER OTRA", 155)
         pu_info = [
-            ("AUTO", (255, 255, 100), "EL JUEGO TOCA SOLO 6s (TECLAS BLANCAS)"),
+            ("AUTO", (255, 255, 100), "EL JUEGO TOCA SOLO 6s"),
             ("+HP",  (255, 100, 100), "RECUPERA 4 DE VIDA"),
             ("SLOW", (100, 200, 255), "NOTAS 25% MAS LENTAS POR 8s"),
             ("x2",   (100, 255, 100), "PUNTOS DOBLES POR 10s"),
@@ -5315,46 +6077,92 @@ def dibujar_tutorial(pagina):
             pantalla.blit(nlbl, (cx - 240 + 45 - nlbl.get_width() // 2, y + 18 - nlbl.get_height() // 2))
             dlbl = fuente_chica.render(desc, True, GRIS_MED)
             pantalla.blit(dlbl, (cx - 130, y + 10))
+        linea("CON MONOCROMO ACTIVO, SE VEN COMO NOTAS NORMALES", 445, GRIS)
 
     elif pagina == 5:
+        # BOMBAS
+        linea("APARECEN DESDE NIVEL 4 (NORMAL+)", 125, BLANCO, fuente)
+        linea("SON NOTAS ROJAS CON UNA X: NO LAS TOQUES", 158)
+        _bx, _by = cx, 230
+        pulso = 0.6 + 0.4 * math.sin(t_anim * 10.0)
+        _rojo = (int(255 * pulso), int(40 * pulso), int(40 * pulso))
+        _bw, _bh = 70, 44
+        pygame.draw.rect(pantalla, _rojo, (_bx - _bw // 2, _by, _bw, _bh))
+        _gr = 2 if pulso > 0.75 else 3
+        pygame.draw.rect(pantalla, BLANCO, (_bx - _bw // 2, _by, _bw, _bh), _gr)
+        _r = 10
+        _cy_b = _by + _bh // 2
+        pygame.draw.line(pantalla, BLANCO, (_bx - _r, _cy_b - _r), (_bx + _r, _cy_b + _r), 3)
+        pygame.draw.line(pantalla, BLANCO, (_bx + _r, _cy_b - _r), (_bx - _r, _cy_b + _r), 3)
+        linea("SI LA TOCAS: PIERDES 4 DE VIDA + ROMPE COMBO", 305, BLANCO)
+        linea("SI LA ESQUIVAS: NO PASA NADA (NO ES UN MISS)", 330, GRIS_MED)
+        linea("EL PERK ESCUDO ABSORBE LA EXPLOSION", 360, (100, 200, 255))
+        linea("CON MONOCROMO: SE DISFRAZAN PERO MANTIENEN LA X", 395, GRIS)
+        linea("SUDDEN DEATH + BOMBA = MUERTE INSTANTANEA", 425, (255, 100, 100))
+
+    elif pagina == 6:
         # PERKS
         linea("AL COMPLETAR UN STAGE ELEGIS 1 DE 3 MEJORAS", 125, BLANCO, fuente)
-        linea("SE ACUMULAN DURANTE TODO EL RUN", 155)
+        linea("SE ACUMULAN DURANTE TODO EL RUN (4 STAGES)", 155)
+        linea("NAVEGA CON FLECHAS O TECLAS 1/2/3, CONFIRMA CON ENTER", 180, GRIS)
+        cat_col = {"def": (100, 200, 255), "ofe": (255, 150, 60), "mec": (140, 230, 100)}
         perk_info = [
-            ("DEFENSIVOS", "ESCUDO (absorbe misses)  CORAZON (+vida)  VENTANA (timing amplio)"),
-            ("OFENSIVOS",  "MULTI (x1.5 pts)  COMBO SAVE  PERFECTO+ (doble)"),
-            ("MECANICOS",  "LENTO (notas lentas)  IMAN (perfecto amplio)"),
+            ("DEFENSIVOS", cat_col["def"], "ESCUDO  CORAZON  VENTANA  RESURRECCION  REGEN"),
+            ("OFENSIVOS",  cat_col["ofe"], "MULTI  COMBO SAVE  PERFECTO+  RACHA  CAZADOR"),
+            ("MECANICOS",  cat_col["mec"], "LENTO (notas lentas)  IMAN (perfecto amplio)"),
         ]
-        y0 = 210
-        for i, (cat, lista) in enumerate(perk_info):
+        y0 = 220
+        for i, (cat, col_c, lista) in enumerate(perk_info):
             y = y0 + i * 70
-            ctxt = fuente.render(cat, True, (255, 180, 60))
+            ctxt = fuente.render(cat, True, col_c)
             pantalla.blit(ctxt, (cx - ctxt.get_width() // 2, y))
             ltxt = fuente_chica.render(lista, True, GRIS_MED)
             pantalla.blit(ltxt, (cx - ltxt.get_width() // 2, y + 28))
-        linea("ELEGI SEGUN TU ESTILO: SOBREVIVIR O PUNTUAR MAS RAPIDO", 445, BLANCO)
+        linea("ELEGI SEGUN TU ESTILO: SOBREVIVIR O PUNTUAR", 445, BLANCO)
 
-    elif pagina == 6:
+    elif pagina == 7:
         # MODS
-        linea("DESDE EL STAGE 2 SE AGREGAN MODIFICADORES", 125, BLANCO, fuente)
-        linea("HACEN EL JUEGO MAS DIFICIL PERO MULTIPLICAN TUS PUNTOS", 155)
+        linea("DESDE EL STAGE 2 SE AGREGAN MODIFICADORES", 120, BLANCO, fuente)
+        linea("HACEN EL JUEGO MAS DIFICIL PERO MULTIPLICAN PUNTOS", 148)
         mods_info = [
-            ("ESPEJO",     "las teclas se invierten (A toca la ultima columna)"),
+            ("ESPEJO",     "las teclas se invierten"),
             ("INVERSO",    "las notas suben desde abajo"),
             ("VELOZ",      "todo cae al doble de velocidad"),
-            ("ACELERANDO", "la velocidad sube durante la cancion"),
+            ("ACELERANDO", "la velocidad sube gradualmente"),
             ("NIEBLA",     "las notas aparecen desde la mitad"),
             ("RAFAGAS",    "tramos densos alternados con silencios"),
-            ("SUDDEN",     "un solo error = game over (x2.0 pts!)"),
+            ("MONOCROMO",  "power-ups, acordes y bombas sin marca"),
+            ("APAGON",     "las notas se desvanecen por momentos"),
+            ("SUDDEN",     "un solo error = game over (x2.0!)"),
         ]
-        y0 = 200
+        y0 = 185
         for i, (nom, desc) in enumerate(mods_info):
-            y = y0 + i * 30
+            y = y0 + i * 24
             ntxt = fuente_chica.render(nom, True, BLANCO)
-            pantalla.blit(ntxt, (cx - 250, y))
+            pantalla.blit(ntxt, (cx - 260, y))
             dtxt = fuente_chica.render(desc, True, GRIS_MED)
-            pantalla.blit(dtxt, (cx - 110, y))
-        linea("EL DADO REVELA EL MOD ANTES DE CADA STAGE", 430, (255, 180, 60))
+            pantalla.blit(dtxt, (cx - 130, y))
+        linea("EL DADO REVELA EL MOD ANTES DE CADA STAGE", 445, (255, 180, 60))
+
+    elif pagina == 8:
+        # MODOS DE JUEGO
+        linea("MENU PRINCIPAL: NAVEGA CON FLECHAS + ENTER", 120, BLANCO, fuente)
+        modos = [
+            ("JUGAR",       "Elegi una seed con ESPACIO, carga con ENTER"),
+            ("CARRERA",     "Desbloquea niveles completando el anterior"),
+            ("TUTORIAL",    "Esta pantalla (donde estas ahora)"),
+            ("LEADERBOARD", "Top 10 de puntajes locales"),
+            ("CONFIG",      "Volumen, brillo, resolucion, audio"),
+        ]
+        y0 = 175
+        for i, (modo, desc) in enumerate(modos):
+            y = y0 + i * 44
+            mtxt = fuente.render(modo, True, BLANCO)
+            pantalla.blit(mtxt, (120, y))
+            dtxt = fuente_chica.render(desc, True, GRIS_MED)
+            pantalla.blit(dtxt, (120, y + 24))
+        linea("DURANTE EL JUEGO: ESC = PAUSA", 410, GRIS)
+        linea("EN LA PAUSA: REINICIAR, AJUSTAR VOLUMEN, O SALIR", 435, GRIS)
 
     # pie de pagina: navegacion + indicador
     pag_txt = fuente_chica.render(f"{pagina + 1}/{TUTORIAL_NUM_PAGINAS}", True, GRIS)
@@ -5368,58 +6176,170 @@ def dibujar_tutorial(pagina):
             nav = fuente.render("ESPACIO = PRACTICAR!", True, GRIS_MED)
     pantalla.blit(nav, (cx - nav.get_width() // 2, ALTO - 60))
 
-def dibujar_menu(seed_actual, cargando):
-    dif      = get_dificultad(max(seed_actual, 1))
-    progreso = min(seed_actual / SEED_MAX, 1.0)
+menu_opcion = 0   # opcion seleccionada del menu principal
+MENU_OPCIONES = ["JUGAR", "CARRERA", "TUTORIAL", "LEADERBOARD", "CONFIG"]
 
-    # visualizador de barras tipo ecualizador (fondo animado)
-    tms = pygame.time.get_ticks() * 0.003
+def dibujar_menu():
+    """Menu principal navegable con flechas y ENTER."""
+    pantalla.fill(NEGRO)
+    t_anim = pygame.time.get_ticks() / 1000.0
+    cx = ANCHO // 2
+
+    # colores por opcion del menu
+    MENU_COLORES = [
+        (0, 220, 255),    # JUGAR: cyan
+        (255, 180, 60),   # CARRERA: dorado
+        (140, 230, 100),  # TUTORIAL: verde
+        (180, 120, 255),  # LEADERBOARD: violeta
+        (255, 100, 140),  # CONFIG: rosa
+    ]
+    col_sel = MENU_COLORES[menu_opcion]
+
+    # visualizador de barras tipo ecualizador (con tinte del color seleccionado)
+    tms = t_anim * 3
     n_barras = 32
     bw = ANCHO // n_barras
     for i in range(n_barras):
-        # cada barra oscila con una mezcla de senos para parecer musica
         h = (math.sin(tms + i * 0.4) * 0.5 + 0.5)
         h *= (math.sin(tms * 1.7 + i * 0.9) * 0.3 + 0.7)
         altura = int(h * 160) + 4
         bx = i * bw
         by = ALTO - altura
-        gris = 18 + int(h * 30)
-        pygame.draw.rect(pantalla, (gris, gris, gris), (bx, by, bw - 2, altura))
+        # tinte sutil del color seleccionado en las barras
+        _mix = 0.25
+        br = int(20 + col_sel[0] * _mix * h * 0.4)
+        bg = int(20 + col_sel[1] * _mix * h * 0.4)
+        bb = int(20 + col_sel[2] * _mix * h * 0.4)
+        pygame.draw.rect(pantalla, (min(255, br), min(255, bg), min(255, bb)),
+                         (bx, by, bw - 2, altura))
 
-    # notas musicales flotando suave
+    # notas musicales flotando (con tinte)
     for j in range(6):
         nx = (j * 137 + int(tms * 20)) % (ANCHO + 60) - 30
-        ny = 200 + int(math.sin(tms * 0.8 + j) * 80) + j * 30
+        ny = 200 + int(math.sin(tms * 0.27 + j) * 80) + j * 30
         ny = ny % ALTO
-        dibujar_nota_musical(pantalla, nx, ny, 16 + (j % 3) * 6, (30, 30, 30))
+        _nc = (int(col_sel[0] * 0.15), int(col_sel[1] * 0.15), int(col_sel[2] * 0.15))
+        dibujar_nota_musical(pantalla, nx, ny, 16 + (j % 3) * 6, _nc)
 
-    titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
-    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 70))
-    pygame.draw.line(pantalla, BLANCO, (60, 140), (ANCHO - 60, 140), 2)
+    # titulo con pulso de color
+    _tp = 0.7 + 0.3 * math.sin(t_anim * 1.5)
+    _tc = (int(col_sel[0] * _tp), int(col_sel[1] * _tp), int(col_sel[2] * _tp))
+    titulo = fuente_grande.render("* RHYTHM *", True, _tc)
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 70))
+    # linea bajo titulo con gradiente del color
+    pygame.draw.line(pantalla, col_sel, (60, 140), (ANCHO - 60, 140), 2)
+
+    # opciones del menu
+    y0 = 200
+    gap = 55
+    for i, opcion in enumerate(MENU_OPCIONES):
+        sel = (i == menu_opcion)
+        mc = MENU_COLORES[i]
+        if sel:
+            # fondo con tinte del color de la opcion
+            ow = 280
+            _bg = (int(mc[0] * 0.08), int(mc[1] * 0.08), int(mc[2] * 0.08))
+            pygame.draw.rect(pantalla, _bg, (cx - ow // 2, y0 + i * gap - 4, ow, 40))
+            pygame.draw.rect(pantalla, mc, (cx - ow // 2, y0 + i * gap - 4, ow, 40), 2)
+            # flechas animadas con el color
+            wave = int(math.sin(t_anim * 4) * 4)
+            flecha_l = fuente.render(">", True, mc)
+            flecha_r = fuente.render("<", True, mc)
+            pantalla.blit(flecha_l, (cx - 130 + wave, y0 + i * gap + 2))
+            pantalla.blit(flecha_r, (cx + 115 - wave, y0 + i * gap + 2))
+            col_txt = BLANCO
+        else:
+            # opciones no seleccionadas con su color tenue
+            col_txt = (int(mc[0] * 0.45), int(mc[1] * 0.45), int(mc[2] * 0.45))
+        txt = fuente.render(opcion, True, col_txt)
+        pantalla.blit(txt, (cx - txt.get_width() // 2, y0 + i * gap + 2))
+
+    # progreso de carrera
+    c_data = cargar_carrera()
+    nivel_max = c_data.get("nivel_max", 1)
+    if nivel_max > 1:
+        dif_nom = DIFICULTADES.get(nivel_max, {}).get("nombre", "?")
+        prog = fuente_chica.render(f"CARRERA: {dif_nom}", True, MENU_COLORES[1])
+        pantalla.blit(prog, (cx - prog.get_width() // 2, y0 + len(MENU_OPCIONES) * gap + 20))
+
+    # controles
+    ver = fuente_chica.render("FLECHAS + ENTER", True, GRIS)
+    pantalla.blit(ver, (cx - ver.get_width() // 2, ALTO - 35))
+
+def dibujar_selector_seed(seed_actual, cargando):
+    """Pantalla de selector de seed: mantene espacio para cargar."""
+    pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+    t_anim = pygame.time.get_ticks() / 1000.0
+    dif = get_dificultad(max(seed_actual, 1))
+    progreso = min(seed_actual / SEED_MAX, 1.0)
+
+    # color de acento segun la dificultad actual (cambia mientras cargás)
+    niv = dif.get("nivel", 1)
+    # gradiente de facil (cyan) a chaos (rojo) pasando por amarillo
+    _t = min(1.0, (niv - 1) / 14.0)
+    if _t < 0.5:
+        _p = _t * 2
+        col_ac = (int(0 + 255 * _p), int(220 - 40 * _p), int(255 - 200 * _p))
+    else:
+        _p = (_t - 0.5) * 2
+        col_ac = (255, int(180 - 140 * _p), int(55 - 55 * _p))
+
+    # ecualizador de fondo (como el menu, con tinte de dificultad)
+    tms = t_anim * 3
+    n_barras = 32
+    bw = ANCHO // n_barras
+    for i in range(n_barras):
+        h = (math.sin(tms + i * 0.4) * 0.5 + 0.5)
+        h *= (math.sin(tms * 1.7 + i * 0.9) * 0.3 + 0.7)
+        altura = int(h * 140) + 4
+        bx = i * bw
+        by = ALTO - altura
+        _mix = 0.2
+        br = int(15 + col_ac[0] * _mix * h * 0.4)
+        bg = int(15 + col_ac[1] * _mix * h * 0.4)
+        bb = int(15 + col_ac[2] * _mix * h * 0.4)
+        pygame.draw.rect(pantalla, (min(255, br), min(255, bg), min(255, bb)),
+                         (bx, by, bw - 2, altura))
+
+    titulo = fuente.render("SELECTOR DE SEED", True, col_ac)
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 40))
+    pygame.draw.line(pantalla, col_ac, (60, 75), (ANCHO - 60, 75), 1)
 
     ins = fuente_chica.render("MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
-    pantalla.blit(ins, (ANCHO // 2 - ins.get_width() // 2, 170))
+    pantalla.blit(ins, (cx - ins.get_width() // 2, 100))
 
+    # barra de progreso con color de dificultad
     barra_w = 400
-    barra_x = ANCHO // 2 - barra_w // 2
-    barra_y = 210
+    barra_x = cx - barra_w // 2
+    barra_y = 140
     pygame.draw.rect(pantalla, GRIS, (barra_x, barra_y, barra_w, 20))
     if seed_actual > 0:
         bloques = int(barra_w * progreso) // 10
         for b in range(bloques):
-            pygame.draw.rect(pantalla, BLANCO, (barra_x + b * 10 + 1, barra_y + 2, 8, 16))
-    pygame.draw.rect(pantalla, BLANCO, (barra_x, barra_y, barra_w, 20), 2)
+            # color interpolado por posicion en la barra
+            _bp = b / max(1, (barra_w // 10))
+            if _bp < 0.5:
+                _pp = _bp * 2
+                _bc = (int(0 + 255 * _pp), int(220 - 40 * _pp), int(255 - 200 * _pp))
+            else:
+                _pp = (_bp - 0.5) * 2
+                _bc = (255, int(180 - 140 * _pp), int(55 - 55 * _pp))
+            pygame.draw.rect(pantalla, _bc, (barra_x + b * 10 + 1, barra_y + 2, 8, 16))
+    pygame.draw.rect(pantalla, col_ac, (barra_x, barra_y, barra_w, 20), 2)
 
-    seed_str   = str(int(seed_actual)).zfill(6) if seed_actual > 0 else "000000"
-    seed_texto = fuente_grande.render(seed_str, True, BLANCO)
-    pantalla.blit(seed_texto, (ANCHO // 2 - seed_texto.get_width() // 2, 260))
+    # seed grande con color
+    seed_str = str(int(seed_actual)).zfill(6) if seed_actual > 0 else "000000"
+    seed_col = col_ac if seed_actual > 0 else GRIS
+    seed_texto = fuente_grande.render(seed_str, True, seed_col)
+    pantalla.blit(seed_texto, (cx - seed_texto.get_width() // 2, 185))
 
-    pygame.draw.line(pantalla, GRIS, (60, 340), (ANCHO - 60, 340), 1)
-    dif_texto  = fuente.render(f"> {dif['nombre']} <", True, BLANCO)
-    pantalla.blit(dif_texto, (ANCHO // 2 - dif_texto.get_width() // 2, 355))
+    pygame.draw.line(pantalla, col_ac, (60, 270), (ANCHO - 60, 270), 1)
+    dif_texto = fuente.render(f"> {dif['nombre']} <", True, col_ac)
+    pantalla.blit(dif_texto, (cx - dif_texto.get_width() // 2, 290))
     cols_texto = fuente_chica.render(f"{dif['columnas']} COLUMNAS  {'ACORDES ON' if dif['acordes'] else 'ACORDES OFF'}", True, GRIS_MED)
-    pantalla.blit(cols_texto, (ANCHO // 2 - cols_texto.get_width() // 2, 395))
-    pygame.draw.line(pantalla, GRIS, (60, 425), (ANCHO - 60, 425), 1)
+    pantalla.blit(cols_texto, (cx - cols_texto.get_width() // 2, 330))
+    pygame.draw.line(pantalla, GRIS, (60, 360), (ANCHO - 60, 360), 1)
 
     if seed_actual > 0:
         gen_seed = genero_de_seed(int(seed_actual))
@@ -5427,29 +6347,118 @@ def dibujar_menu(seed_actual, cargando):
         comp = cargar_progreso()
         ya = clave_run(gen_seed, niv_seed) in comp
         marca_ok = "  [COMPLETADO]" if ya else ""
-        col_gs = COLOR_GENERO.get(gen_seed, BLANCO)
-        run_txt = fuente_chica.render(f"{gen_seed} - {DIFICULTADES[niv_seed]['nombre']}{marca_ok}", True, col_gs)
-        pantalla.blit(run_txt, (ANCHO // 2 - run_txt.get_width() // 2, 432))
-        enter = fuente_chica.render("ENTER = RUN     M = MODS LIBRE     R = RESET", True, GRIS_MED)
-        pantalla.blit(enter, (ANCHO // 2 - enter.get_width() // 2, 460))
+        col_gs = COLOR_GENERO.get(gen_seed, col_ac)
+        run_txt = fuente_chica.render(f"{DIFICULTADES[niv_seed]['nombre']}{marca_ok}", True, col_gs)
+        pantalla.blit(run_txt, (cx - run_txt.get_width() // 2, 375))
 
-    if seed_actual == 0:
+    if seed_actual > 0:
+        ctrl = fuente_chica.render("ENTER = RUN     M = MODS LIBRE     R = RESET", True, GRIS_MED)
+        pantalla.blit(ctrl, (cx - ctrl.get_width() // 2, 410))
+    else:
         if (pygame.time.get_ticks() // 500) % 2 == 0:
-            coin = fuente.render("INSERT COIN", True, BLANCO)
-            pantalla.blit(coin, (ANCHO // 2 - coin.get_width() // 2, 460))
+            coin = fuente.render("INSERT COIN", True, col_ac)
+            pantalla.blit(coin, (cx - coin.get_width() // 2, 410))
 
-    # contador de progreso global
-    total_runs = len(GENEROS) * len(DIFICULTADES)
-    comp_n = len(cargar_progreso())
-    prog_txt = fuente_chica.render(f"COMPLETADOS: {comp_n}/{total_runs}", True, GRIS_MED)
-    pantalla.blit(prog_txt, (ANCHO // 2 - prog_txt.get_width() // 2, 488))
-
-    lb_txt = fuente_chica.render("L = LEADERBOARD     C = CONFIG     T = TUTORIAL", True, GRIS)
-    pantalla.blit(lb_txt, (ANCHO // 2 - lb_txt.get_width() // 2, 512))
+    esc = fuente_chica.render("ESC = VOLVER AL MENU", True, GRIS)
+    pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 40))
 
 config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion, 4=audio
 pausa_opcion = 0   # 0=continuar, 1=reiniciar, 2=salir
 mods_opcion = 0    # opcion seleccionada en pantalla de modificadores
+carrera_cursor = 0 # nivel seleccionado en la pantalla de carrera (0-indexed)
+carrera_activa = False  # True si el run actual viene del modo carrera
+
+RANK_COLOR_CARR = {
+    "S": (255, 215, 60), "A": (120, 255, 120), "B": (100, 200, 255),
+    "C": (255, 180, 60), "D": (255, 100, 100), "?": GRIS,
+}
+
+def dibujar_carrera():
+    """Pantalla de seleccion de nivel del modo CARRERA."""
+    pantalla.fill(NEGRO)
+    t_anim = pygame.time.get_ticks() / 1000.0
+    cx = ANCHO // 2
+
+    titulo = fuente_grande.render("CARRERA", True, BLANCO)
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 30))
+    sub = fuente_chica.render("COMPLETA CADA NIVEL PARA DESBLOQUEAR EL SIGUIENTE", True, GRIS_MED)
+    pantalla.blit(sub, (cx - sub.get_width() // 2, 80))
+    pygame.draw.line(pantalla, GRIS, (60, 100), (ANCHO - 60, 100), 1)
+
+    c = cargar_carrera()
+    nivel_max = c.get("nivel_max", 1)
+    ranks = c.get("ranks", {})
+    intentos = c.get("intentos", {})
+
+    # lista de niveles (scroll si hay muchos)
+    vis_start = max(0, carrera_cursor - 5)
+    vis_end = min(15, vis_start + 11)
+    if vis_end - vis_start < 11 and vis_start > 0:
+        vis_start = max(0, vis_end - 11)
+
+    y0 = 115
+    fila_h = 42
+    for i in range(vis_start, vis_end):
+        nivel = i + 1
+        y = y0 + (i - vis_start) * fila_h
+        sel = (i == carrera_cursor)
+        desbloqueado = (nivel <= nivel_max)
+        completado = str(nivel) in ranks
+        dif_info = DIFICULTADES.get(nivel, {})
+        nombre = dif_info.get("nombre", f"NIVEL {nivel}")
+
+        # fondo de seleccion
+        if sel:
+            pygame.draw.rect(pantalla, (40, 40, 50), (80, y, ANCHO - 160, fila_h - 4))
+            pygame.draw.rect(pantalla, BLANCO, (80, y, ANCHO - 160, fila_h - 4), 2)
+
+        # numero
+        num_col = BLANCO if desbloqueado else GRIS
+        num_txt = fuente.render(f"{nivel:2d}", True, num_col)
+        pantalla.blit(num_txt, (100, y + 6))
+
+        if desbloqueado:
+            # nombre de la dificultad
+            nom_txt = fuente.render(nombre, True, BLANCO if sel else GRIS_MED)
+            pantalla.blit(nom_txt, (160, y + 6))
+            # columnas
+            cols = dif_info.get("columnas", 3)
+            cols_txt = fuente_chica.render(f"{cols}COL", True, GRIS)
+            pantalla.blit(cols_txt, (420, y + 12))
+            # rank si completado
+            if completado:
+                rk = ranks[str(nivel)]
+                rk_col = RANK_COLOR_CARR.get(rk, GRIS)
+                rk_txt = fuente.render(rk, True, rk_col)
+                pantalla.blit(rk_txt, (500, y + 4))
+            # intentos
+            n_int = intentos.get(str(nivel), 0)
+            if n_int > 0:
+                int_txt = fuente_chica.render(f"{n_int}x", True, GRIS)
+                pantalla.blit(int_txt, (550, y + 12))
+        else:
+            # bloqueado: candado
+            lock = fuente.render("BLOQUEADO", True, GRIS)
+            pantalla.blit(lock, (160, y + 6))
+            # candado visual
+            lx, ly = 530, y + 8
+            pygame.draw.rect(pantalla, GRIS, (lx, ly + 6, 16, 12))
+            pygame.draw.arc(pantalla, GRIS, (lx + 2, ly - 2, 12, 14), 0, 3.14, 2)
+
+    # instrucciones
+    inst_y = ALTO - 55
+    pygame.draw.line(pantalla, GRIS, (60, inst_y - 10), (ANCHO - 60, inst_y - 10), 1)
+    nivel_sel = carrera_cursor + 1
+    if nivel_sel <= nivel_max:
+        inst = fuente_chica.render("ENTER = JUGAR     ESC = VOLVER", True, GRIS_MED)
+    else:
+        inst = fuente_chica.render("NIVEL BLOQUEADO     ESC = VOLVER", True, GRIS)
+    pantalla.blit(inst, (cx - inst.get_width() // 2, inst_y))
+
+    # progreso total
+    completados = sum(1 for k in ranks)
+    prog = fuente_chica.render(f"PROGRESO: {completados}/15 NIVELES", True, GRIS)
+    pantalla.blit(prog, (cx - prog.get_width() // 2, inst_y + 22))
 
 def calcular_mult_mods():
     """Multiplicador total de puntos segun modificadores activos"""
@@ -5463,12 +6472,12 @@ def calcular_mult_mods():
 def mods_de_stage(n, rng):
     """Devuelve el set de mods para el stage n (1..4).
     Los mods se escalonan por dificultad:
-      - suaves (stage 2+): inverso, acelerando, rafagas
-      - medios (stage 3+): niebla, veloz, + espejo con 30%
-      - duros  (stage 4):  espejo con 35%, sudden death
+      - suaves (stage 2+): inverso, acelerando, rafagas, monocromo
+      - medios (stage 3+): niebla, veloz, apagon, + espejo con 30%
+      - duros  (stage 4):  espejo con 35%, sudden death 10%
     ESPEJO: nunca en stages 1-2, 30% en stage 3, 35% en stage 4."""
-    suaves = ["inverso", "acelerando", "rafagas"]
-    medios = ["niebla", "veloz"]
+    suaves = ["inverso", "acelerando", "rafagas", "monocromo"]
+    medios = ["niebla", "veloz", "apagon"]
     if n == 1:
         return set()
     elif n == 2:
@@ -5542,14 +6551,21 @@ def crear_run(seed_inicial):
         "mods": mods_stages,   # set de mods por stage
         "instrumentos": instrumentos_stage,  # instrumento forzado por stage
         "puntos_total": 0,
+        "puntos_por_stage": [0] * NUM_STAGES,  # puntos ganados en cada stage
         "perks": [],           # perks acumulados (roguelike)
     }
 
 perk_ofertas = []      # 3 perks ofrecidos en la pantalla de seleccion
 perk_seleccion = 0     # indice seleccionado (0..2)
+perk_anim_inicio = 0   # timestamp (ms) del inicio de la animacion de entrada
+PERK_ANIM_MS = 700     # duracion total de la animacion de entrada
+PERK_ANIM_STAGGER = 120  # delay entre cartas (escalonado)
+PERK_ANIM_CARTA = 380  # duracion de la animacion de una carta individual
 
 def dibujar_perk_select():
-    """Pantalla de seleccion de perk entre stages."""
+    """Pantalla de seleccion de perk entre stages.
+    Cada carta tiene el color de su categoria (def=cyan, ofe=naranja, mec=verde)
+    y entra desde abajo con overshoot suave, escalonada."""
     pantalla.fill(NEGRO)
     col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO) if run_actual else BLANCO
     titulo = fuente_grande.render("NUEVO PERK", True, col_g)
@@ -5561,56 +6577,91 @@ def dibujar_perk_select():
     cat_label = {"def": "DEFENSIVO", "ofe": "OFENSIVO", "mec": "MECANICO"}
     # dibujar las 3 opciones
     card_w = 180
+    card_h = 260
     gap = 30
     total_w = card_w * len(perk_ofertas) + gap * (len(perk_ofertas) - 1)
     x0 = ANCHO // 2 - total_w // 2
+    y_final = 180
+    # animacion de entrada: cada carta hace slide desde abajo con overshoot
+    elapsed = pygame.time.get_ticks() - perk_anim_inicio
     for i, perk in enumerate(perk_ofertas):
+        # progreso de esta carta (escalonada)
+        t_local = max(0, elapsed - i * PERK_ANIM_STAGGER)
+        t_norm = min(1.0, t_local / PERK_ANIM_CARTA)
+        # ease-out back: overshoot suave al aterrizar
+        c1 = 1.70158
+        c3 = c1 + 1
+        u = t_norm - 1
+        ease = 1 + c3 * u ** 3 + c1 * u ** 2  # va de 0 a ~1.1 y baja a 1
+        # antes de aparecer, la carta esta abajo y fuera de pantalla
+        offset_y = int((1.0 - ease) * 200)  # 200px abajo -> 0
+        # antes de que arranque su animacion, no dibujar nada
+        if t_local <= 0:
+            continue
         x = x0 + i * (card_w + gap)
-        y = 180
-        seleccionado = (i == perk_seleccion)
-        # borde
-        borde_color = col_g if seleccionado else GRIS
-        grosor = 3 if seleccionado else 1
-        pygame.draw.rect(pantalla, borde_color, (x, y, card_w, 260), grosor)
+        y = y_final + offset_y
+        seleccionado = (i == perk_seleccion) and t_norm >= 1.0
+        # color de la categoria de este perk
+        cat_col = COLOR_CAT.get(perk["cat"], BLANCO)
+        # borde: color de categoria; cuando esta seleccionado, mas grueso
+        borde_color = cat_col if seleccionado else tuple(int(c * 0.5) for c in cat_col)
+        grosor = 3 if seleccionado else 2
+        pygame.draw.rect(pantalla, borde_color, (x, y, card_w, card_h), grosor)
         if seleccionado:
-            pygame.draw.rect(pantalla, (30, 30, 30), (x + 3, y + 3, card_w - 6, 254))
-        # numero
-        num = fuente_grande.render(str(i + 1), True, col_g if seleccionado else GRIS)
+            # relleno tenue con tinte de categoria
+            fondo = tuple(int(c * 0.12) for c in cat_col)
+            pygame.draw.rect(pantalla, fondo, (x + 3, y + 3, card_w - 6, card_h - 6))
+        # numero (grande, tinte de categoria)
+        num_col = cat_col if seleccionado else tuple(int(c * 0.55) for c in cat_col)
+        num = fuente_grande.render(str(i + 1), True, num_col)
         pantalla.blit(num, (x + card_w // 2 - num.get_width() // 2, y + 10))
-        # nombre
+        # nombre del perk
         nombre = fuente.render(perk["nombre"], True, BLANCO if seleccionado else GRIS_MED)
         pantalla.blit(nombre, (x + card_w // 2 - nombre.get_width() // 2, y + 70))
-        # categoria
-        cat = fuente_chica.render(cat_label.get(perk["cat"], ""), True, GRIS)
+        # categoria: con color de categoria (mas visible que el gris de antes)
+        cat = fuente_chica.render(cat_label.get(perk["cat"], ""), True, cat_col)
         pantalla.blit(cat, (x + card_w // 2 - cat.get_width() // 2, y + 100))
+        # linea separadora chica bajo la categoria
+        pygame.draw.line(pantalla, tuple(int(c * 0.35) for c in cat_col),
+                         (x + 30, y + 120), (x + card_w - 30, y + 120), 1)
         # descripcion (word wrap manual simple)
         desc = perk["desc"]
         dy = 135
         palabras = desc.split()
         linea = ""
+        desc_col = BLANCO if seleccionado else GRIS_MED
         for pal in palabras:
             test = (linea + " " + pal).strip()
             if fuente_chica.size(test)[0] > card_w - 20:
-                txt = fuente_chica.render(linea, True, GRIS_MED)
+                txt = fuente_chica.render(linea, True, desc_col)
                 pantalla.blit(txt, (x + card_w // 2 - txt.get_width() // 2, y + dy))
                 dy += 18
                 linea = pal
             else:
                 linea = test
         if linea:
-            txt = fuente_chica.render(linea, True, GRIS_MED)
+            txt = fuente_chica.render(linea, True, desc_col)
             pantalla.blit(txt, (x + card_w // 2 - txt.get_width() // 2, y + dy))
-    # perks acumulados
-    if run_actual and run_actual["perks"]:
+    # perks acumulados (solo cuando la animacion termino)
+    anim_lista = i * PERK_ANIM_STAGGER + PERK_ANIM_CARTA if perk_ofertas else 0
+    if elapsed >= anim_lista and run_actual and run_actual["perks"]:
         acum_y = 470
         acum_txt = fuente_chica.render("PERKS ACTIVOS:", True, GRIS)
         pantalla.blit(acum_txt, (ANCHO // 2 - acum_txt.get_width() // 2, acum_y))
-        nombres = "  ".join(p["nombre"] for p in run_actual["perks"])
-        activos = fuente_chica.render(nombres, True, col_g)
-        pantalla.blit(activos, (ANCHO // 2 - activos.get_width() // 2, acum_y + 20))
-    # instrucciones
-    inst = fuente_chica.render("1 / 2 / 3  O  FLECHAS + ENTER", True, GRIS)
-    pantalla.blit(inst, (ANCHO // 2 - inst.get_width() // 2, ALTO - 40))
+        # cada perk activo con el color de su categoria (mas informativo)
+        px_acum = 0
+        anchos = [fuente_chica.size(p["nombre"])[0] + 20 for p in run_actual["perks"]]
+        total_activos_w = sum(anchos) - 20 if anchos else 0
+        px_acum = ANCHO // 2 - total_activos_w // 2
+        for p in run_actual["perks"]:
+            pcol = COLOR_CAT.get(p["cat"], col_g)
+            ptxt = fuente_chica.render(p["nombre"], True, pcol)
+            pantalla.blit(ptxt, (px_acum, acum_y + 20))
+            px_acum += ptxt.get_width() + 20
+    # instrucciones (solo cuando la animacion termino)
+    if elapsed >= anim_lista:
+        inst = fuente_chica.render("1 / 2 / 3  O  FLECHAS + ENTER", True, GRIS)
+        pantalla.blit(inst, (ANCHO // 2 - inst.get_width() // 2, ALTO - 40))
 
 def dibujar_perks_hud(partida):
     """Dibuja los perks activos y efectos temporales en el HUD del juego."""
@@ -5647,57 +6698,204 @@ def dibujar_perks_hud(partida):
         ey += 18
 
 def dibujar_run_overview():
-    """Pantalla entre stages que muestra el progreso del run."""
+    """Pantalla entre stages: mapa de camino horizontal (estilo roguelike)
+    + panel de detalle del stage actual."""
     pantalla.fill(NEGRO)
     col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
-    titulo = fuente_grande.render(run_actual["genero"], True, col_g)
-    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 50))
+    t_anim = pygame.time.get_ticks() / 1000.0
+
+    # ── HEADER: dificultad + puntos acumulados ──
     dif_nom = DIFICULTADES[run_actual["nivel"]]["nombre"]
-    sub = fuente.render(f"{dif_nom}", True, GRIS_MED)
-    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 110))
-    pygame.draw.line(pantalla, BLANCO, (60, 155), (ANCHO - 60, 155), 2)
+    titulo = fuente_grande.render(dif_nom, True, col_g)
+    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 36))
+    pts_tot = run_actual.get("puntos_total", 0)
+    sub_txt = f"{pts_tot} PTS" if pts_tot > 0 else f"SEED {run_actual['seeds'][0] if run_actual.get('seeds') else '?'}"
+    sub = fuente.render(sub_txt, True, GRIS_MED)
+    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 92))
+    pygame.draw.line(pantalla, GRIS, (60, 130), (ANCHO - 60, 130), 1)
 
-    nombres_stage = ["NORMAL", "1 MOD", "1 MOD", "SUDDEN DEATH"]
-    y0 = 190
-    for i in range(NUM_STAGES):
-        y = y0 + i * 70
-        st = i + 1
-        completado = st < run_actual["stage"]
-        actual = st == run_actual["stage"]
-        if completado:
-            estado = "[OK]"
-            color = col_g
-        elif actual:
-            estado = ">>>"
-            color = BLANCO
+    # ── CAMINO DE NODOS: 4 stages conectados horizontalmente ──
+    nodo_y = 195
+    margen = 110
+    paso_x = (ANCHO - margen * 2) / (NUM_STAGES - 1)
+    stage_act = run_actual["stage"]
+
+    # linea conectora: color genero hasta el nodo actual, gris punteada despues
+    for i in range(NUM_STAGES - 1):
+        x0 = int(margen + i * paso_x) + 16
+        x1 = int(margen + (i + 1) * paso_x) - 16
+        if i + 1 < stage_act:
+            pygame.draw.line(pantalla, col_g, (x0, nodo_y), (x1, nodo_y), 3)
+        elif i + 1 == stage_act:
+            pygame.draw.line(pantalla, GRIS_MED, (x0, nodo_y), (x1, nodo_y), 2)
         else:
-            estado = "   "
-            color = GRIS
-        linea = fuente.render(f"{estado}  STAGE {st}: {nombres_stage[i]}", True, color)
-        pantalla.blit(linea, (120, y))
-        # mostrar mods solo de stages completados o el actual (ocultar futuros)
+            # punteada para lo desconocido
+            seg = 8
+            x = x0
+            while x < x1:
+                pygame.draw.line(pantalla, GRIS, (x, nodo_y), (min(x + seg, x1), nodo_y), 1)
+                x += seg * 2
+
+    nombres_mod = {m["id"]: m["nombre"] for m in MODIFICADORES}
+    for i in range(NUM_STAGES):
+        st = i + 1
+        cx = int(margen + i * paso_x)
+        completado = st < stage_act
+        actual = st == stage_act
+        es_final = st == NUM_STAGES
+
+        # ── nodo ──
+        if es_final:
+            # rombo: el stage final (sudden death) es visualmente distinto
+            r = 15 if actual else 12
+            pts_rombo = [(cx, nodo_y - r), (cx + r, nodo_y), (cx, nodo_y + r), (cx - r, nodo_y)]
+            if completado:
+                pygame.draw.polygon(pantalla, col_g, pts_rombo)
+            elif actual:
+                pulso = 0.7 + 0.3 * math.sin(t_anim * 5)
+                cp = (int(255 * pulso),) * 3
+                pygame.draw.polygon(pantalla, cp, pts_rombo, 0)
+                pygame.draw.polygon(pantalla, BLANCO, [(cx, nodo_y - r - 5), (cx + r + 5, nodo_y),
+                                                        (cx, nodo_y + r + 5), (cx - r - 5, nodo_y)], 2)
+            else:
+                pygame.draw.polygon(pantalla, GRIS, pts_rombo, 2)
+        else:
+            if completado:
+                pygame.draw.circle(pantalla, col_g, (cx, nodo_y), 13)
+                # check
+                pygame.draw.lines(pantalla, NEGRO, False,
+                                  [(cx - 5, nodo_y), (cx - 1, nodo_y + 4), (cx + 6, nodo_y - 4)], 3)
+            elif actual:
+                # anillo pulsante blanco
+                pulso = 0.7 + 0.3 * math.sin(t_anim * 5)
+                pygame.draw.circle(pantalla, (int(255 * pulso),) * 3, (cx, nodo_y), 13)
+                pygame.draw.circle(pantalla, BLANCO, (cx, nodo_y), 18, 2)
+            else:
+                pygame.draw.circle(pantalla, GRIS, (cx, nodo_y), 11, 2)
+
+        # ── etiquetas bajo el nodo ──
+        num_c = BLANCO if actual else (col_g if completado else GRIS)
+        num_txt = fuente.render(str(st), True, num_c)
+        pantalla.blit(num_txt, (cx - num_txt.get_width() // 2, nodo_y + 26))
+
+        # mod del stage (oculto si es futuro)
         mods_st = run_actual["mods"][i]
-        if mods_st and (completado or actual):
-            nombres = [m["nombre"] for m in MODIFICADORES if m["id"] in mods_st]
-            mod_txt = fuente_chica.render("+ " + ", ".join(nombres), True, color)
-            pantalla.blit(mod_txt, (160, y + 28))
-        elif mods_st and not completado and not actual:
-            mod_txt = fuente_chica.render("+ ???", True, GRIS)
-            pantalla.blit(mod_txt, (160, y + 28))
+        if not mods_st:
+            mod_str = "BASE"
+        elif completado or actual:
+            mod_str = "+".join(nombres_mod.get(mid, mid.upper()) for mid in mods_st)
+            # si el join no entra en el nodo, mostrar contador en vez de
+            # truncar silenciosamente (el [:14] anterior ocultaba mods)
+            if len(mod_str) > 14:
+                if len(mods_st) > 1:
+                    mod_str = f"{len(mods_st)} MODS"
+                else:
+                    mod_str = mod_str[:13] + "…"
+        else:
+            mod_str = "???"
+        mod_c = BLANCO if actual else (col_g if completado else GRIS)
+        mod_txt = fuente_chica.render(mod_str, True, mod_c)
+        pantalla.blit(mod_txt, (cx - mod_txt.get_width() // 2, nodo_y + 52))
 
-    # perks acumulados
+        # puntos ganados (solo completados)
+        if completado:
+            gan = run_actual.get("puntos_por_stage", [0] * NUM_STAGES)[i]
+            if gan > 0:
+                g_txt = fuente_chica.render(f"+{gan}", True, GRIS_MED)
+                pantalla.blit(g_txt, (cx - g_txt.get_width() // 2, nodo_y + 70))
+
+    # ── PANEL DE DETALLE del stage actual ──
+    panel_y = 320
+    panel_h = 118
+    panel_x = 80
+    panel_w = ANCHO - panel_x * 2
+    pygame.draw.rect(pantalla, col_g, (panel_x, panel_y, panel_w, panel_h), 2)
+
+    idx_act = stage_act - 1
+    mods_act = run_actual["mods"][idx_act]
+    if not mods_act:
+        p_titulo = f"STAGE {stage_act} · SIN MODIFICADOR"
+        p_desc = "cancion base, sin sorpresas"
+        p_mult = ""
+    else:
+        defs = [m for m in MODIFICADORES if m["id"] in mods_act]
+        p_titulo = f"STAGE {stage_act} · " + " + ".join(m["nombre"] for m in defs)
+        p_desc = " / ".join(m["desc"] for m in defs)
+        mult_total = 1.0
+        for m in defs:
+            mult_total *= m["mult"]
+        p_mult = f"PUNTOS x{mult_total:.1f}"
+
+    # titulo del panel: si con la fuente normal desborda el ancho util
+    # (dejando lugar al icono del instrumento a la derecha), cae a la fuente
+    # chica. Con 3 mods el titulo largo se superponia al icono y se salia
+    # de pantalla. Margen de 90px: el icono ocupa desde panel_w-46, y las
+    # metricas de courier varian entre sistemas (Windows vs Linux), asi que
+    # el umbral tiene que tener holgura real, no quedar al borde.
+    ancho_util = panel_w - 90
+    pt = fuente.render(p_titulo, True, BLANCO)
+    if pt.get_width() > ancho_util:
+        pt = fuente_chica.render(p_titulo, True, BLANCO)
+        if pt.get_width() > ancho_util:
+            # ultimo recurso: truncar con elipsis
+            while len(p_titulo) > 8 and fuente_chica.size(p_titulo + "…")[0] > ancho_util:
+                p_titulo = p_titulo[:-1]
+            pt = fuente_chica.render(p_titulo + "…", True, BLANCO)
+    pantalla.blit(pt, (panel_x + 18, panel_y + 14))
+    # descripcion con word-wrap a max 2 lineas (con 3 mods desbordaba)
+    _desc_max_w = panel_w - 36
+    _lineas_desc = []
+    _linea_act = ""
+    for _pal in p_desc.split():
+        _test = (_linea_act + " " + _pal).strip()
+        if fuente_chica.size(_test)[0] > _desc_max_w and _linea_act:
+            _lineas_desc.append(_linea_act)
+            _linea_act = _pal
+            if len(_lineas_desc) == 2:
+                break
+        else:
+            _linea_act = _test
+    if _linea_act and len(_lineas_desc) < 2:
+        _lineas_desc.append(_linea_act)
+    elif len(_lineas_desc) == 2:
+        # quedo texto afuera: marcar con elipsis la 2da linea
+        _lineas_desc[1] = _lineas_desc[1][:max(1, len(_lineas_desc[1]) - 1)] + "…"
+    for _i, _ld in enumerate(_lineas_desc):
+        pd = fuente_chica.render(_ld, True, GRIS_MED)
+        pantalla.blit(pd, (panel_x + 18, panel_y + 42 + _i * 16))
+
+    meta_st = calcular_meta(run_actual["nivel"], stage_act)
+    inst_st = run_actual.get("instrumentos", [""] * NUM_STAGES)[idx_act]
+    info_str = f"META: {meta_st} PTS"
+    if inst_st:
+        info_str += f" · {inst_st}"
+    if p_mult:
+        info_str += f" · {p_mult}"
+    pi = fuente_chica.render(info_str, True, col_g)
+    pantalla.blit(pi, (panel_x + 18, panel_y + 82))
+    # icono del instrumento del stage
+    if inst_st:
+        forma_i = forma_de_instrumento(inst_st)
+        dibujar_icono_inst(pantalla, forma_i, panel_x + panel_w - 34, panel_y + 30, 12, col_g)
+
+    # ── PERKS acumulados ──
     perks_run = run_actual.get("perks", [])
+    pk_y = panel_y + panel_h + 26
     if perks_run:
-        col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
-        pk_y = ALTO - 80
         pk_label = fuente_chica.render("PERKS:", True, GRIS)
-        pantalla.blit(pk_label, (60, pk_y))
-        pk_nombres = "  ".join(p["nombre"] for p in perks_run)
+        pantalla.blit(pk_label, (panel_x, pk_y))
+        pk_nombres = " · ".join(p["nombre"] for p in perks_run)
         pk_txt = fuente_chica.render(pk_nombres, True, col_g)
-        pantalla.blit(pk_txt, (60 + pk_label.get_width() + 10, pk_y))
+        pantalla.blit(pk_txt, (panel_x + pk_label.get_width() + 10, pk_y))
 
-    cont = fuente_chica.render("ESPACIO = JUGAR STAGE     ESC = ABANDONAR RUN", True, GRIS_MED)
-    pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
+    # ── CONTROLES ──
+    if (pygame.time.get_ticks() // 600) % 2 == 0:
+        cont = fuente.render("ESPACIO = JUGAR", True, BLANCO)
+    else:
+        cont = fuente.render("ESPACIO = JUGAR", True, GRIS_MED)
+    pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 78))
+    esc = fuente_chica.render("ESC = ABANDONAR RUN", True, GRIS)
+    pantalla.blit(esc, (ANCHO // 2 - esc.get_width() // 2, ALTO - 42))
 
 # --- animacion de dado para revelar el mod del siguiente stage ---
 dado_inicio = 0
@@ -5784,7 +6982,7 @@ def dibujar_dado():
         n_mods = len(nombres)
         y_start = dado_y + dado_h // 2 - (n_mods * 14)
         for i, nom in enumerate(nombres):
-            color_m = col_g if "SUDDEN" not in nom else (255, 80, 80)
+            color_m = (255, 80, 80) if "SUDDEN" in nom else col_g
             mt = fuente.render(nom, True, color_m)
             pantalla.blit(mt, (ANCHO // 2 - mt.get_width() // 2, y_start + i * 28))
         mult = fuente_chica.render(f"MULTIPLICADOR TOTAL: x{mult_total:.2f}", True, GRIS_MED)
@@ -5910,30 +7108,173 @@ def dibujar_run_completado():
     pygame.draw.line(pantalla, col_g, (ANCHO//2 - line_w, 200), (ANCHO//2 + line_w, 200), 2)
 
     dif_nom = DIFICULTADES[run_actual["nivel"]]["nombre"]
-    sub = fuente.render(f"{run_actual['genero']}  {dif_nom}", True, BLANCO)
+    sub = fuente.render(dif_nom, True, BLANCO)
     pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 230))
     pts = fuente.render(f"PUNTOS TOTALES: {run_actual['puntos_total']}", True, GRIS_MED)
     pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 290))
 
-    # stages completados
+    # stages completados con rank de performance (S/A/B/C/D)
+    RANK_COLOR = {
+        "S": (255, 215, 60),    # dorado
+        "A": (120, 255, 120),   # verde
+        "B": (100, 200, 255),   # celeste
+        "C": (255, 180, 60),    # naranja
+        "D": (255, 100, 100),   # rojo
+        "?": GRIS,
+    }
+    ranks = run_actual.get("rank_por_stage", ["?"] * NUM_STAGES)
     y_st = 340
     for i in range(NUM_STAGES):
-        st_col = col_g if t_total > 0.5 + i * 0.4 else GRIS
-        st = fuente_chica.render(f"STAGE {i+1}  [OK]", True, st_col)
-        pantalla.blit(st, (ANCHO // 2 - st.get_width() // 2, y_st + i * 22))
+        visible = t_total > 0.5 + i * 0.4
+        st_col = col_g if visible else GRIS
+        rk = ranks[i] if i < len(ranks) else "?"
+        st = fuente_chica.render(f"STAGE {i+1}  ", True, st_col)
+        rk_col = RANK_COLOR.get(rk, GRIS) if visible else GRIS
+        rk_txt = fuente.render(rk, True, rk_col)
+        total_w = st.get_width() + rk_txt.get_width()
+        x0 = ANCHO // 2 - total_w // 2
+        pantalla.blit(st, (x0, y_st + i * 26 + 3))
+        pantalla.blit(rk_txt, (x0 + st.get_width(), y_st + i * 26 - 3))
 
     cont = fuente_chica.render("ESPACIO = CONTINUAR", True, GRIS)
     pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
 
 def dibujar_run_fallido():
-    """Pantalla cuando perdes un stage."""
+    """Pantalla cuando perdes un stage — con la figura del enemigo triunfante."""
     pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+    t = pygame.time.get_ticks() - run_fallido_t
+    t_anim = pygame.time.get_ticks() / 1000.0
+
+    # flash rojo sutil al entrar (300ms)
+    if t < 300:
+        alpha_f = int(60 * (1.0 - t / 300.0))
+        flash_s = pygame.Surface((ANCHO, ALTO))
+        flash_s.set_alpha(alpha_f)
+        flash_s.fill((255, 30, 30))
+        pantalla.blit(flash_s, (0, 0))
+
+    # FIGURA DEL ENEMIGO: se dibuja grande y roja, pulsando (triunfante)
+    # Usa los mismos parámetros de la canción que se estaba jugando.
+    if partida and partida.get("cancion"):
+        liss = partida["cancion"].get("lissajous")
+        if liss and t > 200:
+            _fa = min(1.0, (t - 200) / 800.0)  # fade in de la figura
+            tipo = liss.get("tipo", "lissajous")
+            npts = liss["puntos"]
+            vel = liss["vel"]
+            _t_fig = t_anim * vel
+            # pulso amenazante (late lento y fuerte)
+            pulso = 0.7 + 0.3 * math.sin(t_anim * 2.5)
+            esc = 0.85 + pulso * 0.15
+            _fcx = cx
+            _fcy = 280
+            _frx = 160 * esc
+            _fry = 120 * esc
+            puntos_fig = _curva_fondo(tipo, liss, npts, _t_fig,
+                                      _fcx, _fcy, _frx, _fry, jitter=1.5)
+            if len(puntos_fig) > 1:
+                _r = int(min(255, 180 * pulso * _fa))
+                _g = int(min(255, 40 * pulso * _fa))
+                _b = int(min(255, 40 * pulso * _fa))
+                pygame.draw.lines(pantalla, (_r, _g, _b), False, puntos_fig, 2)
+                # interior mas tenue
+                puntos_int = _curva_fondo(tipo, liss, npts, -_t_fig * 0.6,
+                                          _fcx, _fcy, _frx * 0.6, _fry * 0.6,
+                                          fase_extra=1.0, jitter=0.5)
+                if len(puntos_int) > 1:
+                    _ri = int(_r * 0.4)
+                    _gi = int(_g * 0.4)
+                    _bi = int(_b * 0.4)
+                    pygame.draw.lines(pantalla, (_ri, _gi, _bi), False, puntos_int, 1)
+
+    # titulo "RUN FALLIDO" con efecto glitch (tiembla los primeros 800ms)
+    y_titulo = 60
+    if t < 800:
+        gx = random.randint(-4, 4)
+        gy = random.randint(-2, 2)
+        for _ in range(3):
+            sl_y = random.randint(y_titulo - 10, y_titulo + 50)
+            sl_w = random.randint(60, 200)
+            sl_x = random.randint(0, ANCHO)
+            pygame.draw.rect(pantalla, (255, 40, 40), (sl_x, sl_y, sl_w, 2))
+    else:
+        gx, gy = 0, 0
     titulo = fuente_grande.render("RUN FALLIDO", True, BLANCO)
-    pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 160))
-    sub = fuente.render(f"CAISTE EN STAGE {run_actual['stage']}/{NUM_STAGES}", True, GRIS_MED)
-    pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 250))
-    cont = fuente_chica.render("ENTER = VOLVER AL MENU", True, GRIS)
-    pantalla.blit(cont, (ANCHO // 2 - cont.get_width() // 2, ALTO - 50))
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2 + gx, y_titulo + gy))
+
+    # linea separadora (wipe)
+    line_y = 125
+    if t > 400:
+        line_prog = min(1.0, (t - 400) / 300.0)
+        lw = int((ANCHO - 120) * line_prog)
+        pygame.draw.line(pantalla, GRIS, (60, line_y), (60 + lw, line_y), 1)
+
+    # helper fade
+    def _fade(surf, x, y, t_aparece):
+        if t < t_aparece:
+            return
+        a = min(255, int(255 * (t - t_aparece) / 300.0))
+        surf.set_alpha(a)
+        pantalla.blit(surf, (x, y))
+
+    # nombre del enemigo que te derroto
+    if partida and partida.get("cancion"):
+        _enem_n = partida["cancion"].get("lissajous", {}).get("nombre", "???")
+        _en_txt = fuente.render(_enem_n, True, (255, 100, 100))
+        _fade(_en_txt, cx - _en_txt.get_width() // 2, 145, 600)
+
+    # subtitulo con stage donde caiste
+    stage_n = run_actual["stage"] if run_actual else 1
+    sub = fuente_chica.render(f"CAISTE EN STAGE {stage_n}/{NUM_STAGES}", True, GRIS_MED)
+    _fade(sub, cx - sub.get_width() // 2, 185, 800)
+
+    # dificultad
+    if run_actual:
+        dif_nom = DIFICULTADES.get(run_actual["nivel"], {}).get("nombre", "?")
+        dif_txt = fuente_chica.render(dif_nom, True, GRIS)
+        _fade(dif_txt, cx - dif_txt.get_width() // 2, 210, 900)
+
+    # barra visual de stages
+    if run_actual and t > 1000:
+        bar_y = 420
+        bar_w = 50
+        bar_gap = 16
+        total_w = NUM_STAGES * bar_w + (NUM_STAGES - 1) * bar_gap
+        bx0 = cx - total_w // 2
+        for i in range(NUM_STAGES):
+            bx = bx0 + i * (bar_w + bar_gap)
+            st_delay = 1000 + i * 150
+            if t < st_delay:
+                continue
+            a_st = min(255, int(255 * (t - st_delay) / 200.0))
+            if i + 1 < stage_n:
+                col_st = (60, 200, 80)
+            elif i + 1 == stage_n:
+                blink = 0.6 + 0.4 * math.sin(t_anim * 6)
+                col_st = (int(255 * blink), int(50 * blink), int(50 * blink))
+            else:
+                col_st = (50, 50, 55)
+            s_surf = pygame.Surface((bar_w, 30))
+            s_surf.set_alpha(a_st)
+            s_surf.fill(col_st)
+            pantalla.blit(s_surf, (bx, bar_y))
+            sn = fuente_chica.render(str(i + 1), True, BLANCO)
+            sn.set_alpha(a_st)
+            pantalla.blit(sn, (bx + bar_w // 2 - sn.get_width() // 2, bar_y + 6))
+
+    # puntos
+    if run_actual and t > 1600:
+        pts = partida.get("puntos", 0) if partida else run_actual.get("puntos_total", 0)
+        pts_txt = fuente_chica.render(f"PUNTOS: {pts}", True, GRIS_MED)
+        _fade(pts_txt, cx - pts_txt.get_width() // 2, 470, 1600)
+
+    # controles (visibles y claros)
+    if t > 1800:
+        ctrl = fuente.render("ESPACIO = CONTINUAR", True, BLANCO)
+        _fade(ctrl, cx - ctrl.get_width() // 2, 510, 1800)
+        esc = fuente_chica.render("ESC = VOLVER AL MENU", True, GRIS)
+        _fade(esc, cx - esc.get_width() // 2, 545, 1900)
 
 def dibujar_mods():
     pantalla.fill(NEGRO)
@@ -5945,7 +7286,7 @@ def dibujar_mods():
     pantalla.blit(sub, (ANCHO // 2 - sub.get_width() // 2, 115))
 
     y0 = 145
-    fila_h = 42
+    fila_h = 38   # achicado de 42 a 38: con 11 mods (antes 8) no entraba el total
     for i, m in enumerate(MODIFICADORES):
         y = y0 + i * fila_h
         sel = (i == mods_opcion)
@@ -6042,10 +7383,12 @@ def dibujar_config():
         ("VOL. MENU", config["vol_menu"], "barra"),
         ("RESOLUCION", config["res_idx"], "res"),
         ("AUDIO", config["audio_idx"], "audio"),
+        ("TECLAS", 0, "teclas"),
+        ("TECLADO MUSICAL", 0, "linein"),
     ]
-    y0 = 160
+    y0 = 145
     for i, (nombre, valor, tipo) in enumerate(opciones):
-        y = y0 + i * 60
+        y = y0 + i * 48
         sel = (i == config_opcion)
         marca = "> " if sel else "  "
         color = BLANCO if sel else GRIS_MED
@@ -6067,18 +7410,24 @@ def dibujar_config():
             pantalla.blit(res_txt, (ANCHO - 300, y))
         elif tipo == "audio":
             dev_name = AUDIO_DEVICES[valor] if valor < len(AUDIO_DEVICES) else "Default"
-            # truncar nombre largo
             if len(dev_name) > 24:
                 dev_name = dev_name[:22] + ".."
             dev_txt = fuente_chica.render(dev_name, True, color)
             pantalla.blit(dev_txt, (ANCHO - 300, y + 6))
+        elif tipo == "teclas":
+            keys_str = " ".join(LABELS[:min(8, len(LABELS))])
+            keys_txt = fuente_chica.render(keys_str, True, color)
+            pantalla.blit(keys_txt, (ANCHO - 300, y + 6))
+        elif tipo == "linein":
+            estado_li = "ACTIVO" if linein_activo else ("CALIBRADO" if linein_notas_cal else "ENTER PARA CONFIGURAR")
+            li_col = (140, 230, 100) if linein_activo else ((255, 180, 60) if linein_notas_cal else GRIS)
+            li_txt = fuente_chica.render(estado_li, True, li_col if sel else color)
+            pantalla.blit(li_txt, (ANCHO - 300, y + 6))
 
-    ayuda1 = fuente_chica.render("FLECHAS ARRIBA/ABAJO = ELEGIR", True, GRIS)
-    pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 490))
-    ayuda2 = fuente_chica.render("FLECHAS IZQ/DER = AJUSTAR", True, GRIS)
-    pantalla.blit(ayuda2, (ANCHO // 2 - ayuda2.get_width() // 2, 515))
-    ayuda3 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
-    pantalla.blit(ayuda3, (ANCHO // 2 - ayuda3.get_width() // 2, 540))
+    ayuda1 = fuente_chica.render("ARRIBA/ABAJO = ELEGIR   IZQ/DER = AJUSTAR", True, GRIS)
+    pantalla.blit(ayuda1, (ANCHO // 2 - ayuda1.get_width() // 2, 500))
+    ayuda2 = fuente_chica.render("ENTER = ABRIR SUBMENU   ESC = VOLVER", True, GRIS)
+    pantalla.blit(ayuda2, (ANCHO // 2 - ayuda2.get_width() // 2, 520))
 
 def aplicar_resolucion():
     global ventana
@@ -6121,7 +7470,421 @@ def cambiar_audio_device(idx):
         SND_ERROR = synth_error()
         config["audio_idx"] = 0
 
-# ═══════════════════════════════════════════════════════ >>MAIN_LOOP<< ═══
+# --- SISTEMA DE REBIND DE TECLAS (para controlador custom / arcade) ---
+# Las teclas se guardan en bindings.json. Si no existe, usa el default
+# A-S-D-F-G-H-J-K. La pantalla de rebind se accede desde CONFIG.
+BINDINGS_FILE = os.path.join(BASE_DIR, "bindings.json")
+
+def cargar_bindings():
+    """Carga el mapeo tecla->columna desde bindings.json."""
+    try:
+        with open(BINDINGS_FILE, "r") as f:
+            data = json.load(f)
+            # data es {str(keycode): col_index, ...}
+            return {int(k): v for k, v in data.items()}
+    except:
+        # default: A=0, S=1, D=2, F=3, G=4, H=5, J=6, K=7
+        return dict(COLUMNAS)
+
+def guardar_bindings(bindings):
+    """Guarda el mapeo tecla->columna."""
+    try:
+        with open(BINDINGS_FILE, "w") as f:
+            json.dump({str(k): v for k, v in bindings.items()}, f, indent=2)
+    except Exception as e:
+        print(f"Error guardando bindings: {e}")
+
+def nombre_tecla(keycode):
+    """Nombre legible de una tecla de pygame."""
+    return pygame.key.name(keycode).upper()
+
+def aplicar_bindings():
+    """Copia los bindings cargados al dict COLUMNAS global."""
+    global COLUMNAS, LABELS
+    bindings = cargar_bindings()
+    COLUMNAS.clear()
+    COLUMNAS.update(bindings)
+    # reconstruir labels en orden de columna
+    por_col = sorted(bindings.items(), key=lambda x: x[1])
+    LABELS = [nombre_tecla(k) for k, _ in por_col]
+
+# aplicar al arrancar
+aplicar_bindings()
+
+# estado del rebind
+rebind_col = 0       # columna que estamos asignando (0-7)
+rebind_esperando = False  # True = esperando que el usuario aprete una tecla
+rebind_bindings = {}  # bindings temporales mientras se configura
+
+def dibujar_rebind():
+    """Pantalla de reasignacion de teclas."""
+    pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+    t_anim = pygame.time.get_ticks() / 1000.0
+
+    titulo = fuente_grande.render("ASIGNAR TECLAS", True, (0, 220, 255))
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 40))
+    pygame.draw.line(pantalla, (0, 220, 255), (60, 100), (ANCHO - 60, 100), 1)
+
+    sub = fuente_chica.render("ASIGNA UNA TECLA A CADA COLUMNA DEL JUEGO", True, GRIS_MED)
+    pantalla.blit(sub, (cx - sub.get_width() // 2, 115))
+
+    # mostrar las 8 columnas con su tecla asignada
+    y0 = 160
+    fila_h = 45
+    for i in range(8):
+        y = y0 + i * fila_h
+        es_actual = (i == rebind_col)
+        ya_asignada = i in rebind_bindings.values()
+
+        # buscar qué tecla tiene asignada esta columna
+        tecla_asignada = None
+        for k, v in rebind_bindings.items():
+            if v == i:
+                tecla_asignada = k
+                break
+
+        if es_actual and rebind_esperando:
+            # parpadeante: esperando input
+            blink = (int(t_anim * 4) % 2 == 0)
+            col_fondo = (60, 60, 20) if blink else (30, 30, 10)
+            pygame.draw.rect(pantalla, col_fondo, (100, y, ANCHO - 200, fila_h - 6))
+            pygame.draw.rect(pantalla, (255, 220, 60), (100, y, ANCHO - 200, fila_h - 6), 2)
+            col_txt = (255, 220, 60)
+            tecla_str = "APRETA UNA TECLA..."
+        elif es_actual:
+            pygame.draw.rect(pantalla, (30, 40, 50), (100, y, ANCHO - 200, fila_h - 6))
+            pygame.draw.rect(pantalla, BLANCO, (100, y, ANCHO - 200, fila_h - 6), 2)
+            col_txt = BLANCO
+            tecla_str = nombre_tecla(tecla_asignada) if tecla_asignada else "---"
+        else:
+            col_txt = GRIS_MED if ya_asignada else GRIS
+            tecla_str = nombre_tecla(tecla_asignada) if tecla_asignada else "---"
+
+        # columna numero
+        num = fuente.render(f"COL {i + 1}", True, col_txt)
+        pantalla.blit(num, (120, y + 6))
+
+        # tecla asignada
+        tk = fuente.render(tecla_str, True, col_txt)
+        pantalla.blit(tk, (350, y + 6))
+
+    # instrucciones
+    inst_y = y0 + 8 * fila_h + 10
+    if rebind_esperando:
+        inst = fuente_chica.render("APRETA LA TECLA QUE QUIERAS PARA ESTA COLUMNA", True, (255, 220, 60))
+    elif rebind_col >= 8:
+        inst = fuente_chica.render("ENTER = GUARDAR Y SALIR     ESC = CANCELAR", True, (140, 230, 100))
+    else:
+        inst = fuente_chica.render("ENTER = ASIGNAR TECLA     ESC = CANCELAR", True, GRIS_MED)
+    pantalla.blit(inst, (cx - inst.get_width() // 2, inst_y))
+
+    if rebind_col >= 8:
+        listo = fuente.render("LISTO!", True, (140, 230, 100))
+        pantalla.blit(listo, (cx - listo.get_width() // 2, inst_y + 30))
+
+# --- TECLADO MUSICAL POR LINE-IN (deteccion de pitch) ---
+try:
+    import sounddevice as sd
+    LINEIN_DISPONIBLE = True
+    print("sounddevice disponible: teclado musical por line-in habilitado")
+except ImportError:
+    LINEIN_DISPONIBLE = False
+    print("sounddevice no disponible: solo teclado (pip install sounddevice)")
+
+LINEIN_FILE = os.path.join(BASE_DIR, "linein_notas.json")
+LINEIN_SR = 22050
+LINEIN_BLOCK = 1024
+LINEIN_THRESHOLD = 0.015
+LINEIN_DEBOUNCE_MS = 80
+
+linein_activo = False
+linein_stream = None
+linein_queue = queue.Queue(maxsize=32)
+linein_notas_cal = {}
+linein_last_col = -1
+linein_last_time = 0
+linein_energy = 0.0
+linein_freq_actual = 0.0
+
+def _detectar_pitch(data):
+    mono = data[:, 0] if data.ndim > 1 else data
+    rms = float(np.sqrt(np.mean(mono ** 2)))
+    if rms < LINEIN_THRESHOLD:
+        return 0.0, rms
+    ventana = mono * np.hanning(len(mono))
+    espectro = np.abs(np.fft.rfft(ventana))
+    freqs = np.fft.rfftfreq(len(ventana), 1.0 / LINEIN_SR)
+    mask = (freqs >= 60) & (freqs <= 2000)
+    if not np.any(mask):
+        return 0.0, rms
+    espectro_m = espectro[mask]
+    freqs_m = freqs[mask]
+    idx_pico = np.argmax(espectro_m)
+    if espectro_m[idx_pico] < np.mean(espectro_m) * 2.5:
+        return 0.0, rms
+    return float(freqs_m[idx_pico]), rms
+
+def _nota_mas_cercana(freq, notas_cal):
+    if freq <= 0 or not notas_cal:
+        return -1
+    mejor_col, mejor_dist = -1, 999
+    for col, freq_cal in notas_cal.items():
+        if freq_cal <= 0:
+            continue
+        semitonos = abs(12 * math.log2(freq / freq_cal))
+        if semitonos < mejor_dist:
+            mejor_dist = semitonos
+            mejor_col = col
+    return mejor_col if mejor_dist <= 1.5 else -1
+
+def _linein_callback(indata, frames, time_info, status):
+    global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
+    freq, rms = _detectar_pitch(indata)
+    linein_energy = rms
+    linein_freq_actual = freq
+    if freq <= 0:
+        linein_last_col = -1
+        return
+    col = _nota_mas_cercana(freq, linein_notas_cal)
+    if col < 0:
+        return
+    ahora = pygame.time.get_ticks()
+    if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
+        return
+    linein_last_col = col
+    linein_last_time = ahora
+    try:
+        linein_queue.put_nowait(("down", col, ahora))
+    except queue.Full:
+        pass
+
+def linein_iniciar():
+    global linein_stream, linein_activo
+    if not LINEIN_DISPONIBLE or linein_activo:
+        return False
+    try:
+        linein_stream = sd.InputStream(
+            samplerate=LINEIN_SR, channels=1, blocksize=LINEIN_BLOCK,
+            dtype="float32", callback=_linein_callback)
+        linein_stream.start()
+        linein_activo = True
+        print("Line-in activo")
+        return True
+    except Exception as e:
+        print(f"Error abriendo line-in: {e}")
+        return False
+
+def linein_detener():
+    global linein_stream, linein_activo
+    if linein_stream:
+        try:
+            linein_stream.stop()
+            linein_stream.close()
+        except:
+            pass
+    linein_stream = None
+    linein_activo = False
+
+def linein_procesar_eventos(partida_ref):
+    """Llamar cada frame: drena la cola de eventos del line-in y los
+    inyecta como pulsaciones de columna en la partida."""
+    while not linein_queue.empty():
+        try:
+            tipo, col, ts = linein_queue.get_nowait()
+            if tipo == "down" and partida_ref:
+                col_mapeada = partida_ref.get("mapa_teclas", {}).get(col, col)
+                if col_mapeada < partida_ref["dificultad"]["columnas"]:
+                    ev = pygame.event.Event(pygame.KEYDOWN, key=None,
+                                            _linein_col=col_mapeada)
+                    pygame.event.post(ev)
+        except queue.Empty:
+            break
+
+def cargar_linein_notas():
+    global linein_notas_cal
+    try:
+        with open(LINEIN_FILE, "r") as f:
+            linein_notas_cal = {int(k): v for k, v in json.load(f).items()}
+    except:
+        linein_notas_cal = {}
+
+def guardar_linein_notas():
+    try:
+        with open(LINEIN_FILE, "w") as f:
+            json.dump({str(k): v for k, v in linein_notas_cal.items()}, f, indent=2)
+    except Exception as e:
+        print(f"Error guardando calibracion: {e}")
+
+NOTAS_NOMBRE = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+def freq_a_nota(freq):
+    if freq <= 0:
+        return "---"
+    midi = 69 + 12 * math.log2(freq / 440.0)
+    midi_r = round(midi)
+    nombre = NOTAS_NOMBRE[midi_r % 12]
+    octava = (midi_r // 12) - 1
+    cents = int((midi - midi_r) * 100)
+    return f"{nombre}{octava}" + (f" {cents:+d}c" if abs(cents) > 5 else "")
+
+linein_cal_col = 0
+linein_cal_estado = "idle"
+linein_cal_muestras = []
+linein_dev_idx = 0        # dispositivo de entrada seleccionado
+linein_devices = []       # lista de dispositivos de entrada disponibles
+
+def listar_dispositivos_entrada():
+    """Lista los dispositivos de entrada de audio disponibles."""
+    global linein_devices
+    linein_devices = []
+    if not LINEIN_DISPONIBLE:
+        return
+    try:
+        devs = sd.query_devices()
+        for i, d in enumerate(devs):
+            if d["max_input_channels"] > 0:
+                linein_devices.append({"idx": i, "nombre": d["name"]})
+    except Exception as e:
+        print(f"Error listando dispositivos: {e}")
+
+def dibujar_linein_setup():
+    """Pantalla de selección de dispositivo de entrada + opción de calibrar."""
+    pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+
+    titulo = fuente_grande.render("TECLADO MUSICAL", True, (255, 180, 60))
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 40))
+    pygame.draw.line(pantalla, (255, 180, 60), (60, 100), (ANCHO - 60, 100), 1)
+
+    if not LINEIN_DISPONIBLE:
+        # sounddevice no instalado: mostrar instrucciones
+        msg1 = fuente.render("REQUIERE SOUNDDEVICE", True, (255, 100, 100))
+        pantalla.blit(msg1, (cx - msg1.get_width() // 2, 180))
+        msg2 = fuente_chica.render("INSTALAR DESDE LA TERMINAL:", True, GRIS_MED)
+        pantalla.blit(msg2, (cx - msg2.get_width() // 2, 240))
+        cmd = fuente.render("pip install sounddevice", True, BLANCO)
+        pantalla.blit(cmd, (cx - cmd.get_width() // 2, 280))
+        msg3 = fuente_chica.render("EN LINUX/RPi TAMBIEN:", True, GRIS_MED)
+        pantalla.blit(msg3, (cx - msg3.get_width() // 2, 340))
+        cmd2 = fuente.render("sudo apt install libportaudio2", True, BLANCO)
+        pantalla.blit(cmd2, (cx - cmd2.get_width() // 2, 370))
+        msg4 = fuente_chica.render("REINICIAR EL JUEGO DESPUES DE INSTALAR", True, (255, 180, 60))
+        pantalla.blit(msg4, (cx - msg4.get_width() // 2, 430))
+        esc = fuente_chica.render("ESC = VOLVER", True, GRIS)
+        pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 40))
+        return
+
+    # estado actual
+    if linein_activo:
+        est = fuente.render("ESTADO: ACTIVO", True, (140, 230, 100))
+    elif linein_notas_cal:
+        est = fuente.render("ESTADO: CALIBRADO (INACTIVO)", True, (255, 180, 60))
+    else:
+        est = fuente.render("ESTADO: NO CONFIGURADO", True, GRIS_MED)
+    pantalla.blit(est, (cx - est.get_width() // 2, 120))
+
+    # dispositivos de entrada
+    sub = fuente.render("DISPOSITIVO DE ENTRADA:", True, BLANCO)
+    pantalla.blit(sub, (100, 175))
+
+    if not linein_devices:
+        no_dev = fuente_chica.render("NO SE ENCONTRARON DISPOSITIVOS DE ENTRADA", True, (255, 100, 100))
+        pantalla.blit(no_dev, (cx - no_dev.get_width() // 2, 220))
+    else:
+        y0 = 215
+        for i, dev in enumerate(linein_devices):
+            y = y0 + i * 30
+            if y > 420:
+                mas = fuente_chica.render(f"... y {len(linein_devices) - i} mas", True, GRIS)
+                pantalla.blit(mas, (120, y))
+                break
+            sel = (i == linein_dev_idx)
+            nombre = dev["nombre"]
+            if len(nombre) > 45:
+                nombre = nombre[:43] + ".."
+            marca = "> " if sel else "  "
+            col = BLANCO if sel else GRIS_MED
+            if sel:
+                pygame.draw.rect(pantalla, (30, 30, 40), (90, y - 2, ANCHO - 180, 26))
+            txt = fuente_chica.render(f"{marca}{nombre}", True, col)
+            pantalla.blit(txt, (100, y))
+
+    # opciones al pie
+    pygame.draw.line(pantalla, GRIS, (60, 460), (ANCHO - 60, 460), 1)
+    opciones_txt = []
+    if linein_devices:
+        opciones_txt.append("ENTER = CALIBRAR CON ESTE DISPOSITIVO")
+    if linein_notas_cal and not linein_activo:
+        opciones_txt.append("A = ACTIVAR LINE-IN")
+    if linein_activo:
+        opciones_txt.append("A = DESACTIVAR LINE-IN")
+    opciones_txt.append("ESC = VOLVER")
+
+    for i, txt in enumerate(opciones_txt):
+        col = (140, 230, 100) if "ACTIVAR" in txt else GRIS_MED
+        t = fuente_chica.render(txt, True, col)
+        pantalla.blit(t, (cx - t.get_width() // 2, 475 + i * 22))
+
+def dibujar_calibracion_linein():
+    pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+    t_anim = pygame.time.get_ticks() / 1000.0
+    titulo = fuente_grande.render("CALIBRAR TECLADO", True, (255, 180, 60))
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 30))
+    pygame.draw.line(pantalla, (255, 180, 60), (60, 90), (ANCHO - 60, 90), 1)
+    # VU meter
+    vu_w, vu_x, vu_y = 300, cx - 150, 105
+    pygame.draw.rect(pantalla, GRIS, (vu_x, vu_y, vu_w, 10))
+    vu_level = min(1.0, linein_energy / 0.15)
+    if vu_level > 0.01:
+        vu_col = (100, 255, 100) if vu_level < 0.7 else (255, 200, 60) if vu_level < 0.9 else (255, 80, 80)
+        pygame.draw.rect(pantalla, vu_col, (vu_x, vu_y, int(vu_w * vu_level), 10))
+    pygame.draw.rect(pantalla, GRIS_MED, (vu_x, vu_y, vu_w, 10), 1)
+    vu_lbl = fuente_chica.render("ENTRADA", True, GRIS)
+    pantalla.blit(vu_lbl, (vu_x - 75, vu_y - 2))
+    # columnas
+    y0, fila_h = 135, 42
+    for i in range(8):
+        y = y0 + i * fila_h
+        es_actual = (i == linein_cal_col and linein_cal_col < 8)
+        ya_cal = i in linein_notas_cal
+        if es_actual and linein_cal_estado == "escuchando":
+            blink = (int(t_anim * 3) % 2 == 0)
+            pygame.draw.rect(pantalla, (50, 30, 10) if blink else (30, 20, 5), (80, y, ANCHO - 160, fila_h - 4))
+            pygame.draw.rect(pantalla, (255, 180, 60), (80, y, ANCHO - 160, fila_h - 4), 2)
+            col_txt = (255, 180, 60)
+        elif es_actual:
+            pygame.draw.rect(pantalla, (30, 30, 40), (80, y, ANCHO - 160, fila_h - 4))
+            pygame.draw.rect(pantalla, BLANCO, (80, y, ANCHO - 160, fila_h - 4), 2)
+            col_txt = BLANCO
+        else:
+            col_txt = GRIS_MED if ya_cal else GRIS
+        num = fuente.render(f"COL {i + 1}", True, col_txt)
+        pantalla.blit(num, (100, y + 6))
+        if ya_cal:
+            freq = linein_notas_cal[i]
+            info = fuente.render(f"{freq_a_nota(freq)}  ({freq:.0f}Hz)", True, col_txt)
+            pantalla.blit(info, (280, y + 6))
+        elif es_actual and linein_cal_estado == "escuchando":
+            if linein_freq_actual > 0:
+                live = fuente.render(f"{freq_a_nota(linein_freq_actual)}  ({linein_freq_actual:.0f}Hz)", True, (255, 220, 100))
+                pantalla.blit(live, (280, y + 6))
+            else:
+                pantalla.blit(fuente_chica.render("TOCA UNA NOTA...", True, (255, 180, 60)), (280, y + 12))
+        else:
+            pantalla.blit(fuente_chica.render("---", True, GRIS), (280, y + 12))
+    inst_y = y0 + 8 * fila_h + 10
+    if linein_cal_estado == "escuchando":
+        inst = fuente_chica.render("TOCA Y MANTENE LA NOTA     ENTER = CONFIRMAR     ESC = CANCELAR", True, (255, 180, 60))
+    elif linein_cal_col >= 8:
+        inst = fuente_chica.render("ENTER = GUARDAR     ESC = CANCELAR     R = RECALIBRAR", True, (140, 230, 100))
+        listo = fuente.render("CALIBRACION COMPLETA!", True, (140, 230, 100))
+        pantalla.blit(listo, (cx - listo.get_width() // 2, inst_y + 25))
+    else:
+        inst = fuente_chica.render("ENTER = ESCUCHAR NOTA     ESC = CANCELAR", True, GRIS_MED)
+    pantalla.blit(inst, (cx - inst.get_width() // 2, inst_y))
+
+cargar_linein_notas()
 
 ESTADO         = "menu"
 partida        = None
@@ -6131,6 +7894,7 @@ teclas_sostenidas = set()
 nombre_input   = ""
 score_guardado = False
 run_actual     = None
+run_fallido_t  = 0
 dev_mode       = False
 
 # arrancar la musica del menu con una seed aleatoria (DIFICIL+)
@@ -6153,32 +7917,52 @@ while corriendo:
 
         if ESTADO == "menu":
             if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_UP:
+                    menu_opcion = (menu_opcion - 1) % len(MENU_OPCIONES)
+                    sfx_select()
+                elif evento.key == pygame.K_DOWN:
+                    menu_opcion = (menu_opcion + 1) % len(MENU_OPCIONES)
+                    sfx_select()
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    sfx_confirm()
+                    op = MENU_OPCIONES[menu_opcion]
+                    if op == "JUGAR":
+                        seed_acumulada = 0.0
+                        cargando_seed = False
+                        ESTADO = "selector_seed"
+                    elif op == "CARRERA":
+                        c = cargar_carrera()
+                        carrera_cursor = max(0, c.get("nivel_max", 1) - 1)
+                        ESTADO = "carrera"
+                    elif op == "TUTORIAL":
+                        tutorial_pagina = 0
+                        ESTADO = "tutorial"
+                    elif op == "LEADERBOARD":
+                        ESTADO = "leaderboard"
+                    elif op == "CONFIG":
+                        config_opcion = 0
+                        ESTADO = "config"
+
+        elif ESTADO == "selector_seed":
+            if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = True
+                if evento.key == pygame.K_ESCAPE:
+                    seed_acumulada = 0.0
+                    cargando_seed = False
+                    ESTADO = "menu"
                 if evento.key == pygame.K_RETURN and seed_acumulada > 0:
-                    # arrancar un RUN de stages
                     sfx_confirm()
                     run_actual = crear_run(int(seed_acumulada))
+                    carrera_activa = False
                     ESTADO = "run_overview"
                 if evento.key == pygame.K_m and seed_acumulada > 0:
-                    # modo libre de mods (sin stages)
                     sfx_confirm()
                     mods_opcion = 0
                     ESTADO = "mods"
                 if evento.key == pygame.K_r:
                     seed_acumulada = 0.0
-                    cargando_seed  = False
-                if evento.key == pygame.K_l:
-                    sfx_confirm()
-                    ESTADO = "leaderboard"
-                if evento.key == pygame.K_c:
-                    sfx_confirm()
-                    config_opcion = 0
-                    ESTADO = "config"
-                if evento.key == pygame.K_t:
-                    sfx_confirm()
-                    tutorial_pagina = 0
-                    ESTADO = "tutorial"
+                    cargando_seed = False
             if evento.type == pygame.KEYUP:
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = False
@@ -6206,6 +7990,32 @@ while corriendo:
                         partida = iniciar_partida(150, mods=set(), tutorial=True)
                         score_guardado = True   # la practica no guarda score
                         ESTADO = "jugando"
+
+        elif ESTADO == "carrera":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "menu"
+                elif evento.key == pygame.K_UP:
+                    carrera_cursor = max(0, carrera_cursor - 1)
+                    sfx_select()
+                elif evento.key == pygame.K_DOWN:
+                    carrera_cursor = min(14, carrera_cursor + 1)
+                    sfx_select()
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    nivel_sel = carrera_cursor + 1
+                    c_data = cargar_carrera()
+                    if nivel_sel <= c_data.get("nivel_max", 1):
+                        sfx_confirm()
+                        # seed aleatoria para este nivel
+                        tramos = [1500, 2500, 3200, 3800, 4400, 5000, 5600, 6200, 6800,
+                                  7300, 7800, 8300, 8800, 9400, 9999]
+                        s_min = tramos[nivel_sel - 2] + 1 if nivel_sel >= 2 else 1
+                        s_max = tramos[nivel_sel - 1]
+                        seed_carrera = random.randint(s_min, s_max)
+                        carrera_registrar_intento(nivel_sel)
+                        run_actual = crear_run(seed_carrera)
+                        carrera_activa = True
+                        ESTADO = "run_overview"
 
         elif ESTADO == "run_overview":
             if evento.type == pygame.KEYDOWN:
@@ -6237,6 +8047,11 @@ while corriendo:
 
         elif ESTADO == "perk_select":
             if evento.type == pygame.KEYDOWN:
+                # bloquear input mientras entra la animacion de las cartas
+                _perk_elapsed = pygame.time.get_ticks() - perk_anim_inicio
+                _perk_anim_total = (len(perk_ofertas) - 1) * PERK_ANIM_STAGGER + PERK_ANIM_CARTA
+                if _perk_elapsed < _perk_anim_total and evento.key != pygame.K_ESCAPE:
+                    continue
                 _perk_confirmar = False
                 if evento.key in (pygame.K_1, pygame.K_KP1):
                     perk_seleccion = 0
@@ -6293,13 +8108,19 @@ while corriendo:
                     if not score_guardado and pts_run > 0 and es_highscore(pts_run):
                         nombre_input = ""
                         ESTADO = "input_nombre"
+                    elif carrera_activa:
+                        ESTADO = "carrera"
                     else:
                         ESTADO = "leaderboard"
                     run_actual = None
+                    carrera_activa = False
                     nueva_musica_menu_aleatoria()
 
         elif ESTADO == "run_fallido":
             if evento.type == pygame.KEYDOWN:
+                # bloquear input durante la animacion (1.8s)
+                if pygame.time.get_ticks() - run_fallido_t < 1800:
+                    continue
                 if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
                     # partida["puntos"] ya incluye lo acumulado de stages previos
                     pts_run = partida.get("puntos", 0)
@@ -6307,9 +8128,12 @@ while corriendo:
                         partida["puntos"] = pts_run
                         nombre_input = ""
                         ESTADO = "input_nombre"
+                    elif carrera_activa:
+                        ESTADO = "carrera"
                     else:
                         ESTADO = "leaderboard"
                     run_actual = None
+                    carrera_activa = False
                     nueva_musica_menu_aleatoria()
 
         elif ESTADO == "mods":
@@ -6347,11 +8171,29 @@ while corriendo:
                     guardar_config()
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
-                    config_opcion = (config_opcion - 1) % 5
+                    config_opcion = (config_opcion - 1) % 7
                     sfx_select()
                 elif evento.key == pygame.K_DOWN:
-                    config_opcion = (config_opcion + 1) % 5
+                    config_opcion = (config_opcion + 1) % 7
                     sfx_select()
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if config_opcion == 5:
+                        # abrir pantalla de rebind de teclas
+                        sfx_confirm()
+                        rebind_col = 0
+                        rebind_esperando = False
+                        rebind_bindings = dict(cargar_bindings())
+                        ESTADO = "rebind"
+                    elif config_opcion == 6:
+                        # abrir setup de teclado musical (seleccion de dispositivo)
+                        sfx_confirm()
+                        if LINEIN_DISPONIBLE:
+                            listar_dispositivos_entrada()
+                            linein_dev_idx = 0
+                            ESTADO = "linein_setup"
+                        else:
+                            # sounddevice no instalado: mostrar pantalla con instrucciones
+                            ESTADO = "linein_setup"
                 elif evento.key == pygame.K_LEFT:
                     if config_opcion == 0:
                         config["brillo"] = max(0.3, round(config["brillo"] - 0.1, 1))
@@ -6380,6 +8222,133 @@ while corriendo:
                         nuevo = min(len(AUDIO_DEVICES) - 1, config["audio_idx"] + 1)
                         if nuevo != config["audio_idx"]:
                             cambiar_audio_device(nuevo)
+
+        elif ESTADO == "rebind":
+            if evento.type == pygame.KEYDOWN:
+                if rebind_esperando:
+                    # el usuario apretó una tecla: asignarla a la columna actual
+                    # (ignorar ESC y teclas de navegacion en este modo)
+                    if evento.key == pygame.K_ESCAPE:
+                        rebind_esperando = False
+                    else:
+                        # si la tecla ya estaba asignada a otra col, desasignarla
+                        rebind_bindings = {k: v for k, v in rebind_bindings.items()
+                                           if v != rebind_col}
+                        # si la tecla estaba en otra col, sacarla de ahí
+                        if evento.key in rebind_bindings:
+                            del rebind_bindings[evento.key]
+                        rebind_bindings[evento.key] = rebind_col
+                        sfx_confirm()
+                        rebind_esperando = False
+                        rebind_col += 1
+                else:
+                    if evento.key == pygame.K_ESCAPE:
+                        # cancelar sin guardar
+                        ESTADO = "config"
+                    elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        if rebind_col >= 8:
+                            # guardar y salir
+                            guardar_bindings(rebind_bindings)
+                            aplicar_bindings()
+                            sfx_confirm()
+                            ESTADO = "config"
+                        else:
+                            # empezar a esperar tecla para esta columna
+                            rebind_esperando = True
+                            sfx_select()
+                    elif evento.key == pygame.K_UP and rebind_col > 0:
+                        rebind_col -= 1
+                        sfx_select()
+                    elif evento.key == pygame.K_DOWN and rebind_col < 8:
+                        rebind_col += 1
+                        sfx_select()
+
+        elif ESTADO == "linein_setup":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    ESTADO = "config"
+                elif evento.key == pygame.K_UP and linein_devices:
+                    linein_dev_idx = max(0, linein_dev_idx - 1)
+                    sfx_select()
+                elif evento.key == pygame.K_DOWN and linein_devices:
+                    linein_dev_idx = min(len(linein_devices) - 1, linein_dev_idx + 1)
+                    sfx_select()
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE) and linein_devices:
+                    # abrir calibracion con el dispositivo seleccionado
+                    sfx_confirm()
+                    linein_detener()
+                    # iniciar con el dispositivo elegido
+                    dev_info = linein_devices[linein_dev_idx]
+                    try:
+                        linein_stream = sd.InputStream(
+                            device=dev_info["idx"],
+                            samplerate=LINEIN_SR, channels=1,
+                            blocksize=LINEIN_BLOCK, dtype="float32",
+                            callback=_linein_callback)
+                        linein_stream.start()
+                        linein_activo = True
+                        print(f"Line-in abierto: {dev_info['nombre']}")
+                    except Exception as e:
+                        print(f"Error: {e}")
+                    linein_cal_col = 0
+                    linein_cal_estado = "idle"
+                    linein_cal_muestras = []
+                    ESTADO = "calibrar_linein"
+                elif evento.key == pygame.K_a:
+                    # toggle activar/desactivar line-in
+                    if linein_activo:
+                        linein_detener()
+                    elif linein_notas_cal and linein_devices:
+                        dev_info = linein_devices[linein_dev_idx]
+                        try:
+                            linein_stream = sd.InputStream(
+                                device=dev_info["idx"],
+                                samplerate=LINEIN_SR, channels=1,
+                                blocksize=LINEIN_BLOCK, dtype="float32",
+                                callback=_linein_callback)
+                            linein_stream.start()
+                            linein_activo = True
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+        elif ESTADO == "calibrar_linein":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE:
+                    if linein_cal_estado == "escuchando":
+                        linein_cal_estado = "idle"
+                    else:
+                        linein_detener()
+                        ESTADO = "config"
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if linein_cal_col >= 8:
+                        # guardar y activar
+                        guardar_linein_notas()
+                        sfx_confirm()
+                        # dejar line-in activo para jugar
+                        ESTADO = "config"
+                    elif linein_cal_estado == "idle":
+                        # empezar a escuchar
+                        linein_cal_estado = "escuchando"
+                        linein_cal_muestras = []
+                        sfx_select()
+                    elif linein_cal_estado == "escuchando":
+                        # confirmar la nota actual si hay frecuencia estable
+                        if linein_freq_actual > 0:
+                            linein_notas_cal[linein_cal_col] = round(linein_freq_actual, 1)
+                            sfx_confirm()
+                            linein_cal_estado = "idle"
+                            linein_cal_col += 1
+                elif evento.key == pygame.K_r and linein_cal_col >= 8:
+                    # recalibrar desde cero
+                    linein_notas_cal.clear()
+                    linein_cal_col = 0
+                    linein_cal_estado = "idle"
+                elif evento.key == pygame.K_UP and linein_cal_col > 0 and linein_cal_estado == "idle":
+                    linein_cal_col -= 1
+                    sfx_select()
+                elif evento.key == pygame.K_DOWN and linein_cal_col < 8 and linein_cal_estado == "idle":
+                    linein_cal_col += 1
+                    sfx_select()
 
         elif ESTADO == "input_nombre":
             if evento.type == pygame.KEYDOWN:
@@ -6471,9 +8440,16 @@ while corriendo:
 
         elif ESTADO == "jugando":
             zy_p = partida.get("zona_y", ZONA_Y)
+            _col_hit = -1   # columna golpeada en este evento (-1 = ninguna)
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
+                        # durante la animacion de muerte (1er segundo) ignorar
+                        # el input: evita saltarse la animacion por accidente
+                        # (ej: estaba apretando teclas justo cuando murio)
+                        if (partida.get("game_over")
+                                and pygame.time.get_ticks() - partida.get("game_over_t", 0) < 1000):
+                            continue
                         # FIN / GAME OVER
                         sfx_confirm()
                         pygame.mixer.stop()
@@ -6487,17 +8463,38 @@ while corriendo:
                             # --- en modo RUN de stages ---
                             if partida.get("game_over"):
                                 # perdio el stage -> run fallido
+                                run_fallido_t = pygame.time.get_ticks()
                                 ESTADO = "run_fallido"
                                 nueva_musica_menu_aleatoria()
                             else:
                                 # paso el stage: el total del run es el puntaje final
                                 # de esta partida (que ya arranco desde el acumulado)
+                                _ganado_st = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
+                                _idx_st = run_actual["stage"] - 1
+                                if 0 <= _idx_st < len(run_actual.get("puntos_por_stage", [])):
+                                    run_actual["puntos_por_stage"][_idx_st] = _ganado_st
+                                # rank de performance del stage (S/A/B/C/D)
+                                run_actual.setdefault("rank_por_stage", ["?"] * NUM_STAGES)
+                                if 0 <= _idx_st < NUM_STAGES:
+                                    run_actual["rank_por_stage"][_idx_st] = calcular_rank_stage(partida)
                                 run_actual["puntos_total"] = partida["puntos"]
                                 if run_actual["stage"] >= NUM_STAGES:
                                     # run completo!
                                     marcar_completado(run_actual["genero"], run_actual["nivel"])
                                     col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
                                     _spawn_notas_celebracion(col_g)
+                                    # CARRERA: desbloquear siguiente nivel + guardar rank
+                                    if carrera_activa:
+                                        # calcular rank promedio de los 4 stages
+                                        rks = run_actual.get("rank_por_stage", ["?"] * NUM_STAGES)
+                                        _ord = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "?": 0}
+                                        _prom = sum(_ord.get(r, 0) for r in rks) / max(1, len(rks))
+                                        if _prom >= 4.5: _rk_final = "S"
+                                        elif _prom >= 3.5: _rk_final = "A"
+                                        elif _prom >= 2.5: _rk_final = "B"
+                                        elif _prom >= 1.5: _rk_final = "C"
+                                        else: _rk_final = "D"
+                                        carrera_completar_nivel(run_actual["nivel"], _rk_final)
                                     ESTADO = "run_completado"
                                     nueva_musica_menu_aleatoria()
                                 else:
@@ -6505,6 +8502,7 @@ while corriendo:
                                     _perk_rng = random.Random(run_actual["seeds"][run_actual["stage"] - 1] + 777)
                                     perk_ofertas[:] = generar_ofertas_perks(_perk_rng, run_actual["perks"])
                                     perk_seleccion = 0
+                                    perk_anim_inicio = pygame.time.get_ticks()
                                     ESTADO = "perk_select"
                                     nueva_musica_menu_aleatoria()
                         else:
@@ -6522,6 +8520,7 @@ while corriendo:
                         for c in list(canal_hold.keys()):
                             canal_hold[c].stop()
                         canal_hold.clear()
+                        partida["snd_pendientes"] = []  # descartar cuantizacion pendiente
                         partida["pausa_inicio"] = pygame.time.get_ticks()
                         pausa_opcion = 0
                         ESTADO = "pausado"
@@ -6541,213 +8540,317 @@ while corriendo:
                     if col < partida["dificultad"]["columnas"]:
                         teclas_sostenidas.add(col)
                         midi_fijo = partida["cancion"]["notas_columnas"][col]
+                        _col_hit = col  # marcar para scoring abajo
 
-                        # buscar la nota objetivo más cercana en esta columna
-                        ahora_rel = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
-                        midi_a_tocar = midi_fijo
-                        mejor_dist = 99999
-                        mejor_es_pu = False   # si la mejor nota es un power-up, no sonar melodica
-                        for g in partida["notas_cayendo"]:
-                            if col in g["cols"]:
-                                d = abs(g["tiempo_ms"] - ahora_rel)
-                                if d < mejor_dist:
-                                    mejor_dist = d
-                                    mejor_es_pu = bool(g.get("power_up"))
-                                    idx_col = g["cols"].index(col)
-                                    if idx_col < len(g.get("midis", [])):
-                                        midi_a_tocar = g["midis"][idx_col]
+            # GAMEPAD: botones del controlador -> misma lógica que teclado
+            if evento.type == pygame.JOYBUTTONDOWN and not partida.get("game_over") and not partida.get("terminada"):
+                _pad_col = pad_col_down(evento.button)
+                if _pad_col is not None:
+                    col = partida.get("mapa_teclas", {}).get(_pad_col, _pad_col)
+                    if col < partida["dificultad"]["columnas"]:
+                        teclas_sostenidas.add(col)
+                        midi_fijo = partida["cancion"]["notas_columnas"][col]
+                        _col_hit = col
 
-                        # volumen segun cercania: generoso, pifiar por poco suena pleno
-                        if mejor_dist < 120:
-                            vol_nota = 1.0
-                        elif mejor_dist < 250:
-                            vol_nota = 0.9
-                        else:
-                            vol_nota = 0.7
+            # LINE-IN: el teclado musical inyecta eventos con _linein_col
+            if (evento.type == pygame.KEYDOWN and hasattr(evento, "_linein_col")
+                    and not partida.get("game_over") and not partida.get("terminada")):
+                col = evento._linein_col
+                col = partida.get("mapa_teclas", {}).get(col, col)
+                if col < partida["dificultad"]["columnas"]:
+                    teclas_sostenidas.add(col)
+                    midi_fijo = partida["cancion"]["notas_columnas"][col]
+                    _col_hit = col
 
-                        # solo tocar la nota melodica si la mejor no es un power-up
-                        # (los power-ups tienen su propio SFX que se dispara al acertar)
-                        snd_tocar = None
-                        if not (mejor_es_pu and mejor_dist < partida.get("w_hit", 150)):
-                            snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
-                        if snd_tocar:
-                            # paneo segun posicion de la columna (izq a der)
-                            num_cols_t = partida["dificultad"]["columnas"]
-                            if num_cols_t > 1:
-                                pan = col / (num_cols_t - 1)  # 0..1
-                            else:
-                                pan = 0.5
-                            volL = vol_nota * (1.0 - pan * 0.6) * config["volumen"]
-                            volR = vol_nota * (0.4 + pan * 0.6) * config["volumen"]
-                            ch = snd_tocar.play()
-                            if ch:
-                                ch.set_volume(volL, volR)
+            # SCORING: si alguna fuente de input (teclado/gamepad/line-in)
+            # seteó _col_hit, procesar la nota en esa columna
+            if _col_hit >= 0:
+                col = _col_hit
 
-                        # pulso del fondo al tocar (reacciona a la nota del jugador)
-                        partida["liss_pulso"] = 1.0
+                # buscar la nota objetivo más cercana en esta columna
+                ahora_rel = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
+                midi_a_tocar = midi_fijo
+                mejor_dist = 99999
+                mejor_target = ahora_rel   # tiempo target de la mejor nota (para cuantizar)
+                mejor_es_pu = False   # si la mejor nota es un power-up, no sonar melodica
+                mejor_es_bomba = False  # si la mejor nota es una bomba, no sonar melodica
+                for g in partida["notas_cayendo"]:
+                    if col in g["cols"]:
+                        d = abs(g["tiempo_ms"] - ahora_rel)
+                        if d < mejor_dist:
+                            mejor_dist = d
+                            mejor_target = g["tiempo_ms"]
+                            mejor_es_pu = bool(g.get("power_up"))
+                            mejor_es_bomba = bool(g.get("es_bomba"))
+                            idx_col = g["cols"].index(col)
+                            if idx_col < len(g.get("midis", [])):
+                                midi_a_tocar = g["midis"][idx_col]
 
-                        acerto_algo = False
-                        # ventanas de timing (ajustables por perks)
-                        # ventanas de timing escaladas por dificultad (con perks aplicados)
-                        w_hit = partida.get("w_hit", 150)
-                        w_perf = partida.get("w_perf", 30)
-                        # auto-perfecto por power-up estrella
-                        ahora_juego = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
-                        auto_perf = ahora_juego < partida.get("efectos_activos", {}).get("estrella", 0)
-                        for grupo in partida["notas_cayendo"]:
-                            if col in grupo["cols"]:
-                                distancia = abs(grupo["tiempo_ms"] - ahora_juego)
-                                if distancia < w_hit:
-                                    acerto_algo = True
-                                    if "acertadas" not in grupo:
-                                        grupo["acertadas"] = set()
-                                    if col not in grupo["acertadas"]:
-                                        grupo["acertadas"].add(col)
-                                        num_cols = partida["dificultad"]["columnas"]
-                                        ancho_col = ANCHO // num_cols
-                                        cx = col * ancho_col + ancho_col // 2
-                                        col_g = COLOR_GENERO.get(partida["cancion"].get("genero",""), BLANCO)
-                                        # --- POWER-UP: nota especial ---
-                                        pu_id = grupo.get("power_up")
-                                        if pu_id and distancia < w_hit:
-                                            pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
-                                            if pu_def:
-                                                if pu_id == "vida":
-                                                    partida["vida"] = min(partida["vida_max"], partida["vida"] + 4)
-                                                    crear_texto_flotante(cx, zy_p - 30, "+4 VIDA", pu_def["color"], True)
-                                                elif pu_def["dur"] > 0:
-                                                    partida["efectos_activos"][pu_id] = ahora_juego + pu_def["dur"]
-                                                    crear_texto_flotante(cx, zy_p - 30, pu_def["nombre"], pu_def["color"], True)
-                                                crear_explosion(cx, zy_p, 80, color=pu_def["color"])
-                                                crear_shake(6)
-                                                sfx_power_up(pu_id)
-                                                partida["combo"] += 1
-                                                if partida["combo"] > partida["max_combo"]:
-                                                    partida["max_combo"] = partida["combo"]
-                                                if grupo in partida["notas_cayendo"]:
-                                                    partida["notas_cayendo"].remove(grupo)
-                                                break
-                                        if auto_perf or distancia < w_perf:
-                                            pts = 10 if partida.get("perk_perfecto") else 5
-                                            partida["combo"] += 1
-                                            pot = min(1.0 + partida["combo"] * 0.03, 1.8)
-                                            partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
-                                            combo_particulas = min(50 + partida["combo"] * 4, 250)
-                                            crear_explosion(cx, zy_p, combo_particulas, color=col_g, potencia=pot, combo=partida["combo"])
-                                            crear_onda(cx, zy_p, 0.7)
-                                            crear_onda(cx, zy_p, 0.4, r0=int(4 + partida["combo"] * 0.3))
-                                            if partida["combo"] >= 30:
-                                                crear_onda(cx, zy_p, 0.5, r0=int(15 + partida["combo"] * 0.5))
-                                            crear_flash(col, min(0.8, 0.5 + partida["combo"] * 0.01))
-                                            crear_shake(min(5 + partida["combo"] * 0.15, 12))
-                                            crear_indicador_hit(col, "perfecto")
-                                            sfx_hit_perfect(partida["combo"])
-                                        elif distancia < w_hit * 0.4:
-                                            pts = 3
-                                            partida["combo"] += 1
-                                            pot = min(1.0 + partida["combo"] * 0.02, 1.5)
-                                            partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
-                                            crear_explosion(cx, zy_p, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot, combo=partida["combo"])
-                                            crear_onda(cx, zy_p, 0.5)
-                                            crear_flash(col, 0.4)
-                                            crear_shake(min(3 + partida["combo"] * 0.1, 8))
-                                            crear_indicador_hit(col, "cerca")
-                                            sfx_hit_good()
-                                        elif distancia < w_hit * 0.67:
-                                            pts = 1
-                                            partida["combo"] += 1
-                                            partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
-                                            crear_explosion(cx, zy_p, 20, color=col_g, combo=partida["combo"])
-                                            crear_onda(cx, zy_p, 0.4)
-                                            crear_flash(col, 0.3)
-                                            crear_indicador_hit(col, "cerca")
-                                            sfx_hit_good()
+                # volumen segun cercania: generoso, pifiar por poco suena pleno.
+                # techo bajado de 0.80 -> 0.62 para que la nota del jugador
+                # NO domine la mezcla (percusion y bajo tambien bajan sus
+                # boosts abajo, asi el balance relativo se mantiene pero el
+                # jugador deja de "flotar" arriba del resto de la cancion).
+                if mejor_dist < 120:
+                    vol_nota = 0.62
+                elif mejor_dist < 250:
+                    vol_nota = 0.55
+                else:
+                    vol_nota = 0.42
+
+                # solo tocar la nota melodica si la mejor no es un power-up
+                # ni una bomba (ambos tienen su propio SFX al acertar/detonar)
+                snd_tocar = None
+                if (not (mejor_es_pu and mejor_dist < partida.get("w_hit", 150))
+                        and not (mejor_es_bomba and mejor_dist < partida.get("w_hit", 150))):
+                    snd_tocar = cache_notas.get(midi_a_tocar) or cache_notas.get(midi_fijo)
+                if snd_tocar:
+                    # paneo segun posicion de la columna (izq a der)
+                    num_cols_t = partida["dificultad"]["columnas"]
+                    if num_cols_t > 1:
+                        pan = col / (num_cols_t - 1)  # 0..1
+                    else:
+                        pan = 0.5
+                    volL = vol_nota * (1.0 - pan * 0.6) * config["volumen"]
+                    volR = vol_nota * (0.4 + pan * 0.6) * config["volumen"]
+                    # CUANTIZACION AL GRID: si el jugador pego TEMPRANO
+                    # (target > ahora) por entre 5 y 45ms, demorar el
+                    # sample al tiempo target exacto asi cae en grid con
+                    # percusion y bajo. Fuera de esa ventana (tarde, o
+                    # muy cerca del target) se toca al instante como
+                    # siempre. La demora tope de 45ms es imperceptible
+                    # como latencia pero suficiente para pegarlo al
+                    # groove. Los holds tienen su propio dispatch aparte
+                    # (canal_hold) que sostiene el sample, la
+                    # cuantizacion del hit inicial no lo rompe.
+                    delta = mejor_target - ahora_rel
+                    if 5 < delta < 45:
+                        partida["snd_pendientes"].append(
+                            (mejor_target, snd_tocar, volL, volR))
+                    else:
+                        ch = snd_tocar.play()
+                        if ch:
+                            ch.set_volume(volL, volR)
+
+                # pulso del fondo al tocar (reacciona a la nota del jugador)
+                partida["liss_pulso"] = 1.0
+
+                acerto_algo = False
+                # ventanas de timing (ajustables por perks)
+                # ventanas de timing escaladas por dificultad (con perks aplicados)
+                w_hit = partida.get("w_hit", 150)
+                w_perf = partida.get("w_perf", 30)
+                # auto-perfecto por power-up estrella
+                ahora_juego = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
+                auto_perf = ahora_juego < partida.get("efectos_activos", {}).get("estrella", 0)
+                for grupo in partida["notas_cayendo"]:
+                    if col in grupo["cols"]:
+                        distancia = abs(grupo["tiempo_ms"] - ahora_juego)
+                        if distancia < w_hit:
+                            acerto_algo = True
+                            if "acertadas" not in grupo:
+                                grupo["acertadas"] = set()
+                            if col not in grupo["acertadas"]:
+                                grupo["acertadas"].add(col)
+                                num_cols = partida["dificultad"]["columnas"]
+                                ancho_col = ANCHO // num_cols
+                                cx = col * ancho_col + ancho_col // 2
+                                col_g = COLOR_GENERO.get(partida["cancion"].get("genero",""), BLANCO)
+                                # --- BOMBA: nota que NO debe tocarse ---
+                                if grupo.get("es_bomba") and distancia < w_hit:
+                                    # explosion visual grande + daño + reset combo
+                                    crear_explosion(cx, zy_p, 140, color=(255, 60, 60))
+                                    crear_onda(cx, zy_p, 1.0)
+                                    crear_shake(14)
+                                    crear_texto_flotante(cx, zy_p - 30, "BOOM!", (255, 60, 60), True)
+                                    partida["ultimo_hit"] = {"texto": "BOMBA", "tiempo": ahora_ms}
+                                    partida["combo"] = 0
+                                    # escudo absorbe la bomba
+                                    if partida.get("escudo_cargas", 0) > 0:
+                                        partida["escudo_cargas"] -= 1
+                                        crear_texto_flotante(ANCHO // 2, zy_p - 60,
+                                                             f"ESCUDO ({partida['escudo_cargas']})",
+                                                             (100, 200, 255), True)
+                                    elif not dev_mode and not partida.get("es_tutorial"):
+                                        partida["vida"] = max(0, partida["vida"] - 4)
+                                        if "sudden" in partida.get("mods", set()):
+                                            partida["vida"] = 0
+                                    SND_EXPLOSION_BIG.set_volume(0.6 * config["volumen"])
+                                    SND_EXPLOSION_BIG.play()
+                                    if grupo in partida["notas_cayendo"]:
+                                        partida["notas_cayendo"].remove(grupo)
+                                    if not dev_mode and partida["vida"] <= 0:
+                                        if partida.get("perk_resurreccion"):
+                                            partida["perk_resurreccion"] = False
+                                            partida["vida"] = 5
+                                            if run_actual is not None:
+                                                run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
+                                                                       if pk.get("id") != "resurreccion"]
+                                            crear_texto_flotante(ANCHO // 2, ALTO // 2, "RESURRECCION!", (255, 220, 100), True)
+                                            crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
+                                            crear_shake(10)
                                         else:
-                                            pts = 0
-                                            partida["combo"] = 0
-                                            partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
-                                            crear_explosion(cx, zy_p, 8, GRIS_MED)
-                                            crear_shake(8)
-                                            crear_indicador_hit(col, "error")
+                                            partida["game_over"] = True
+                                            partida["game_over_t"] = pygame.time.get_ticks()
+                                            _explotar_notas_muerte(partida)
+                                            pygame.mixer.stop()
+                                            crear_shake(15)
+                                            SND_GAMEOVER.set_volume(0.6 * config["volumen"])
+                                            SND_GAMEOVER.play()
+                                    break
+                                # --- POWER-UP: nota especial ---
+                                pu_id = grupo.get("power_up")
+                                if pu_id and distancia < w_hit:
+                                    pu_def = next((p for p in POWER_UPS if p["id"] == pu_id), None)
+                                    if pu_def:
+                                        if pu_id == "vida":
+                                            partida["vida"] = min(partida["vida_max"], partida["vida"] + 4)
+                                            crear_texto_flotante(cx, zy_p - 30, "+4 VIDA", pu_def["color"], True)
+                                        elif pu_def["dur"] > 0:
+                                            partida["efectos_activos"][pu_id] = ahora_juego + pu_def["dur"] * (2 if partida.get("perk_cazador") else 1)
+                                            crear_texto_flotante(cx, zy_p - 30, pu_def["nombre"], pu_def["color"], True)
+                                        crear_explosion(cx, zy_p, 80, color=pu_def["color"])
+                                        crear_shake(6)
+                                        sfx_power_up(pu_id)
+                                        partida["combo"] += 1
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
-                                        # milestone de combo cada 10: sonido + confeti
-                                        if pts > 0 and partida["combo"] > 0 and partida["combo"] % 10 == 0:
-                                            sfx_combo(partida["combo"])
-                                            for _ in range(min(partida["combo"] * 2, 120)):
-                                                px_c = random.randint(0, ANCHO)
-                                                particulas.append({
-                                                    "x": px_c, "y": -5,
-                                                    "dx": random.uniform(-1.5, 1.5),
-                                                    "dy": random.uniform(2, 6),
-                                                    "vida": random.randint(50, 90), "vida_max": 90,
-                                                    "tam": random.randint(3, 7),
-                                                    "color": _color_vivo(col_g, partida["combo"]),
-                                                    "forma": random.choice(["rect", "estrella"]),
-                                                    "spin": random.uniform(-0.4, 0.4),
-                                                })
-                                            crear_texto_flotante(ANCHO // 2, zy_p - 120,
-                                                                 f"{partida['combo']}x COMBO!", col_g, grande=True)
-                                        combo_mult = 1 + partida["combo"] // 5
-                                        if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
-                                            # usar el midi REAL de la nota (con octava/armonia),
-                                            # no la nota base de la columna: asi el hold suena
-                                            # afinado con la melodia.
-                                            _idx_c = grupo["cols"].index(col) if col in grupo["cols"] else 0
-                                            _midi_hold = grupo.get("midis", [midi_fijo])[_idx_c] if _idx_c < len(grupo.get("midis", [])) else midi_fijo
-                                            _snd_hold = cache_notas_largas.get(_midi_hold) or cache_notas_largas.get(midi_fijo)
-                                            if _snd_hold:
-                                                # loop si el hold dura mas que el sample (1.6s)
-                                                loops = -1 if grupo["hold"] > 1500 else 0
-                                                ch = _snd_hold.play(loops=loops)
-                                                if ch:
-                                                    ch.set_volume(config["volumen"])
-                                                    canal_hold[col] = ch
-                                            partida["holds_activos"][col] = {
-                                                "grupo": grupo,
-                                                "midi":  midi_fijo,
-                                            }
-                                            if pts > 0:
-                                                _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
-                                                total_pts = int(pts * combo_mult * partida.get("mult_mods", 1.0) * _pu_doble)
-                                                partida["puntos"] += total_pts
-                                                txt = f"+{total_pts}"
-                                                if combo_mult > 1:
-                                                    txt += f" x{combo_mult}"
-                                                crear_texto_flotante(cx, zy_p - 20, txt, BLANCO, combo_mult > 2)
-                                        else:
-                                            if pts > 0:
-                                                _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
-                                                total_pts = int(pts * len(grupo["cols"]) * combo_mult * partida.get("mult_mods", 1.0) * _pu_doble)
-                                                txt_pts = f"+{total_pts}"
-                                                if combo_mult > 1:
-                                                    txt_pts += f" x{combo_mult}"
-                                                es_grande = combo_mult > 2
-                                                crear_texto_flotante(cx, zy_p - 20, txt_pts, BLANCO, es_grande)
-                                                partida["puntos"] += total_pts
-                                            else:
-                                                partida["puntos"] = max(0, partida["puntos"] - 2)
-                                                crear_texto_flotante(cx, zy_p - 20, "-2", GRIS_MED)
-                                            if partida["combo"] > 0 and partida["combo"] % 5 == 0 and partida["combo"] % 10 != 0:
-                                                crear_texto_flotante(ANCHO // 2, zy_p - 80, f"{partida['combo']}x", col_g, True)
-                                            if grupo["acertadas"] == set(grupo["cols"]):
-                                                partida["notas_cayendo"].remove(grupo)
-                                    break
+                                        if (partida.get("perk_regen") and partida["combo"] > 0
+                                                and partida["combo"] % 20 == 0):
+                                            partida["vida"] = min(partida["vida_max"], partida["vida"] + 1)
+                                            crear_texto_flotante(ANCHO // 2, zy_p - 60, "+1 VIDA", (120, 255, 120))
+                                        if grupo in partida["notas_cayendo"]:
+                                            partida["notas_cayendo"].remove(grupo)
+                                        break
+                                if auto_perf or distancia < w_perf:
+                                    pts = 10 if partida.get("perk_perfecto") else 5
+                                    partida["combo"] += 1
+                                    pot = min(1.0 + partida["combo"] * 0.03, 1.8)
+                                    partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
+                                    partida["n_perfecto"] = partida.get("n_perfecto", 0) + 1
+                                    combo_particulas = min(50 + partida["combo"] * 4, 250)
+                                    crear_explosion(cx, zy_p, combo_particulas, color=col_g, potencia=pot, combo=partida["combo"])
+                                    crear_onda(cx, zy_p, 0.7)
+                                    crear_onda(cx, zy_p, 0.4, r0=int(4 + partida["combo"] * 0.3))
+                                    if partida["combo"] >= 30:
+                                        crear_onda(cx, zy_p, 0.5, r0=int(15 + partida["combo"] * 0.5))
+                                    crear_flash(col, min(0.8, 0.5 + partida["combo"] * 0.01))
+                                    crear_shake(min(5 + partida["combo"] * 0.15, 12))
+                                    crear_indicador_hit(col, "perfecto")
+                                    sfx_hit_perfect(partida["combo"])
+                                elif distancia < w_hit * 0.4:
+                                    pts = 3
+                                    partida["combo"] += 1
+                                    pot = min(1.0 + partida["combo"] * 0.02, 1.5)
+                                    partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
+                                    partida["n_bien"] = partida.get("n_bien", 0) + 1
+                                    crear_explosion(cx, zy_p, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot, combo=partida["combo"])
+                                    crear_onda(cx, zy_p, 0.5)
+                                    crear_flash(col, 0.4)
+                                    crear_shake(min(3 + partida["combo"] * 0.1, 8))
+                                    crear_indicador_hit(col, "cerca")
+                                    sfx_hit_good()
+                                elif distancia < w_hit * 0.67:
+                                    pts = 1
+                                    partida["combo"] += 1
+                                    partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
+                                    partida["n_ok"] = partida.get("n_ok", 0) + 1
+                                    crear_explosion(cx, zy_p, 20, color=col_g, combo=partida["combo"])
+                                    crear_onda(cx, zy_p, 0.4)
+                                    crear_flash(col, 0.3)
+                                    crear_indicador_hit(col, "cerca")
+                                    sfx_hit_good()
+                                else:
+                                    pts = 0
+                                    partida["combo"] = 0
+                                    partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
+                                    partida["n_mal"] = partida.get("n_mal", 0) + 1
+                                    crear_explosion(cx, zy_p, 8, GRIS_MED)
+                                    crear_shake(8)
+                                    crear_indicador_hit(col, "error")
+                                if partida["combo"] > partida["max_combo"]:
+                                    partida["max_combo"] = partida["combo"]
+                                if (partida.get("perk_regen") and partida["combo"] > 0
+                                        and partida["combo"] % 20 == 0):
+                                    partida["vida"] = min(partida["vida_max"], partida["vida"] + 1)
+                                    crear_texto_flotante(ANCHO // 2, zy_p - 60, "+1 VIDA", (120, 255, 120))
+                                # milestone de combo cada 10: sonido + confeti
+                                if pts > 0 and partida["combo"] > 0 and partida["combo"] % 10 == 0:
+                                    sfx_combo(partida["combo"])
+                                    for _ in range(min(partida["combo"] * 2, 120)):
+                                        px_c = random.randint(0, ANCHO)
+                                        particulas.append({
+                                            "x": px_c, "y": -5,
+                                            "dx": random.uniform(-1.5, 1.5),
+                                            "dy": random.uniform(2, 6),
+                                            "vida": random.randint(50, 90), "vida_max": 90,
+                                            "tam": random.randint(3, 7),
+                                            "color": _color_vivo(col_g, partida["combo"]),
+                                            "forma": random.choice(["rect", "estrella"]),
+                                            "spin": random.uniform(-0.4, 0.4),
+                                        })
+                                    crear_texto_flotante(ANCHO // 2, zy_p - 120,
+                                                         f"{partida['combo']}x COMBO!", col_g, grande=True)
+                                combo_mult = 1 + partida["combo"] // partida.get("combo_div", 5)
+                                if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
+                                    # usar el midi REAL de la nota (con octava/armonia),
+                                    # no la nota base de la columna: asi el hold suena
+                                    # afinado con la melodia.
+                                    _idx_c = grupo["cols"].index(col) if col in grupo["cols"] else 0
+                                    _midi_hold = grupo.get("midis", [midi_fijo])[_idx_c] if _idx_c < len(grupo.get("midis", [])) else midi_fijo
+                                    _snd_hold = cache_notas_largas.get(_midi_hold) or cache_notas_largas.get(midi_fijo)
+                                    if _snd_hold:
+                                        # loop si el hold dura mas que el sample (1.6s)
+                                        loops = -1 if grupo["hold"] > 1500 else 0
+                                        ch = _snd_hold.play(loops=loops)
+                                        if ch:
+                                            ch.set_volume(config["volumen"])
+                                            canal_hold[col] = ch
+                                    partida["holds_activos"][col] = {
+                                        "grupo": grupo,
+                                        "midi":  midi_fijo,
+                                    }
+                                    if pts > 0:
+                                        _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
+                                        total_pts = int(pts * combo_mult * partida.get("mult_mods", 1.0) * _pu_doble)
+                                        partida["puntos"] += total_pts
+                                        txt = f"+{total_pts}"
+                                        if combo_mult > 1:
+                                            txt += f" x{combo_mult}"
+                                        crear_texto_flotante(cx, zy_p - 20, txt, BLANCO, combo_mult > 2)
+                                else:
+                                    if pts > 0:
+                                        _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
+                                        total_pts = int(pts * len(grupo["cols"]) * combo_mult * partida.get("mult_mods", 1.0) * _pu_doble)
+                                        txt_pts = f"+{total_pts}"
+                                        if combo_mult > 1:
+                                            txt_pts += f" x{combo_mult}"
+                                        es_grande = combo_mult > 2
+                                        crear_texto_flotante(cx, zy_p - 20, txt_pts, BLANCO, es_grande)
+                                        partida["puntos"] += total_pts
+                                    else:
+                                        # mal timing: rompe combo pero NO resta puntos
+                                        crear_texto_flotante(cx, zy_p - 20, "MAL", GRIS_MED)
+                                    if partida["combo"] > 0 and partida["combo"] % 5 == 0 and partida["combo"] % 10 != 0:
+                                        crear_texto_flotante(ANCHO // 2, zy_p - 80, f"{partida['combo']}x", col_g, True)
+                                    if grupo["acertadas"] == set(grupo["cols"]):
+                                        partida["notas_cayendo"].remove(grupo)
+                            break
 
-                        # tecla equivocada: ninguna nota cerca en esa columna
-                        if not acerto_algo:
-                            partida["combo"] = 0
-                            partida["puntos"] = max(0, partida["puntos"] - 1)
-                            partida["ultimo_hit"] = {"texto": "ERROR", "tiempo": ahora_ms}
-                            num_cols = partida["dificultad"]["columnas"]
-                            ancho_col = ANCHO // num_cols
-                            cx = col * ancho_col + ancho_col // 2
-                            crear_texto_flotante(cx, zy_p - 20, "-1", GRIS_MED)
-                            crear_explosion(cx, zy_p, 6, GRIS_MED)
-                            crear_shake(3)
-                            crear_indicador_hit(col, "error")
-                            SND_ERROR.set_volume(0.35 * config["volumen"])
-                            SND_ERROR.play()
+                # tecla equivocada: ninguna nota cerca en esa columna
+                if not acerto_algo:
+                    partida["combo"] = 0
+                    partida["puntos"] = max(0, partida["puntos"] - 1)
+                    partida["ultimo_hit"] = {"texto": "ERROR", "tiempo": ahora_ms}
+                    num_cols = partida["dificultad"]["columnas"]
+                    ancho_col = ANCHO // num_cols
+                    cx = col * ancho_col + ancho_col // 2
+                    crear_texto_flotante(cx, zy_p - 20, "-1", GRIS_MED)
+                    crear_explosion(cx, zy_p, 6, GRIS_MED)
+                    crear_shake(3)
+                    crear_indicador_hit(col, "error")
+                    SND_ERROR.set_volume(0.35 * config["volumen"])
+                    SND_ERROR.play()
 
             if evento.type == pygame.KEYUP:
                 if evento.key in COLUMNAS:
@@ -6760,21 +8863,39 @@ while corriendo:
                             del canal_hold[col]
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
-                        # bonus por completar hold
-                        partida["puntos"] += 5
+
+            # GAMEPAD: soltar boton = soltar hold
+            if evento.type == pygame.JOYBUTTONUP:
+                _pad_col = pad_col_down(evento.button)
+                if _pad_col is not None:
+                    col = partida.get("mapa_teclas", {}).get(_pad_col, _pad_col)
+                    teclas_sostenidas.discard(col)
+                    if col in partida.get("holds_activos", {}):
+                        if col in canal_hold:
+                            canal_hold[col].stop()
+                            del canal_hold[col]
+                        hold = partida["holds_activos"][col]
+                        grupo = hold["grupo"]
+                        # bonus por completar hold (HOLD MASTER lo duplica)
+                        _hb = partida.get("hold_bonus", 5)
+                        partida["puntos"] += _hb
                         num_cols = partida["dificultad"]["columnas"]
                         ancho_col = ANCHO // num_cols
                         cx = col * ancho_col + ancho_col // 2
-                        crear_texto_flotante(cx, zy_p - 40, "+5", BLANCO)
+                        crear_texto_flotante(cx, zy_p - 40, f"+{_hb}", BLANCO)
                         if grupo in partida["notas_cayendo"]:
                             partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
 
     if ESTADO == "menu":
+        tick_musica_menu()
+        dibujar_menu()
+
+    elif ESTADO == "selector_seed":
         if cargando_seed:
             seed_acumulada = min(seed_acumulada + SEED_VELOCIDAD, SEED_MAX)
         tick_musica_menu()
-        dibujar_menu(seed_acumulada, cargando_seed)
+        dibujar_selector_seed(seed_acumulada, cargando_seed)
 
     elif ESTADO == "leaderboard":
         tick_musica_menu()
@@ -6787,6 +8908,18 @@ while corriendo:
     elif ESTADO == "config":
         tick_musica_menu()
         dibujar_config()
+
+    elif ESTADO == "rebind":
+        tick_musica_menu()
+        dibujar_rebind()
+
+    elif ESTADO == "calibrar_linein":
+        tick_musica_menu()
+        dibujar_calibracion_linein()
+
+    elif ESTADO == "linein_setup":
+        tick_musica_menu()
+        dibujar_linein_setup()
 
     elif ESTADO == "mods":
         tick_musica_menu()
@@ -6812,6 +8945,10 @@ while corriendo:
         tick_musica_menu()
         dibujar_run_fallido()
 
+    elif ESTADO == "carrera":
+        tick_musica_menu()
+        dibujar_carrera()
+
     elif ESTADO == "input_nombre":
         tick_musica_menu()
         dibujar_input_nombre(nombre_input)
@@ -6823,6 +8960,9 @@ while corriendo:
 
     elif ESTADO == "jugando":
         zy_p = partida.get("zona_y", ZONA_Y)
+        # procesar eventos del teclado musical por line-in
+        if linein_activo and partida and not partida.get("game_over") and not partida.get("terminada"):
+            linein_procesar_eventos(partida)
         # dev mode: x2 speed (avanzar inicio hacia atras = tiempo pasa el doble)
         if dev_mode:
             partida["inicio"] -= 1000 // 60
@@ -6850,6 +8990,20 @@ while corriendo:
         partida["slow_factor"] = _sf
         partida["t_musical"] = partida.get("t_musical", float(ahora_real)) + _dt_real * _sf
         ahora = int(partida["t_musical"])
+
+        # cuantizacion al grid: disparar los samples que ya llegaron a su
+        # tiempo target. La lista tipicamente tiene 0-3 elementos, chico.
+        _pend = partida.get("snd_pendientes", [])
+        if _pend:
+            _restantes = []
+            for _t_target, _snd, _vL, _vR in _pend:
+                if ahora >= _t_target:
+                    _ch = _snd.play()
+                    if _ch:
+                        _ch.set_volume(_vL, _vR)
+                else:
+                    _restantes.append((_t_target, _snd, _vL, _vR))
+            partida["snd_pendientes"] = _restantes
 
         # RAFAGAS: avisar al entrar en la avalancha (inicio de cada ciclo)
         if partida["cancion"].get("tiene_rafagas") and not partida.get("game_over"):
@@ -6930,6 +9084,8 @@ while corriendo:
                     }
                     if n.get("power_up"):
                         nota_cae["power_up"] = n["power_up"]
+                    if n.get("es_bomba"):
+                        nota_cae["es_bomba"] = True
                     partida["notas_cayendo"].append(nota_cae)
                     partida["indice_jugador"] += 1
 
@@ -6954,6 +9110,10 @@ while corriendo:
                 auto_restantes = []
                 for grupo in partida["notas_cayendo"]:
                     if grupo["tiempo_ms"] <= ahora:
+                        # AUTO no debe detonar bombas: las deja pasar (esquivarlas
+                        # es lo correcto, y el jugador no controla nada bajo AUTO)
+                        if grupo.get("es_bomba"):
+                            continue
                         pu_id_a = grupo.get("power_up")
                         if pu_id_a:
                             # auto-atrapar power-ups tambien
@@ -6964,7 +9124,7 @@ while corriendo:
                                     partida["vida"] = min(partida["vida_max"], partida["vida"] + 4)
                                     crear_texto_flotante(cxa, zy_p - 30, "+4 VIDA", pu_def_a["color"], True)
                                 elif pu_def_a["dur"] > 0:
-                                    partida["efectos_activos"][pu_id_a] = ahora + pu_def_a["dur"]
+                                    partida["efectos_activos"][pu_id_a] = ahora + pu_def_a["dur"] * (2 if partida.get("perk_cazador") else 1)
                                     crear_texto_flotante(cxa, zy_p - 30, pu_def_a["nombre"], pu_def_a["color"], True)
                                 crear_explosion(cxa, zy_p, 80, color=pu_def_a["color"])
                                 sfx_power_up(pu_id_a)
@@ -6973,10 +9133,14 @@ while corriendo:
                         partida["combo"] += 1
                         if partida["combo"] > partida["max_combo"]:
                             partida["max_combo"] = partida["combo"]
+                        if (partida.get("perk_regen") and partida["combo"] > 0
+                                and partida["combo"] % 20 == 0):
+                            partida["vida"] = min(partida["vida_max"], partida["vida"] + 1)
+                            crear_texto_flotante(ANCHO // 2, zy_p - 60, "+1 VIDA", (120, 255, 120))
                         pts_a = 10 if partida.get("perk_perfecto") else 5
-                        combo_mult_a = 1 + partida["combo"] // 5
+                        combo_mult_a = 1 + partida["combo"] // partida.get("combo_div", 5)
                         _pu_doble_a = 2.0 if ahora < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
-                        bonus_hold = 3 if grupo.get("hold", 0) > 0 else 0
+                        bonus_hold = partida.get("hold_bonus", 5) if grupo.get("hold", 0) > 0 else 0
                         total_a = int((pts_a * len(grupo["cols"]) + bonus_hold) * combo_mult_a
                                       * partida.get("mult_mods", 1.0) * _pu_doble_a)
                         partida["puntos"] += total_a
@@ -7004,6 +9168,9 @@ while corriendo:
                 # MISS: la nota se fue de la pantalla
                 nota_perdida = n["y"] <= -50 if es_inv else n["y"] >= ALTO + 50
                 if nota_perdida:
+                    # BOMBA no tocada: se esquivo, NO cuenta como miss (deseado)
+                    if n.get("es_bomba"):
+                        continue
                     es_hold_activo = any(c in partida["holds_activos"] for c in n["cols"])
                     if not es_hold_activo:
                         partida["ultimo_hit"] = {"texto": "MISS", "tiempo": ahora_ms}
@@ -7013,7 +9180,8 @@ while corriendo:
                             crear_texto_flotante(ANCHO // 2, zy_p - 60, "COMBO SAVE!", (100, 200, 255), True)
                         else:
                             partida["combo"] = 0
-                        partida["puntos"] = max(0, partida["puntos"] - 5)
+                        partida["n_miss"] = partida.get("n_miss", 0) + 1
+                        # nota que se pasa: NO resta puntos, solo vida.
                         # escudo: absorbe daño de vida
                         if partida.get("escudo_cargas", 0) > 0:
                             partida["escudo_cargas"] -= 1
@@ -7026,16 +9194,30 @@ while corriendo:
                         ancho_col = ANCHO // num_cols
                         miss_x = n["cols"][0] * ancho_col + ancho_col // 2
                         miss_y = 30 if es_inv else ALTO - 30
-                        crear_texto_flotante(miss_x, miss_y, "-5", GRIS_MED)
                         crear_shake(4)
                         SND_ERROR.set_volume(0.3 * config["volumen"])
                         SND_ERROR.play()
                         if not dev_mode and partida["vida"] <= 0:
-                            partida["game_over"] = True
-                            pygame.mixer.stop()
-                            crear_shake(15)
-                            SND_GAMEOVER.set_volume(0.6 * config["volumen"])
-                            SND_GAMEOVER.play()
+                            if partida.get("perk_resurreccion"):
+                                # RESURRECCION: revive UNA vez con 5 de vida.
+                                # se consume tambien del run para no re-aplicarse
+                                # en stages siguientes.
+                                partida["perk_resurreccion"] = False
+                                partida["vida"] = 5
+                                if run_actual is not None:
+                                    run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
+                                                           if pk.get("id") != "resurreccion"]
+                                crear_texto_flotante(ANCHO // 2, ALTO // 2, "RESURRECCION!", (255, 220, 100), True)
+                                crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
+                                crear_shake(10)
+                            else:
+                                partida["game_over"] = True
+                                partida["game_over_t"] = pygame.time.get_ticks()
+                                _explotar_notas_muerte(partida)
+                                pygame.mixer.stop()
+                                crear_shake(15)
+                                SND_GAMEOVER.set_volume(0.6 * config["volumen"])
+                                SND_GAMEOVER.play()
                     else:
                         notas_vivas.append(n)
                 else:
