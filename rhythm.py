@@ -4620,7 +4620,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     # mods: set de ids; si es None usa mods_activos (modo libre)
     mods_partida = set(mods) if mods is not None else set(mods_activos)
     dif     = get_dificultad(seed)
-    # modo instrumento: forzar max 4 columnas
+    # modo instrumento: forzar max 4 columnas y sin acordes
     if modo_instrumento and dif["columnas"] > 4:
         dif = dict(dif)
         dif["columnas"] = 4
@@ -4795,6 +4795,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         "indice_perc":    0,
         "indice_bajo":    0,
         "_arranco_audio": False,
+        "_arranco_notas": False,
         "inicio":         inicio_partida,
         "notas_cayendo":  [],
         "puntos":         puntos_iniciales,
@@ -7821,10 +7822,35 @@ def _linein_callback(indata, frames, time_info, status):
         return
 
     cols_det = set()
+    freqs_por_col = {}
     for freq in freqs_det:
         col = _nota_mas_cercana(freq, linein_notas_cal)
         if col >= 0:
             cols_det.add(col)
+            freqs_por_col[col] = freq
+
+    # FILTRO DE ARMONICOS: si una columna detectada tiene una frecuencia que
+    # es ~2x o ~3x de otra columna detectada, es un armonico (no una nota
+    # real tocada). Ej: tocas Do4 (262Hz) y el 2do armonico (524Hz) matchea
+    # Do5 -> falso positivo. Solo quedarse con la fundamental (la mas grave).
+    if len(cols_det) > 1:
+        cols_lista = sorted(cols_det, key=lambda c: freqs_por_col.get(c, 0))
+        f_fundamental = freqs_por_col.get(cols_lista[0], 0)
+        if f_fundamental > 0:
+            cols_filtradas = {cols_lista[0]}
+            for col in cols_lista[1:]:
+                f_col = freqs_por_col.get(col, 0)
+                # es armonico si es ~2x, ~3x o ~4x de la fundamental
+                es_armonico = False
+                for mult in [2.0, 3.0, 4.0]:
+                    ratio = f_col / f_fundamental
+                    if abs(ratio - mult) < 0.15:
+                        es_armonico = True
+                        break
+                if not es_armonico:
+                    cols_filtradas.add(col)
+            cols_det = cols_filtradas
+
     if not cols_det:
         return
 
@@ -9570,10 +9596,13 @@ while corriendo:
                 _lo = partida.get("loop_offset", 0)
                 njug = partida["cancion"]["notas_jugador"]
                 # anti-avalancha del jugador: al arrancar o al loopear,
-                # saltar notas cuyo tiempo ya paso (no se pueden tocar)
+                # saltar TODAS las notas cuyo tiempo ya paso. El warm-up
+                # (carga de instrumentos, kit, etc) puede tardar segundos,
+                # dejando muchas notas atrasadas que se perderian como MISS
+                # instantaneo sin que el jugador pueda hacer nada.
                 if not partida.get("_arranco_notas"):
                     while (partida["indice_jugador"] < len(njug)
-                           and njug[partida["indice_jugador"]]["tiempo"] + _lo < ahora - 200):
+                           and njug[partida["indice_jugador"]]["tiempo"] + _lo < ahora):
                         partida["indice_jugador"] += 1
                     partida["_arranco_notas"] = True
                 while partida["indice_jugador"] < len(njug) and ahora >= njug[partida["indice_jugador"]]["tiempo"] + _lo - ANTICIPACION:
