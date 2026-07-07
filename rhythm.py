@@ -7595,8 +7595,10 @@ except ImportError:
 LINEIN_FILE = os.path.join(BASE_DIR, "linein_notas.json")
 LINEIN_SR = 22050
 LINEIN_BLOCK = 1024
-LINEIN_THRESHOLD = 0.015
-LINEIN_DEBOUNCE_MS = 80
+LINEIN_THRESHOLD_ON = 0.02    # umbral para detectar onset (nota empieza)
+LINEIN_THRESHOLD_OFF = 0.005  # umbral para detectar silencio (mucho mas bajo)
+LINEIN_DEBOUNCE_MS = 250      # ms minimo entre triggers (subido de 80)
+LINEIN_SILENCIO_MS = 150      # ms de silencio continuo antes de resetear onset
 
 linein_activo = False
 linein_stream = None
@@ -7606,11 +7608,14 @@ linein_last_col = -1
 linein_last_time = 0
 linein_energy = 0.0
 linein_freq_actual = 0.0
+linein_nota_activa = -1   # columna que esta sonando AHORA (-1 = silencio)
+linein_en_silencio = True  # True = no hay nota sonando (esperando onset)
+linein_silencio_desde = 0  # timestamp de cuando empezó el silencio
 
 def _detectar_pitch(data):
     mono = data[:, 0] if data.ndim > 1 else data
     rms = float(np.sqrt(np.mean(mono ** 2)))
-    if rms < LINEIN_THRESHOLD:
+    if rms < LINEIN_THRESHOLD_OFF:
         return 0.0, rms
     ventana = mono * np.hanning(len(mono))
     espectro = np.abs(np.fft.rfft(ventana))
@@ -7639,25 +7644,63 @@ def _nota_mas_cercana(freq, notas_cal):
     return mejor_col if mejor_dist <= 1.5 else -1
 
 def _linein_callback(indata, frames, time_info, status):
+    """Callback con HISTERESIS para evitar retrigger.
+    - Para detectar onset: energia > THRESHOLD_ON (alto)
+    - Para considerar silencio: energia < THRESHOLD_OFF (bajo) durante
+      SILENCIO_MS continuo. Fluctuaciones breves NO resetean el onset.
+    - Debounce de 250ms entre triggers de la misma columna."""
     global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
+    global linein_nota_activa, linein_en_silencio, linein_silencio_desde
     freq, rms = _detectar_pitch(indata)
     linein_energy = rms
     linein_freq_actual = freq
-    if freq <= 0:
-        linein_last_col = -1
+    ahora = pygame.time.get_ticks()
+
+    if rms < LINEIN_THRESHOLD_OFF:
+        # señal muy baja: empieza a contar silencio
+        if linein_silencio_desde == 0:
+            linein_silencio_desde = ahora
+        # solo resetear onset si el silencio duro lo suficiente
+        if (ahora - linein_silencio_desde) >= LINEIN_SILENCIO_MS:
+            if not linein_en_silencio:
+                linein_en_silencio = True
+                linein_nota_activa = -1
         return
+
+    # hay señal: resetear contador de silencio
+    linein_silencio_desde = 0
+
+    if freq <= 0:
+        return
+
     col = _nota_mas_cercana(freq, linein_notas_cal)
     if col < 0:
         return
-    ahora = pygame.time.get_ticks()
-    if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
-        return
-    linein_last_col = col
-    linein_last_time = ahora
-    try:
-        linein_queue.put_nowait(("down", col, ahora))
-    except queue.Full:
-        pass
+
+    # ONSET: solo si estamos en silencio Y la energia supera el umbral alto
+    if linein_en_silencio and rms >= LINEIN_THRESHOLD_ON:
+        linein_en_silencio = False
+        linein_nota_activa = col
+        # debounce
+        if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
+            return
+        linein_last_col = col
+        linein_last_time = ahora
+        try:
+            linein_queue.put_nowait(("down", col, ahora))
+        except queue.Full:
+            pass
+    elif not linein_en_silencio and col != linein_nota_activa and rms >= LINEIN_THRESHOLD_ON:
+        # cambio de nota sin silencio (legato): solo si paso el debounce
+        if (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
+            return
+        linein_nota_activa = col
+        linein_last_col = col
+        linein_last_time = ahora
+        try:
+            linein_queue.put_nowait(("down", col, ahora))
+        except queue.Full:
+            pass
 
 def linein_iniciar():
     global linein_stream, linein_activo
