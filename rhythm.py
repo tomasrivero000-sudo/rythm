@@ -7594,11 +7594,12 @@ except ImportError:
 
 LINEIN_FILE = os.path.join(BASE_DIR, "linein_notas.json")
 LINEIN_SR = 22050
-LINEIN_BLOCK = 1024
+LINEIN_BLOCK = 512
 LINEIN_THRESHOLD_ON = 0.02    # umbral para detectar onset (nota empieza)
 LINEIN_THRESHOLD_OFF = 0.005  # umbral para detectar silencio (mucho mas bajo)
 LINEIN_DEBOUNCE_MS = 250      # ms minimo entre triggers (subido de 80)
 LINEIN_SILENCIO_MS = 150      # ms de silencio continuo antes de resetear onset
+LINEIN_OFFSET_MS = 80          # compensacion de latencia (ms). Ajustable en config.
 
 linein_activo = False
 linein_stream = None
@@ -7731,7 +7732,7 @@ def linein_detener():
 
 def linein_procesar_eventos(partida_ref):
     """Llamar cada frame: drena la cola de eventos del line-in y los
-    inyecta como pulsaciones de columna en la partida."""
+    inyecta como pulsaciones de columna con compensación de latencia."""
     while not linein_queue.empty():
         try:
             tipo, col, ts = linein_queue.get_nowait()
@@ -7739,7 +7740,8 @@ def linein_procesar_eventos(partida_ref):
                 col_mapeada = partida_ref.get("mapa_teclas", {}).get(col, col)
                 if col_mapeada < partida_ref["dificultad"]["columnas"]:
                     ev = pygame.event.Event(pygame.KEYDOWN, key=None,
-                                            _linein_col=col_mapeada)
+                                            _linein_col=col_mapeada,
+                                            _linein_offset=LINEIN_OFFSET_MS)
                     pygame.event.post(ev)
         except queue.Empty:
             break
@@ -7853,7 +7855,14 @@ def dibujar_linein_setup():
             pantalla.blit(txt, (100, y))
 
     # opciones al pie
-    pygame.draw.line(pantalla, GRIS, (60, 460), (ANCHO - 60, 460), 1)
+    pygame.draw.line(pantalla, GRIS, (60, 440), (ANCHO - 60, 440), 1)
+
+    # control de offset
+    off_txt = fuente.render(f"COMPENSACION: {LINEIN_OFFSET_MS}ms", True, BLANCO)
+    pantalla.blit(off_txt, (cx - off_txt.get_width() // 2, 455))
+    off_help = fuente_chica.render("IZQ/DER = AJUSTAR (+ = MENOS DELAY)", True, GRIS)
+    pantalla.blit(off_help, (cx - off_help.get_width() // 2, 485))
+
     opciones_txt = []
     if linein_devices:
         opciones_txt.append("ENTER = CALIBRAR CON ESTE DISPOSITIVO")
@@ -7866,7 +7875,7 @@ def dibujar_linein_setup():
     for i, txt in enumerate(opciones_txt):
         col = (140, 230, 100) if "ACTIVAR" in txt else GRIS_MED
         t = fuente_chica.render(txt, True, col)
-        pantalla.blit(t, (cx - t.get_width() // 2, 475 + i * 22))
+        pantalla.blit(t, (cx - t.get_width() // 2, 515 + i * 20))
 
 def dibujar_calibracion_linein():
     pantalla.fill(NEGRO)
@@ -8310,6 +8319,10 @@ while corriendo:
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
                     ESTADO = "config"
+                elif evento.key == pygame.K_LEFT:
+                    LINEIN_OFFSET_MS = max(0, LINEIN_OFFSET_MS - 10)
+                elif evento.key == pygame.K_RIGHT:
+                    LINEIN_OFFSET_MS = min(300, LINEIN_OFFSET_MS + 10)
                 elif evento.key == pygame.K_UP and linein_devices:
                     linein_dev_idx = max(0, linein_dev_idx - 1)
                     sfx_select()
@@ -8484,6 +8497,7 @@ while corriendo:
         elif ESTADO == "jugando":
             zy_p = partida.get("zona_y", ZONA_Y)
             _col_hit = -1   # columna golpeada en este evento (-1 = ninguna)
+            _es_linein = False  # True si el hit viene del line-in
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
@@ -8596,6 +8610,9 @@ while corriendo:
                         _col_hit = col
 
             # LINE-IN: el teclado musical inyecta eventos con _linein_col
+            # El offset compensa la latencia del audio: adelanta el tiempo
+            # de comparación para que el scoring juzgue como si el jugador
+            # hubiera tocado LINEIN_OFFSET_MS antes.
             if (evento.type == pygame.KEYDOWN and hasattr(evento, "_linein_col")
                     and not partida.get("game_over") and not partida.get("terminada")):
                 col = evento._linein_col
@@ -8604,6 +8621,8 @@ while corriendo:
                     teclas_sostenidas.add(col)
                     midi_fijo = partida["cancion"]["notas_columnas"][col]
                     _col_hit = col
+                    # marcar que este hit viene del line-in (para offset y skip cuantización)
+                    _es_linein = True
 
             # SCORING: si alguna fuente de input (teclado/gamepad/line-in)
             # seteó _col_hit, procesar la nota en esa columna
@@ -8612,6 +8631,12 @@ while corriendo:
 
                 # buscar la nota objetivo más cercana en esta columna
                 ahora_rel = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
+                # LINE-IN: compensar latencia adelantando el tiempo de comparacion
+                # Esto hace que el scoring juzgue como si el jugador hubiera
+                # tocado OFFSET ms antes (la nota le "llega" tarde al juego
+                # por el buffer de audio, asi que lo corregimos aca).
+                if _es_linein:
+                    ahora_rel += LINEIN_OFFSET_MS
                 midi_a_tocar = midi_fijo
                 mejor_dist = 99999
                 mejor_target = ahora_rel   # tiempo target de la mejor nota (para cuantizar)
@@ -8659,15 +8684,11 @@ while corriendo:
                     # CUANTIZACION AL GRID: si el jugador pego TEMPRANO
                     # (target > ahora) por entre 5 y 45ms, demorar el
                     # sample al tiempo target exacto asi cae en grid con
-                    # percusion y bajo. Fuera de esa ventana (tarde, o
-                    # muy cerca del target) se toca al instante como
-                    # siempre. La demora tope de 45ms es imperceptible
-                    # como latencia pero suficiente para pegarlo al
-                    # groove. Los holds tienen su propio dispatch aparte
-                    # (canal_hold) que sostiene el sample, la
-                    # cuantizacion del hit inicial no lo rompe.
+                    # percusion y bajo. LINE-IN: se saltea porque ya tiene
+                    # su propia compensacion de latencia y agregar delay
+                    # empeoraria la respuesta.
                     delta = mejor_target - ahora_rel
-                    if 5 < delta < 45:
+                    if not _es_linein and 5 < delta < 45:
                         partida["snd_pendientes"].append(
                             (mejor_target, snd_tocar, volL, volR))
                     else:
