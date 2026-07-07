@@ -8317,6 +8317,9 @@ while corriendo:
 
         elif ESTADO == "linein_setup":
             if evento.type == pygame.KEYDOWN:
+                # ignorar eventos sinteticos del line-in
+                if hasattr(evento, "_linein_col"):
+                    continue
                 if evento.key == pygame.K_ESCAPE:
                     ESTADO = "config"
                 elif evento.key == pygame.K_LEFT:
@@ -8329,27 +8332,33 @@ while corriendo:
                 elif evento.key == pygame.K_DOWN and linein_devices:
                     linein_dev_idx = min(len(linein_devices) - 1, linein_dev_idx + 1)
                     sfx_select()
-                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE) and linein_devices:
-                    # abrir calibracion con el dispositivo seleccionado
-                    sfx_confirm()
-                    linein_detener()
-                    # iniciar con el dispositivo elegido
-                    dev_info = linein_devices[linein_dev_idx]
-                    try:
-                        linein_stream = sd.InputStream(
-                            device=dev_info["idx"],
-                            samplerate=LINEIN_SR, channels=1,
-                            blocksize=LINEIN_BLOCK, dtype="float32",
-                            callback=_linein_callback)
-                        linein_stream.start()
-                        linein_activo = True
-                        print(f"Line-in abierto: {dev_info['nombre']}")
-                    except Exception as e:
-                        print(f"Error: {e}")
-                    linein_cal_col = 0
-                    linein_cal_estado = "idle"
-                    linein_cal_muestras = []
-                    ESTADO = "calibrar_linein"
+                elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if linein_devices:
+                        # abrir calibracion con el dispositivo seleccionado
+                        sfx_confirm()
+                        linein_detener()  # cerrar stream previo si habia uno
+                        dev_info = linein_devices[linein_dev_idx]
+                        print(f"Abriendo line-in: {dev_info['nombre']} (idx {dev_info['idx']})")
+                        try:
+                            linein_stream = sd.InputStream(
+                                device=dev_info["idx"],
+                                samplerate=LINEIN_SR, channels=1,
+                                blocksize=LINEIN_BLOCK, dtype="float32",
+                                callback=_linein_callback)
+                            linein_stream.start()
+                            linein_activo = True
+                            print(f"Line-in abierto OK")
+                        except Exception as e:
+                            print(f"Error abriendo line-in: {e}")
+                        linein_cal_col = 0
+                        linein_cal_estado = "idle"
+                        linein_cal_muestras = []
+                        linein_en_silencio = True
+                        linein_nota_activa = -1
+                        linein_silencio_desde = 0
+                        ESTADO = "calibrar_linein"
+                    else:
+                        print("No hay dispositivos de entrada disponibles")
                 elif evento.key == pygame.K_a:
                     # toggle activar/desactivar line-in
                     if linein_activo:
@@ -8369,6 +8378,9 @@ while corriendo:
 
         elif ESTADO == "calibrar_linein":
             if evento.type == pygame.KEYDOWN:
+                # ignorar eventos sinteticos del line-in durante calibracion
+                if hasattr(evento, "_linein_col"):
+                    continue
                 if evento.key == pygame.K_ESCAPE:
                     if linein_cal_estado == "escuchando":
                         linein_cal_estado = "idle"
