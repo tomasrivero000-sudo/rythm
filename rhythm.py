@@ -7597,7 +7597,7 @@ LINEIN_SR = 22050
 LINEIN_BLOCK = 512
 LINEIN_THRESHOLD_ON = 0.02    # umbral para detectar onset (nota empieza)
 LINEIN_THRESHOLD_OFF = 0.005  # umbral para detectar silencio (mucho mas bajo)
-LINEIN_DEBOUNCE_MS = 250      # ms minimo entre triggers (subido de 80)
+LINEIN_DEBOUNCE_MS = 120      # ms minimo entre triggers (bajado: el ataque es mas preciso)
 LINEIN_SILENCIO_MS = 150      # ms de silencio continuo antes de resetear onset
 LINEIN_OFFSET_MS = 80          # compensacion de latencia (ms). Ajustable en config.
 
@@ -7612,6 +7612,8 @@ linein_freq_actual = 0.0
 linein_nota_activa = -1   # columna que esta sonando AHORA (-1 = silencio)
 linein_en_silencio = True  # True = no hay nota sonando (esperando onset)
 linein_silencio_desde = 0  # timestamp de cuando empezó el silencio
+linein_energy_prev = 0.0   # energia del bloque anterior (para detectar ataque)
+LINEIN_ATTACK_RATIO = 1.8  # ratio de energia actual/anterior para detectar ataque
 
 def _detectar_pitch(data):
     mono = data[:, 0] if data.ndim > 1 else data
@@ -7645,30 +7647,35 @@ def _nota_mas_cercana(freq, notas_cal):
     return mejor_col if mejor_dist <= 1.5 else -1
 
 def _linein_callback(indata, frames, time_info, status):
-    """Callback con HISTERESIS para evitar retrigger.
-    - Para detectar onset: energia > THRESHOLD_ON (alto)
-    - Para considerar silencio: energia < THRESHOLD_OFF (bajo) durante
-      SILENCIO_MS continuo. Fluctuaciones breves NO resetean el onset.
-    - Debounce de 250ms entre triggers de la misma columna."""
+    """Callback con deteccion de ATAQUE por pico de energia.
+    Dos formas de triggerear una nota nueva:
+    1. ONSET: silencio sostenido -> nota (como antes)
+    2. ATAQUE: la energia sube de golpe (ratio > 1.8x) incluso sin silencio
+       previo. Esto permite tocar dos veces seguidas la misma tecla sin
+       que el sustain de la primera bloquee la segunda."""
     global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
     global linein_nota_activa, linein_en_silencio, linein_silencio_desde
+    global linein_energy_prev
     freq, rms = _detectar_pitch(indata)
     linein_energy = rms
     linein_freq_actual = freq
     ahora = pygame.time.get_ticks()
 
+    # detectar ataque: pico subito de energia (nota nueva golpeada)
+    es_ataque = (rms >= LINEIN_THRESHOLD_ON
+                 and linein_energy_prev > 0.001
+                 and rms / linein_energy_prev >= LINEIN_ATTACK_RATIO)
+    linein_energy_prev = rms
+
     if rms < LINEIN_THRESHOLD_OFF:
-        # señal muy baja: empieza a contar silencio
         if linein_silencio_desde == 0:
             linein_silencio_desde = ahora
-        # solo resetear onset si el silencio duro lo suficiente
         if (ahora - linein_silencio_desde) >= LINEIN_SILENCIO_MS:
             if not linein_en_silencio:
                 linein_en_silencio = True
                 linein_nota_activa = -1
         return
 
-    # hay señal: resetear contador de silencio
     linein_silencio_desde = 0
 
     if freq <= 0:
@@ -7678,22 +7685,19 @@ def _linein_callback(indata, frames, time_info, status):
     if col < 0:
         return
 
-    # ONSET: solo si estamos en silencio Y la energia supera el umbral alto
+    # disparar si: onset desde silencio, O ataque detectado, O cambio de nota
+    disparar = False
     if linein_en_silencio and rms >= LINEIN_THRESHOLD_ON:
+        disparar = True
         linein_en_silencio = False
-        linein_nota_activa = col
+    elif es_ataque:
+        disparar = True
+    elif not linein_en_silencio and col != linein_nota_activa:
+        disparar = True
+
+    if disparar:
         # debounce
         if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
-            return
-        linein_last_col = col
-        linein_last_time = ahora
-        try:
-            linein_queue.put_nowait(("down", col, ahora))
-        except queue.Full:
-            pass
-    elif not linein_en_silencio and col != linein_nota_activa and rms >= LINEIN_THRESHOLD_ON:
-        # cambio de nota sin silencio (legato): solo si paso el debounce
-        if (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
             return
         linein_nota_activa = col
         linein_last_col = col
