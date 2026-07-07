@@ -8026,6 +8026,13 @@ def dibujar_medir_latencia():
                 pantalla.blit(mt, (cx - 120 + (i % 3) * 100, y_m + (i // 3) * 20))
         esc = fuente_chica.render("ESC = CANCELAR", True, GRIS)
         pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 35))
+        # indicador del offset actual + promedio parcial
+        off_actual = fuente_chica.render(f"OFFSET ACTUAL: {LINEIN_OFFSET_MS}ms", True, GRIS)
+        pantalla.blit(off_actual, (cx - off_actual.get_width() // 2, ALTO - 60))
+        if latencia_muestras:
+            _prom_parcial = sum(latencia_muestras) // len(latencia_muestras)
+            prom_txt = fuente.render(f"PROMEDIO: {_prom_parcial}ms", True, (255, 180, 60))
+            pantalla.blit(prom_txt, (cx - prom_txt.get_width() // 2, ALTO // 2 + 95))
     else:
         promedio = sum(latencia_muestras) // len(latencia_muestras)
         res_titulo = fuente.render("RESULTADO", True, (140, 230, 100))
@@ -9141,22 +9148,21 @@ while corriendo:
 
     elif ESTADO == "medir_latencia":
         tick_musica_menu()
-        # procesar eventos del line-in para que lleguen como pygame events
         if linein_activo:
             linein_procesar_eventos(None)
-        # logica del countdown: 1... 2... 3... YA! (flash)
         _ahora_lat = pygame.time.get_ticks()
         if len(latencia_muestras) < LATENCIA_NUM_MUESTRAS:
             _t_desde = _ahora_lat - latencia_flash_time
-            # ciclo total: 3s countdown + flash
-            _ciclo = 3000  # 1s por numero (1, 2, 3)
-            if not latencia_flash_activo and not latencia_esperando and _t_desde >= _ciclo:
+            # arrancar flash cuando pasan 3s desde el ultimo evento
+            if not latencia_flash_activo and not latencia_esperando and _t_desde >= 3000:
                 latencia_flash_time = _ahora_lat
                 latencia_flash_activo = True
                 latencia_esperando = True
-            elif latencia_flash_activo and _t_desde >= 300:
+            # apagar el visual del flash 300ms despues (usa timer ACTUALIZADO)
+            if latencia_flash_activo and (_ahora_lat - latencia_flash_time) >= 300:
                 latencia_flash_activo = False
-            if latencia_esperando and _t_desde > 2000:
+            # timeout: si no toco en 2s despues del flash, descartar
+            if latencia_esperando and (_ahora_lat - latencia_flash_time) > 2000:
                 latencia_esperando = False
                 latencia_flash_activo = False
         dibujar_medir_latencia()
