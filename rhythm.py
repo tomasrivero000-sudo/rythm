@@ -5053,6 +5053,8 @@ def tick_background(partida, ahora):
         ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
         if ganado >= meta:
             partida["terminada"] = True
+            partida["terminada_t"] = pygame.time.get_ticks()
+            pygame.mixer.stop()  # parar la musica al ganar
             # si es el ultimo stage del run, el enemigo (figura) explota
             si = partida.get("stage_info")
             if si and si["n"] >= NUM_STAGES:
@@ -5927,7 +5929,6 @@ def dibujar_juego(partida, ahora):
             fin = fuente.render("FIN", True, BLANCO)
         pantalla.blit(fin, (ANCHO // 2 - fin.get_width() // 2, ALTO // 2 - 40))
         if run_actual is not None:
-            # en run: mostrar lo ganado en el stage y el total acumulado
             ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
             sc_txt = fuente.render(f"STAGE: +{ganado}   TOTAL: {partida['puntos']}", True, GRIS_MED)
             pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
@@ -5936,15 +5937,17 @@ def dibujar_juego(partida, ahora):
         else:
             sc_txt = fuente.render(f"PUNTOS: {partida['puntos']}  MAX COMBO: {partida['max_combo']}x", True, GRIS_MED)
             pantalla.blit(sc_txt, (ANCHO // 2 - sc_txt.get_width() // 2, ALTO // 2))
-        # texto de accion (siguiente stage / volver)
+        # texto de accion: ESPACIO O auto-avance
         if run_actual is not None:
             stage_n = run_actual["stage"]
+            _t_win = pygame.time.get_ticks() - partida.get("terminada_t", 0)
+            _auto_en = max(0, 5 - _t_win // 1000)
             if stage_n < NUM_STAGES:
-                esc2 = fuente_chica.render(f"ESPACIO = SIGUIENTE STAGE ({stage_n + 1}/{NUM_STAGES})", True, GRIS)
+                esc2 = fuente.render(f"ESPACIO = SIGUIENTE STAGE  ({_auto_en}s)", True, BLANCO)
             else:
-                esc2 = fuente_chica.render("ESPACIO = COMPLETAR RUN!", True, GRIS)
+                esc2 = fuente.render(f"ESPACIO = COMPLETAR RUN!  ({_auto_en}s)", True, BLANCO)
         else:
-            esc2 = fuente_chica.render("ESC PARA VOLVER", True, GRIS)
+            esc2 = fuente.render("ESC PARA VOLVER", True, BLANCO)
         pantalla.blit(esc2, (ANCHO // 2 - esc2.get_width() // 2, ALTO // 2 + 62))
         # estado de exportacion (debajo, con margen suficiente)
         ruta = partida.get("export_ruta")
@@ -8663,89 +8666,100 @@ while corriendo:
             zy_p = partida.get("zona_y", ZONA_Y)
             _col_hit = -1   # columna golpeada en este evento (-1 = ninguna)
             _es_linein = False  # True si el hit viene del line-in
+            _avanzar_fin = False  # True si hay que transicionar al fin/siguiente stage
             if evento.type == pygame.KEYDOWN:
                 if evento.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
                     if partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"]):
                         # durante la animacion de muerte (1er segundo) ignorar
-                        # el input: evita saltarse la animacion por accidente
-                        # (ej: estaba apretando teclas justo cuando murio)
                         if (partida.get("game_over")
                                 and pygame.time.get_ticks() - partida.get("game_over_t", 0) < 1000):
                             continue
-                        # FIN / GAME OVER
-                        sfx_confirm()
-                        pygame.mixer.stop()
-                        teclas_sostenidas.clear()
-                        canal_hold.clear()
-                        if partida.get("es_tutorial"):
-                            # fin de la practica del tutorial -> volver al menu
-                            ESTADO = "menu"
+                        _avanzar_fin = True
+
+            # AUTO-AVANCE: 5s después de terminada, avanzar sin esperar input
+            if (partida.get("terminada") and not partida.get("game_over")
+                    and not partida["notas_cayendo"]
+                    and partida.get("terminada_t")
+                    and pygame.time.get_ticks() - partida["terminada_t"] >= 5000):
+                _avanzar_fin = True
+
+            if _avanzar_fin:
+                # FIN / GAME OVER
+                sfx_confirm()
+                pygame.mixer.stop()
+                teclas_sostenidas.clear()
+                canal_hold.clear()
+                if partida.get("es_tutorial"):
+                    # fin de la practica del tutorial -> volver al menu
+                    ESTADO = "menu"
+                    nueva_musica_menu_aleatoria()
+                elif run_actual is not None:
+                    # --- en modo RUN de stages ---
+                    if partida.get("game_over"):
+                        # perdio el stage -> run fallido
+                        run_fallido_t = pygame.time.get_ticks()
+                        ESTADO = "run_fallido"
+                        nueva_musica_menu_aleatoria()
+                    else:
+                        # paso el stage: el total del run es el puntaje final
+                        # de esta partida (que ya arranco desde el acumulado)
+                        _ganado_st = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
+                        _idx_st = run_actual["stage"] - 1
+                        if 0 <= _idx_st < len(run_actual.get("puntos_por_stage", [])):
+                            run_actual["puntos_por_stage"][_idx_st] = _ganado_st
+                        # rank de performance del stage (S/A/B/C/D)
+                        run_actual.setdefault("rank_por_stage", ["?"] * NUM_STAGES)
+                        if 0 <= _idx_st < NUM_STAGES:
+                            run_actual["rank_por_stage"][_idx_st] = calcular_rank_stage(partida)
+                        run_actual["puntos_total"] = partida["puntos"]
+                        if run_actual["stage"] >= NUM_STAGES:
+                            # run completo!
+                            marcar_completado(run_actual["genero"], run_actual["nivel"])
+                            col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
+                            _spawn_notas_celebracion(col_g)
+                            # CARRERA: desbloquear siguiente nivel + guardar rank
+                            if carrera_activa:
+                                # calcular rank promedio de los 4 stages
+                                rks = run_actual.get("rank_por_stage", ["?"] * NUM_STAGES)
+                                _ord = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "?": 0}
+                                _prom = sum(_ord.get(r, 0) for r in rks) / max(1, len(rks))
+                                if _prom >= 4.5: _rk_final = "S"
+                                elif _prom >= 3.5: _rk_final = "A"
+                                elif _prom >= 2.5: _rk_final = "B"
+                                elif _prom >= 1.5: _rk_final = "C"
+                                else: _rk_final = "D"
+                                carrera_completar_nivel(run_actual["nivel"], _rk_final)
+                            ESTADO = "run_completado"
                             nueva_musica_menu_aleatoria()
-                        elif run_actual is not None:
-                            # --- en modo RUN de stages ---
-                            if partida.get("game_over"):
-                                # perdio el stage -> run fallido
-                                run_fallido_t = pygame.time.get_ticks()
-                                ESTADO = "run_fallido"
-                                nueva_musica_menu_aleatoria()
-                            else:
-                                # paso el stage: el total del run es el puntaje final
-                                # de esta partida (que ya arranco desde el acumulado)
-                                _ganado_st = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
-                                _idx_st = run_actual["stage"] - 1
-                                if 0 <= _idx_st < len(run_actual.get("puntos_por_stage", [])):
-                                    run_actual["puntos_por_stage"][_idx_st] = _ganado_st
-                                # rank de performance del stage (S/A/B/C/D)
-                                run_actual.setdefault("rank_por_stage", ["?"] * NUM_STAGES)
-                                if 0 <= _idx_st < NUM_STAGES:
-                                    run_actual["rank_por_stage"][_idx_st] = calcular_rank_stage(partida)
-                                run_actual["puntos_total"] = partida["puntos"]
-                                if run_actual["stage"] >= NUM_STAGES:
-                                    # run completo!
-                                    marcar_completado(run_actual["genero"], run_actual["nivel"])
-                                    col_g = COLOR_GENERO.get(run_actual["genero"], BLANCO)
-                                    _spawn_notas_celebracion(col_g)
-                                    # CARRERA: desbloquear siguiente nivel + guardar rank
-                                    if carrera_activa:
-                                        # calcular rank promedio de los 4 stages
-                                        rks = run_actual.get("rank_por_stage", ["?"] * NUM_STAGES)
-                                        _ord = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "?": 0}
-                                        _prom = sum(_ord.get(r, 0) for r in rks) / max(1, len(rks))
-                                        if _prom >= 4.5: _rk_final = "S"
-                                        elif _prom >= 3.5: _rk_final = "A"
-                                        elif _prom >= 2.5: _rk_final = "B"
-                                        elif _prom >= 1.5: _rk_final = "C"
-                                        else: _rk_final = "D"
-                                        carrera_completar_nivel(run_actual["nivel"], _rk_final)
-                                    ESTADO = "run_completado"
-                                    nueva_musica_menu_aleatoria()
-                                else:
-                                    # ofrecer perk antes de avanzar al siguiente stage
-                                    _perk_rng = random.Random(run_actual["seeds"][run_actual["stage"] - 1] + 777)
-                                    perk_ofertas[:] = generar_ofertas_perks(_perk_rng, run_actual["perks"])
-                                    perk_seleccion = 0
-                                    perk_anim_inicio = pygame.time.get_ticks()
-                                    ESTADO = "perk_select"
-                                    nueva_musica_menu_aleatoria()
                         else:
-                            # modo libre normal
-                            if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
-                                nombre_input = ""
-                                ESTADO = "input_nombre"
-                            else:
-                                ESTADO = "leaderboard"
+                            # ofrecer perk antes de avanzar al siguiente stage
+                            _perk_rng = random.Random(run_actual["seeds"][run_actual["stage"] - 1] + 777)
+                            perk_ofertas[:] = generar_ofertas_perks(_perk_rng, run_actual["perks"])
+                            perk_seleccion = 0
+                            perk_anim_inicio = pygame.time.get_ticks()
+                            ESTADO = "perk_select"
                             nueva_musica_menu_aleatoria()
-                    elif evento.key == pygame.K_ESCAPE:
-                        # PAUSAR
-                        pygame.mixer.stop()
-                        teclas_sostenidas.clear()
-                        for c in list(canal_hold.keys()):
-                            canal_hold[c].stop()
-                        canal_hold.clear()
-                        partida["snd_pendientes"] = []  # descartar cuantizacion pendiente
-                        partida["pausa_inicio"] = pygame.time.get_ticks()
-                        pausa_opcion = 0
-                        ESTADO = "pausado"
+                else:
+                    # modo libre normal
+                    if not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
+                        nombre_input = ""
+                        ESTADO = "input_nombre"
+                    else:
+                        ESTADO = "leaderboard"
+                    nueva_musica_menu_aleatoria()
+
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_ESCAPE and not partida.get("game_over") and not partida.get("terminada"):
+                    # PAUSAR
+                    pygame.mixer.stop()
+                    teclas_sostenidas.clear()
+                    for c in list(canal_hold.keys()):
+                        canal_hold[c].stop()
+                    canal_hold.clear()
+                    partida["snd_pendientes"] = []
+                    partida["pausa_inicio"] = pygame.time.get_ticks()
+                    pausa_opcion = 0
+                    ESTADO = "pausado"
                 elif evento.key == pygame.K_d and (partida.get("game_over") or (partida["terminada"] and not partida["notas_cayendo"])) and not partida.get("export_ruta") and not partida.get("exportando"):
                     partida["exportando"] = True
                     pantalla.fill(NEGRO)
@@ -9281,6 +9295,15 @@ while corriendo:
 
         if not partida.get("game_over"):
             tick_background(partida, ahora)
+
+        # AUTO-AVANCE: 3s después de alcanzar la meta, limpiar notas
+        # restantes y forzar la pantalla de fin de stage. Antes el jugador
+        # se quedaba clavado sin saber qué apretar.
+        if (partida.get("terminada") and not partida.get("game_over")
+                and partida.get("terminada_t")):
+            _t_desde_win = pygame.time.get_ticks() - partida["terminada_t"]
+            if _t_desde_win >= 3000:
+                partida["notas_cayendo"] = []  # forzar limpieza
 
         if not partida.get("game_over"):
             holds_perdidos = []
