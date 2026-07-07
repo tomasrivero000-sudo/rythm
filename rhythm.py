@@ -7738,45 +7738,36 @@ linein_energy_prev = 0.0   # energia del bloque anterior (para detectar ataque)
 LINEIN_ATTACK_RATIO = 1.8  # ratio de energia actual/anterior para detectar ataque
 
 def _detectar_pitch(data):
-    """Detecta las frecuencias fundamentales del audio. Devuelve
-    (lista_de_freqs, energia_rms). Puede devolver 1 o 2 frecuencias
-    si detecta un acorde (dos picos prominentes en el espectro)."""
+    """Detecta LA frecuencia fundamental del audio (una sola nota).
+    Devuelve (freq, energia_rms). freq=0 si no hay señal clara."""
     mono = data[:, 0] if data.ndim > 1 else data
     rms = float(np.sqrt(np.mean(mono ** 2)))
     if rms < LINEIN_THRESHOLD_OFF:
-        return [], rms
+        return 0.0, rms
     ventana = mono * np.hanning(len(mono))
     espectro = np.abs(np.fft.rfft(ventana))
     freqs = np.fft.rfftfreq(len(ventana), 1.0 / LINEIN_SR)
     mask = (freqs >= 60) & (freqs <= 2000)
     if not np.any(mask):
-        return [], rms
+        return 0.0, rms
     espectro_m = espectro[mask]
     freqs_m = freqs[mask]
     promedio = np.mean(espectro_m)
     if promedio < 1e-10:
-        return [], rms
-    # buscar picos prominentes (>2.5x el promedio)
-    umbral_pico = promedio * 2.5
-    resultado = []
-    # primer pico (el mas alto)
+        return 0.0, rms
     idx1 = np.argmax(espectro_m)
-    if espectro_m[idx1] >= umbral_pico:
-        resultado.append(float(freqs_m[idx1]))
-        # buscar segundo pico: enmascarar alrededor del primero (±30Hz)
-        # para encontrar un pico independiente (otra nota, no armonico)
-        mask2 = np.abs(freqs_m - freqs_m[idx1]) > 30
-        # tambien excluir armonicos del primero (2x, 3x, 0.5x)
-        f1 = freqs_m[idx1]
-        for mult in [0.5, 2.0, 3.0]:
-            mask2 = mask2 & (np.abs(freqs_m - f1 * mult) > 25)
-        if np.any(mask2):
-            espectro_m2 = espectro_m.copy()
-            espectro_m2[~mask2] = 0
-            idx2 = np.argmax(espectro_m2)
-            if espectro_m2[idx2] >= umbral_pico:
-                resultado.append(float(freqs_m[idx2]))
-    return resultado, rms
+    if espectro_m[idx1] < promedio * 2.5:
+        return 0.0, rms
+    freq = float(freqs_m[idx1])
+    # si el pico mas alto es un armonico (>400Hz), verificar si hay un
+    # sub-armonico fuerte (la fundamental real). Algunos instrumentos
+    # tienen el 2do armonico mas fuerte que la fundamental.
+    if freq > 400:
+        sub = freq / 2.0
+        idx_sub = np.argmin(np.abs(freqs_m - sub))
+        if espectro_m[idx_sub] > promedio * 1.5:
+            freq = float(freqs_m[idx_sub])
+    return freq, rms
 
 def _nota_mas_cercana(freq, notas_cal):
     if freq <= 0 or not notas_cal:
@@ -7792,15 +7783,14 @@ def _nota_mas_cercana(freq, notas_cal):
     return mejor_col if mejor_dist <= 1.5 else -1
 
 def _linein_callback(indata, frames, time_info, status):
-    """Callback con deteccion de ATAQUE y soporte de ACORDES (2 notas).
-    _detectar_pitch devuelve lista de frecuencias; cada una se mapea
-    a una columna y se encola como evento independiente."""
+    """Callback: detecta UNA nota a la vez (sin multi-nota).
+    Trigerea por onset desde silencio o por ataque (pico de energia)."""
     global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
     global linein_nota_activa, linein_en_silencio, linein_silencio_desde
     global linein_energy_prev
-    freqs_det, rms = _detectar_pitch(indata)
+    freq, rms = _detectar_pitch(indata)
     linein_energy = rms
-    linein_freq_actual = freqs_det[0] if freqs_det else 0.0
+    linein_freq_actual = freq
     ahora = pygame.time.get_ticks()
 
     es_ataque = (rms >= LINEIN_THRESHOLD_ON
@@ -7818,40 +7808,11 @@ def _linein_callback(indata, frames, time_info, status):
         return
 
     linein_silencio_desde = 0
-    if not freqs_det:
+    if freq <= 0:
         return
 
-    cols_det = set()
-    freqs_por_col = {}
-    for freq in freqs_det:
-        col = _nota_mas_cercana(freq, linein_notas_cal)
-        if col >= 0:
-            cols_det.add(col)
-            freqs_por_col[col] = freq
-
-    # FILTRO DE ARMONICOS: si una columna detectada tiene una frecuencia que
-    # es ~2x o ~3x de otra columna detectada, es un armonico (no una nota
-    # real tocada). Ej: tocas Do4 (262Hz) y el 2do armonico (524Hz) matchea
-    # Do5 -> falso positivo. Solo quedarse con la fundamental (la mas grave).
-    if len(cols_det) > 1:
-        cols_lista = sorted(cols_det, key=lambda c: freqs_por_col.get(c, 0))
-        f_fundamental = freqs_por_col.get(cols_lista[0], 0)
-        if f_fundamental > 0:
-            cols_filtradas = {cols_lista[0]}
-            for col in cols_lista[1:]:
-                f_col = freqs_por_col.get(col, 0)
-                # es armonico si es ~2x, ~3x o ~4x de la fundamental
-                es_armonico = False
-                for mult in [2.0, 3.0, 4.0]:
-                    ratio = f_col / f_fundamental
-                    if abs(ratio - mult) < 0.15:
-                        es_armonico = True
-                        break
-                if not es_armonico:
-                    cols_filtradas.add(col)
-            cols_det = cols_filtradas
-
-    if not cols_det:
+    col = _nota_mas_cercana(freq, linein_notas_cal)
+    if col < 0:
         return
 
     disparar = False
@@ -7860,23 +7821,19 @@ def _linein_callback(indata, frames, time_info, status):
         linein_en_silencio = False
     elif es_ataque:
         disparar = True
-    elif not linein_en_silencio:
-        for col in cols_det:
-            if col != linein_nota_activa:
-                disparar = True
-                break
+    elif not linein_en_silencio and col != linein_nota_activa:
+        disparar = True
 
     if disparar:
-        for col in cols_det:
-            if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
-                continue
-            try:
-                linein_queue.put_nowait(("down", col, ahora))
-            except queue.Full:
-                pass
-        linein_nota_activa = min(cols_det)
-        linein_last_col = linein_nota_activa
+        if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
+            return
+        linein_nota_activa = col
+        linein_last_col = col
         linein_last_time = ahora
+        try:
+            linein_queue.put_nowait(("down", col, ahora))
+        except queue.Full:
+            pass
 
 def linein_iniciar():
     global linein_stream, linein_activo
