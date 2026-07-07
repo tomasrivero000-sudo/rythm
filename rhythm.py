@@ -4620,7 +4620,15 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     # mods: set de ids; si es None usa mods_activos (modo libre)
     mods_partida = set(mods) if mods is not None else set(mods_activos)
     dif     = get_dificultad(seed)
+    # modo instrumento: forzar max 4 columnas
+    if modo_instrumento and dif["columnas"] > 4:
+        dif = dict(dif)
+        dif["columnas"] = 4
+        dif["acordes"] = False
     cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado)
+    # modo instrumento: simplificar la cancion para line-in
+    if modo_instrumento:
+        simplificar_para_instrumento(cancion)
     inst = cancion["instrumento"]
     # limitar holds: percusivos max 800ms, todos max 4s (duracion del sample)
     hold_max = HOLD_MAX_PERCUSIVO if inst not in INST_SUSTAIN else HOLD_MAX
@@ -6181,7 +6189,7 @@ def dibujar_tutorial(pagina):
     pantalla.blit(nav, (cx - nav.get_width() // 2, ALTO - 60))
 
 menu_opcion = 0   # opcion seleccionada del menu principal
-MENU_OPCIONES = ["JUGAR", "CARRERA", "TUTORIAL", "LEADERBOARD", "CONFIG"]
+MENU_OPCIONES = ["JUGAR", "INSTRUMENTO", "CARRERA", "TUTORIAL", "LEADERBOARD", "CONFIG"]
 
 def dibujar_menu():
     """Menu principal navegable con flechas y ENTER."""
@@ -6192,7 +6200,8 @@ def dibujar_menu():
     # colores por opcion del menu
     MENU_COLORES = [
         (0, 220, 255),    # JUGAR: cyan
-        (255, 180, 60),   # CARRERA: dorado
+        (255, 180, 60),   # INSTRUMENTO: dorado
+        (255, 140, 80),   # CARRERA: naranja
         (140, 230, 100),  # TUTORIAL: verde
         (180, 120, 255),  # LEADERBOARD: violeta
         (255, 100, 140),  # CONFIG: rosa
@@ -6269,6 +6278,114 @@ def dibujar_menu():
     # controles
     ver = fuente_chica.render("FLECHAS + ENTER", True, GRIS)
     pantalla.blit(ver, (cx - ver.get_width() // 2, ALTO - 35))
+
+def simplificar_para_instrumento(cancion):
+    """Post-procesa una cancion generada para hacerla jugable con el
+    teclado musical por line-in:
+    - Sin acordes (una sola nota por beat)
+    - Sin holds (el line-in no detecta sustain)
+    - Sin bombas (sin forma de esquivarlas con instrumento)
+    - Notas mas espaciadas (minimo 300ms entre notas)
+    - Maximo 4 columnas"""
+    notas = cancion["notas_jugador"]
+    filtradas = []
+    ultimo_t = -9999
+    for n in notas:
+        # saltar acordes
+        if n.get("es_acorde"):
+            # convertir a nota simple: solo la primera columna
+            n = dict(n)
+            n["cols"] = [n["cols"][0]]
+            n["midis"] = [n["midis"][0]]
+            n["es_acorde"] = False
+        # saltar bombas
+        if n.get("es_bomba"):
+            continue
+        # quitar holds
+        n = dict(n)
+        n["hold"] = 0
+        # limitar a 4 columnas
+        if any(c >= 4 for c in n["cols"]):
+            n["cols"] = [c % 4 for c in n["cols"]]
+            if n["midis"]:
+                n["midis"] = [n["midis"][0]]
+        # espaciado minimo 300ms
+        if n["tiempo"] - ultimo_t < 300:
+            continue
+        ultimo_t = n["tiempo"]
+        filtradas.append(n)
+    cancion["notas_jugador"] = filtradas
+    return cancion
+
+def dibujar_selector_seed_inst(seed_actual, cargando):
+    """Selector de seed para modo instrumento."""
+    pantalla.fill(NEGRO)
+    cx = ANCHO // 2
+    t_anim = pygame.time.get_ticks() / 1000.0
+    col_ac = (255, 180, 60)
+
+    titulo = fuente.render("MODO INSTRUMENTO", True, col_ac)
+    pantalla.blit(titulo, (cx - titulo.get_width() // 2, 30))
+    pygame.draw.line(pantalla, col_ac, (60, 65), (ANCHO - 60, 65), 1)
+
+    # info del modo
+    info_lineas = [
+        "OPTIMIZADO PARA TECLADO MUSICAL POR LINE-IN",
+        "SIN ACORDES  ·  SIN HOLDS  ·  SIN BOMBAS",
+        "NOTAS ESPACIADAS  ·  MAX 4 COLUMNAS",
+    ]
+    for i, txt in enumerate(info_lineas):
+        c = GRIS_MED if i > 0 else BLANCO
+        t = fuente_chica.render(txt, True, c)
+        pantalla.blit(t, (cx - t.get_width() // 2, 80 + i * 20))
+
+    # estado del line-in
+    if linein_activo:
+        li_st = fuente_chica.render("LINE-IN: ACTIVO", True, (140, 230, 100))
+    elif linein_notas_cal:
+        li_st = fuente_chica.render("LINE-IN: CALIBRADO (ACTIVAR EN CONFIG)", True, (255, 180, 60))
+    else:
+        li_st = fuente_chica.render("LINE-IN: NO CONFIGURADO (CONFIG > TECLADO MUSICAL)", True, (255, 100, 100))
+    pantalla.blit(li_st, (cx - li_st.get_width() // 2, 145))
+
+    pygame.draw.line(pantalla, GRIS, (60, 170), (ANCHO - 60, 170), 1)
+
+    # selector de seed (misma mecanica)
+    ins = fuente_chica.render("MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
+    pantalla.blit(ins, (cx - ins.get_width() // 2, 185))
+    barra_w = 400
+    barra_x = cx - barra_w // 2
+    barra_y = 215
+    progreso = min(seed_actual / SEED_MAX, 1.0)
+    pygame.draw.rect(pantalla, GRIS, (barra_x, barra_y, barra_w, 20))
+    if seed_actual > 0:
+        bloques = int(barra_w * progreso) // 10
+        for b in range(bloques):
+            pygame.draw.rect(pantalla, col_ac, (barra_x + b * 10 + 1, barra_y + 2, 8, 16))
+    pygame.draw.rect(pantalla, col_ac, (barra_x, barra_y, barra_w, 20), 2)
+
+    seed_str = str(int(seed_actual)).zfill(6) if seed_actual > 0 else "000000"
+    seed_col = col_ac if seed_actual > 0 else GRIS
+    seed_texto = fuente_grande.render(seed_str, True, seed_col)
+    pantalla.blit(seed_texto, (cx - seed_texto.get_width() // 2, 250))
+
+    dif = get_dificultad(max(seed_actual, 1))
+    dif_texto = fuente.render(f"> {dif['nombre']} <", True, col_ac)
+    pantalla.blit(dif_texto, (cx - dif_texto.get_width() // 2, 340))
+
+    if seed_actual > 0:
+        ctrl = fuente_chica.render("ENTER = JUGAR     R = RESET", True, GRIS_MED)
+        pantalla.blit(ctrl, (cx - ctrl.get_width() // 2, 400))
+    else:
+        if (pygame.time.get_ticks() // 500) % 2 == 0:
+            coin = fuente.render("INSERT COIN", True, col_ac)
+            pantalla.blit(coin, (cx - coin.get_width() // 2, 400))
+
+    esc = fuente_chica.render("ESC = VOLVER AL MENU", True, GRIS)
+    pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 40))
+
+# flag global para saber si la partida es modo instrumento
+modo_instrumento = False
 
 def dibujar_selector_seed(seed_actual, cargando):
     """Pantalla de selector de seed: mantene espacio para cargar."""
@@ -8173,6 +8290,10 @@ while corriendo:
                         seed_acumulada = 0.0
                         cargando_seed = False
                         ESTADO = "selector_seed"
+                    elif op == "INSTRUMENTO":
+                        seed_acumulada = 0.0
+                        cargando_seed = False
+                        ESTADO = "selector_seed_inst"
                     elif op == "CARRERA":
                         c = cargar_carrera()
                         carrera_cursor = max(0, c.get("nivel_max", 1) - 1)
@@ -8198,11 +8319,33 @@ while corriendo:
                     sfx_confirm()
                     run_actual = crear_run(int(seed_acumulada))
                     carrera_activa = False
+                    modo_instrumento = False
                     ESTADO = "run_overview"
                 if evento.key == pygame.K_m and seed_acumulada > 0:
                     sfx_confirm()
                     mods_opcion = 0
                     ESTADO = "mods"
+                if evento.key == pygame.K_r:
+                    seed_acumulada = 0.0
+                    cargando_seed = False
+            if evento.type == pygame.KEYUP:
+                if evento.key == pygame.K_SPACE:
+                    cargando_seed = False
+
+        elif ESTADO == "selector_seed_inst":
+            if evento.type == pygame.KEYDOWN:
+                if evento.key == pygame.K_SPACE:
+                    cargando_seed = True
+                if evento.key == pygame.K_ESCAPE:
+                    seed_acumulada = 0.0
+                    cargando_seed = False
+                    ESTADO = "menu"
+                if evento.key == pygame.K_RETURN and seed_acumulada > 0:
+                    sfx_confirm()
+                    run_actual = crear_run(int(seed_acumulada))
+                    carrera_activa = False
+                    modo_instrumento = True
+                    ESTADO = "run_overview"
                 if evento.key == pygame.K_r:
                     seed_acumulada = 0.0
                     cargando_seed = False
@@ -8713,6 +8856,9 @@ while corriendo:
                                 puntos_iniciales=run_actual["puntos_total"],
                                 instrumento_forzado=inst_stage,
                                 perks=run_actual.get("perks"))
+                            # modo instrumento: simplificar notas para line-in
+                            if modo_instrumento:
+                                simplificar_para_instrumento(partida["cancion"])
                         else:
                             partida = iniciar_partida(int(seed_acumulada))
                         score_guardado = False
@@ -9213,6 +9359,12 @@ while corriendo:
             seed_acumulada = min(seed_acumulada + SEED_VELOCIDAD, SEED_MAX)
         tick_musica_menu()
         dibujar_selector_seed(seed_acumulada, cargando_seed)
+
+    elif ESTADO == "selector_seed_inst":
+        if cargando_seed:
+            seed_acumulada = min(seed_acumulada + SEED_VELOCIDAD, SEED_MAX)
+        tick_musica_menu()
+        dibujar_selector_seed_inst(seed_acumulada, cargando_seed)
 
     elif ESTADO == "leaderboard":
         tick_musica_menu()
