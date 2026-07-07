@@ -7736,15 +7736,24 @@ def linein_detener():
 
 def linein_procesar_eventos(partida_ref):
     """Llamar cada frame: drena la cola de eventos del line-in y los
-    inyecta como pulsaciones de columna con compensación de latencia."""
+    inyecta como pulsaciones de columna con compensación de latencia.
+    Si partida_ref es None, inyecta eventos sin filtro de columnas
+    (usado durante medicion de latencia y calibracion)."""
     while not linein_queue.empty():
         try:
             tipo, col, ts = linein_queue.get_nowait()
-            if tipo == "down" and partida_ref:
-                col_mapeada = partida_ref.get("mapa_teclas", {}).get(col, col)
-                if col_mapeada < partida_ref["dificultad"]["columnas"]:
+            if tipo == "down":
+                if partida_ref:
+                    col_mapeada = partida_ref.get("mapa_teclas", {}).get(col, col)
+                    if col_mapeada < partida_ref["dificultad"]["columnas"]:
+                        ev = pygame.event.Event(pygame.KEYDOWN, key=None,
+                                                _linein_col=col_mapeada,
+                                                _linein_offset=LINEIN_OFFSET_MS)
+                        pygame.event.post(ev)
+                else:
+                    # sin partida: inyectar evento generico (para medir latencia)
                     ev = pygame.event.Event(pygame.KEYDOWN, key=None,
-                                            _linein_col=col_mapeada,
+                                            _linein_col=col,
                                             _linein_offset=LINEIN_OFFSET_MS)
                     pygame.event.post(ev)
         except queue.Empty:
@@ -7962,39 +7971,55 @@ def dibujar_medir_latencia():
     pygame.draw.line(pantalla, (255, 180, 60), (60, 65), (ANCHO - 60, 65), 1)
     n_hechas = len(latencia_muestras)
     if n_hechas < LATENCIA_NUM_MUESTRAS:
-        inst = fuente_chica.render("TOCA CUALQUIER NOTA CUANDO VES EL CIRCULO BLANCO", True, GRIS_MED)
+        inst = fuente_chica.render("TOCA CUALQUIER NOTA CUANDO APARECE  YA!", True, GRIS_MED)
         pantalla.blit(inst, (cx - inst.get_width() // 2, 80))
         prog = fuente_chica.render(f"MUESTRA {n_hechas + 1} DE {LATENCIA_NUM_MUESTRAS}", True, GRIS)
         pantalla.blit(prog, (cx - prog.get_width() // 2, 105))
-        radio = 80
-        cy = ALTO // 2 - 20
-        t_desde_flash = ahora - latencia_flash_time
-        flash_dur = 200
-        if latencia_flash_activo and t_desde_flash < flash_dur:
+        radio = 90
+        cy = ALTO // 2 - 10
+        t_desde = ahora - latencia_flash_time
+        # countdown: 0-1000ms = "1", 1000-2000ms = "2", 2000-3000ms = "3", 3000+ = "YA!"
+        if latencia_flash_activo:
+            # YA! — circulo blanco grande
             pygame.draw.circle(pantalla, BLANCO, (cx, cy), radio)
-            pygame.draw.circle(pantalla, (200, 200, 200), (cx, cy), radio, 3)
-            lbl = fuente.render("TOCA!", True, NEGRO)
+            lbl = fuente_grande.render("YA!", True, NEGRO)
             pantalla.blit(lbl, (cx - lbl.get_width() // 2, cy - lbl.get_height() // 2))
         elif latencia_esperando:
-            pygame.draw.circle(pantalla, (40, 40, 50), (cx, cy), radio)
+            # ya paso el flash, esperando respuesta
+            pygame.draw.circle(pantalla, (60, 60, 70), (cx, cy), radio)
             pygame.draw.circle(pantalla, GRIS, (cx, cy), radio, 2)
-            wait = fuente_chica.render("ESPERANDO...", True, GRIS)
+            wait = fuente_chica.render("ESPERANDO...", True, GRIS_MED)
             pantalla.blit(wait, (cx - wait.get_width() // 2, cy - 8))
         else:
-            t_hasta_flash = latencia_intervalo - t_desde_flash
-            if t_hasta_flash < 800:
-                p = 1.0 - (t_hasta_flash / 800.0)
-                r_pre = int(radio * 0.3 + radio * 0.7 * p)
-                g_pre = int(30 + 40 * p)
-                pygame.draw.circle(pantalla, (g_pre, g_pre, g_pre + 10), (cx, cy), r_pre)
-                pygame.draw.circle(pantalla, GRIS, (cx, cy), r_pre, 2)
+            # countdown 1, 2, 3
+            if t_desde < 1000:
+                num = "1"
+                p = t_desde / 1000.0
+            elif t_desde < 2000:
+                num = "2"
+                p = (t_desde - 1000) / 1000.0
+            elif t_desde < 3000:
+                num = "3"
+                p = (t_desde - 2000) / 1000.0
             else:
-                pygame.draw.circle(pantalla, (25, 25, 30), (cx, cy), radio)
-                pygame.draw.circle(pantalla, (40, 40, 45), (cx, cy), radio, 2)
-            lbl = fuente_chica.render("ESPERA...", True, GRIS)
-            pantalla.blit(lbl, (cx - lbl.get_width() // 2, cy - 8))
+                num = ""
+                p = 0
+            # circulo que crece con el countdown
+            r_show = int(radio * 0.4 + radio * 0.6 * p)
+            brillo = int(30 + 50 * p)
+            pygame.draw.circle(pantalla, (brillo, brillo, brillo + 10), (cx, cy), r_show)
+            pygame.draw.circle(pantalla, GRIS_MED, (cx, cy), r_show, 2)
+            if num:
+                # numero grande con pulso de escala
+                escala_pulso = 1.0 + 0.3 * (1.0 - p)
+                num_txt = fuente_grande.render(num, True, BLANCO)
+                nw = int(num_txt.get_width() * escala_pulso)
+                nh = int(num_txt.get_height() * escala_pulso)
+                num_scaled = pygame.transform.scale(num_txt, (nw, nh))
+                pantalla.blit(num_scaled, (cx - nw // 2, cy - nh // 2))
+        # muestras anteriores
         if latencia_muestras:
-            y_m = ALTO // 2 + 100
+            y_m = ALTO // 2 + 120
             for i, ms in enumerate(latencia_muestras):
                 col_m = (140, 230, 100) if ms < 150 else (255, 180, 60) if ms < 250 else (255, 100, 100)
                 mt = fuente_chica.render(f"#{i+1}: {ms}ms", True, col_m)
@@ -9116,20 +9141,22 @@ while corriendo:
 
     elif ESTADO == "medir_latencia":
         tick_musica_menu()
-        # logica del flash: disparar un flash cada latencia_intervalo ms
+        # procesar eventos del line-in para que lleguen como pygame events
+        if linein_activo:
+            linein_procesar_eventos(None)
+        # logica del countdown: 1... 2... 3... YA! (flash)
         _ahora_lat = pygame.time.get_ticks()
         if len(latencia_muestras) < LATENCIA_NUM_MUESTRAS:
             _t_desde = _ahora_lat - latencia_flash_time
-            if not latencia_flash_activo and not latencia_esperando and _t_desde >= latencia_intervalo:
-                # disparar flash
+            # ciclo total: 3s countdown + flash
+            _ciclo = 3000  # 1s por numero (1, 2, 3)
+            if not latencia_flash_activo and not latencia_esperando and _t_desde >= _ciclo:
                 latencia_flash_time = _ahora_lat
                 latencia_flash_activo = True
                 latencia_esperando = True
-            elif latencia_flash_activo and _t_desde >= 200:
-                # el flash visual termino (200ms) pero seguimos esperando input
+            elif latencia_flash_activo and _t_desde >= 300:
                 latencia_flash_activo = False
-            # timeout: si paso mucho tiempo sin respuesta, resetear
-            if latencia_esperando and _t_desde > 1500:
+            if latencia_esperando and _t_desde > 2000:
                 latencia_esperando = False
                 latencia_flash_activo = False
         dibujar_medir_latencia()
