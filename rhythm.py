@@ -9433,6 +9433,19 @@ while corriendo:
 
     elif ESTADO == "jugando":
         zy_p = partida.get("zona_y", ZONA_Y)
+        # RESET DEL RELOJ: la primera vez que se entra a "jugando" despues
+        # de crear la partida (o despues de una pausa), resincronizar el
+        # inicio al momento actual. Asi el t_musical arranca en 0 y las
+        # primeras notas no estan atrasadas por el tiempo de carga/warm-up.
+        if not partida.get("_inicio_real"):
+            partida["inicio"] = pygame.time.get_ticks()
+            partida["t_musical"] = 0.0
+            partida["_arranco_audio"] = False
+            partida["_arranco_notas"] = False
+            partida["indice_perc"] = 0
+            partida["indice_bajo"] = 0
+            partida["indice_jugador"] = 0
+            partida["_inicio_real"] = True
         # procesar eventos del teclado musical por line-in
         if linein_activo and partida and not partida.get("game_over") and not partida.get("terminada"):
             linein_procesar_eventos(partida)
