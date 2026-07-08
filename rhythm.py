@@ -7719,7 +7719,7 @@ LINEIN_SR = 22050
 LINEIN_BLOCK = 512
 LINEIN_THRESHOLD_ON = 0.035   # umbral para onset (subido: ignora colas de piano)
 LINEIN_THRESHOLD_OFF = 0.008  # umbral para silencio
-LINEIN_DEBOUNCE_MS = 150      # ms minimo entre triggers
+LINEIN_DEBOUNCE_MS = 80       # ms minimo entre triggers DE LA MISMA COLUMNA
 LINEIN_SILENCIO_MS = 80       # ms de silencio para resetear (bajado: resetea mas rapido)
 LINEIN_OFFSET_MS = 80
 LINEIN_AUTO_RELEASE_MS = 120  # ms despues del onset, soltar la tecla automaticamente          # compensacion de latencia (ms). Ajustable en config.
@@ -7730,13 +7730,14 @@ linein_queue = queue.Queue(maxsize=32)
 linein_notas_cal = {}
 linein_last_col = -1
 linein_last_time = 0
+linein_last_time_per_col = {}  # {col: timestamp} debounce por columna
 linein_energy = 0.0
 linein_freq_actual = 0.0
 linein_nota_activa = -1   # columna que esta sonando AHORA (-1 = silencio)
 linein_en_silencio = True  # True = no hay nota sonando (esperando onset)
 linein_silencio_desde = 0  # timestamp de cuando empezó el silencio
 linein_energy_prev = 0.0   # energia del bloque anterior (para detectar ataque)
-LINEIN_ATTACK_RATIO = 1.8  # ratio de energia actual/anterior para detectar ataque
+LINEIN_ATTACK_RATIO = 1.4  # ratio de energia actual/anterior para detectar ataque (bajado para notas rapidas)
 linein_monitor = False     # True = reproducir el audio de entrada por los parlantes
 
 def _detectar_pitch(data):
@@ -7840,11 +7841,15 @@ def _linein_callback_proceso(indata):
         disparar = True
 
     if disparar:
-        if col == linein_last_col and (ahora - linein_last_time) < LINEIN_DEBOUNCE_MS:
+        # debounce PER-COLUMNA: solo bloquea la misma columna, no las demas.
+        # Asi podes tocar col 0 y col 1 rapido sin que se bloqueen entre si.
+        t_ultima = linein_last_time_per_col.get(col, 0)
+        if (ahora - t_ultima) < LINEIN_DEBOUNCE_MS:
             return
         linein_nota_activa = col
         linein_last_col = col
         linein_last_time = ahora
+        linein_last_time_per_col[col] = ahora
         try:
             linein_queue.put_nowait(("down", col, ahora))
         except queue.Full:
