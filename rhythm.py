@@ -7736,6 +7736,7 @@ linein_en_silencio = True  # True = no hay nota sonando (esperando onset)
 linein_silencio_desde = 0  # timestamp de cuando empezó el silencio
 linein_energy_prev = 0.0   # energia del bloque anterior (para detectar ataque)
 LINEIN_ATTACK_RATIO = 1.8  # ratio de energia actual/anterior para detectar ataque
+linein_monitor = False     # True = reproducir el audio de entrada por los parlantes
 
 def _detectar_pitch(data):
     """Detecta LA frecuencia fundamental del audio (una sola nota).
@@ -7782,9 +7783,22 @@ def _nota_mas_cercana(freq, notas_cal):
             mejor_col = col
     return mejor_col if mejor_dist <= 1.5 else -1
 
-def _linein_callback(indata, frames, time_info, status):
-    """Callback: detecta UNA nota a la vez (sin multi-nota).
-    Trigerea por onset desde silencio o por ataque (pico de energia)."""
+def _linein_callback_duplex(indata, outdata, frames, time_info, status):
+    """Callback para stream duplex: detecta pitch + monitorea audio."""
+    # monitoreo: copiar entrada a salida para que el jugador escuche
+    if linein_monitor:
+        outdata[:] = indata
+    else:
+        outdata[:] = 0
+    # deteccion de pitch (misma logica que antes)
+    _linein_callback_proceso(indata)
+
+def _linein_callback_solo(indata, frames, time_info, status):
+    """Callback para stream solo input (sin monitoreo)."""
+    _linein_callback_proceso(indata)
+
+def _linein_callback_proceso(indata):
+    """Logica compartida de deteccion de pitch."""
     global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
     global linein_nota_activa, linein_en_silencio, linein_silencio_desde
     global linein_energy_prev
@@ -7835,17 +7849,28 @@ def _linein_callback(indata, frames, time_info, status):
         except queue.Full:
             pass
 
-def linein_iniciar():
-    global linein_stream, linein_activo
-    if not LINEIN_DISPONIBLE or linein_activo:
-        return False
+def linein_abrir(device_idx, con_monitor=False):
+    """Abre el stream de line-in. Si con_monitor=True, usa stream duplex
+    para que el audio de entrada se reproduzca por los parlantes."""
+    global linein_stream, linein_activo, linein_monitor
+    linein_detener()
+    linein_monitor = con_monitor
     try:
-        linein_stream = sd.InputStream(
-            samplerate=LINEIN_SR, channels=1, blocksize=LINEIN_BLOCK,
-            dtype="float32", callback=_linein_callback)
+        if con_monitor:
+            linein_stream = sd.Stream(
+                device=(device_idx, None),  # input=device, output=default
+                samplerate=LINEIN_SR, channels=1,
+                blocksize=LINEIN_BLOCK, dtype="float32",
+                callback=_linein_callback_duplex)
+        else:
+            linein_stream = sd.InputStream(
+                device=device_idx,
+                samplerate=LINEIN_SR, channels=1,
+                blocksize=LINEIN_BLOCK, dtype="float32",
+                callback=_linein_callback_solo)
         linein_stream.start()
         linein_activo = True
-        print("Line-in activo")
+        print(f"Line-in abierto {'con' if con_monitor else 'sin'} monitoreo")
         return True
     except Exception as e:
         print(f"Error abriendo line-in: {e}")
@@ -8053,6 +8078,12 @@ def dibujar_calibracion_linein():
     pygame.draw.rect(pantalla, GRIS_MED, (vu_x, vu_y, vu_w, 10), 1)
     vu_lbl = fuente_chica.render("ENTRADA", True, GRIS)
     pantalla.blit(vu_lbl, (vu_x - 75, vu_y - 2))
+    # indicador de monitoreo
+    if linein_monitor:
+        mon = fuente_chica.render("MONITOR ON (M)", True, (140, 230, 100))
+    else:
+        mon = fuente_chica.render("MONITOR OFF (M)", True, GRIS)
+    pantalla.blit(mon, (vu_x + vu_w + 15, vu_y - 2))
     # columnas
     y0, fila_h = 135, 42
     for i in range(8):
@@ -8118,13 +8149,7 @@ if LINEIN_DISPONIBLE and linein_notas_cal:
             _dev_encontrado = linein_devices[0]
             linein_dev_idx = 0
         if _dev_encontrado:
-            linein_stream = sd.InputStream(
-                device=_dev_encontrado["idx"],
-                samplerate=LINEIN_SR, channels=1,
-                blocksize=LINEIN_BLOCK, dtype="float32",
-                callback=_linein_callback)
-            linein_stream.start()
-            linein_activo = True
+            linein_abrir(_dev_encontrado["idx"], con_monitor=False)
             print(f"Line-in auto-activado: {_dev_encontrado['nombre']} (offset {LINEIN_OFFSET_MS}ms)")
     except Exception as e:
         print(f"No se pudo auto-activar line-in: {e}")
@@ -8653,20 +8678,8 @@ while corriendo:
                     if linein_devices:
                         # abrir calibracion con el dispositivo seleccionado
                         sfx_confirm()
-                        linein_detener()  # cerrar stream previo si habia uno
                         dev_info = linein_devices[linein_dev_idx]
-                        print(f"Abriendo line-in: {dev_info['nombre']} (idx {dev_info['idx']})")
-                        try:
-                            linein_stream = sd.InputStream(
-                                device=dev_info["idx"],
-                                samplerate=LINEIN_SR, channels=1,
-                                blocksize=LINEIN_BLOCK, dtype="float32",
-                                callback=_linein_callback)
-                            linein_stream.start()
-                            linein_activo = True
-                            print(f"Line-in abierto OK")
-                        except Exception as e:
-                            print(f"Error abriendo line-in: {e}")
+                        linein_abrir(dev_info["idx"], con_monitor=True)
                         linein_cal_col = 0
                         linein_cal_estado = "idle"
                         linein_cal_muestras = []
@@ -8682,31 +8695,13 @@ while corriendo:
                         linein_detener()
                     elif linein_notas_cal and linein_devices:
                         dev_info = linein_devices[linein_dev_idx]
-                        try:
-                            linein_stream = sd.InputStream(
-                                device=dev_info["idx"],
-                                samplerate=LINEIN_SR, channels=1,
-                                blocksize=LINEIN_BLOCK, dtype="float32",
-                                callback=_linein_callback)
-                            linein_stream.start()
-                            linein_activo = True
-                        except Exception as e:
-                            print(f"Error: {e}")
+                        linein_abrir(dev_info["idx"], con_monitor=False)
                 elif evento.key == pygame.K_d and (linein_activo or linein_notas_cal):
                     # medir latencia
                     sfx_confirm()
                     if not linein_activo and linein_devices:
                         dev_info = linein_devices[linein_dev_idx]
-                        try:
-                            linein_stream = sd.InputStream(
-                                device=dev_info["idx"],
-                                samplerate=LINEIN_SR, channels=1,
-                                blocksize=LINEIN_BLOCK, dtype="float32",
-                                callback=_linein_callback)
-                            linein_stream.start()
-                            linein_activo = True
-                        except Exception as e:
-                            print(f"Error: {e}")
+                        linein_abrir(dev_info["idx"], con_monitor=True)
                     latencia_muestras.clear()
                     latencia_flash_time = pygame.time.get_ticks()
                     latencia_flash_activo = False
@@ -8722,12 +8717,13 @@ while corriendo:
                     if linein_cal_estado == "escuchando":
                         linein_cal_estado = "idle"
                     else:
-                        linein_detener()
+                        linein_monitor = False  # apagar monitoreo al salir
                         ESTADO = "config"
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if linein_cal_col >= 8:
                         guardar_linein_notas()
                         sfx_confirm()
+                        linein_monitor = False  # apagar monitoreo al salir
                         ESTADO = "config"
                     elif linein_cal_estado == "idle":
                         linein_cal_estado = "escuchando"
@@ -8749,6 +8745,9 @@ while corriendo:
                 elif evento.key == pygame.K_DOWN and linein_cal_col < 8 and linein_cal_estado == "idle":
                     linein_cal_col += 1
                     sfx_select()
+                elif evento.key == pygame.K_m:
+                    # toggle monitoreo
+                    linein_monitor = not linein_monitor
 
         elif ESTADO == "medir_latencia":
             if evento.type == pygame.KEYDOWN:
