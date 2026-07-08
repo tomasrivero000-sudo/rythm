@@ -7717,11 +7717,12 @@ except ImportError:
 LINEIN_FILE = os.path.join(BASE_DIR, "linein_notas.json")
 LINEIN_SR = 22050
 LINEIN_BLOCK = 512
-LINEIN_THRESHOLD_ON = 0.02    # umbral para detectar onset (nota empieza)
-LINEIN_THRESHOLD_OFF = 0.005  # umbral para detectar silencio (mucho mas bajo)
-LINEIN_DEBOUNCE_MS = 120      # ms minimo entre triggers (bajado: el ataque es mas preciso)
-LINEIN_SILENCIO_MS = 150      # ms de silencio continuo antes de resetear onset
-LINEIN_OFFSET_MS = 80          # compensacion de latencia (ms). Ajustable en config.
+LINEIN_THRESHOLD_ON = 0.035   # umbral para onset (subido: ignora colas de piano)
+LINEIN_THRESHOLD_OFF = 0.008  # umbral para silencio
+LINEIN_DEBOUNCE_MS = 150      # ms minimo entre triggers
+LINEIN_SILENCIO_MS = 80       # ms de silencio para resetear (bajado: resetea mas rapido)
+LINEIN_OFFSET_MS = 80
+LINEIN_AUTO_RELEASE_MS = 120  # ms despues del onset, soltar la tecla automaticamente          # compensacion de latencia (ms). Ajustable en config.
 
 linein_activo = False
 linein_stream = None
@@ -7887,11 +7888,23 @@ def linein_detener():
     linein_stream = None
     linein_activo = False
 
+linein_release_pendientes = []  # [(timestamp_release, col)]
+
 def linein_procesar_eventos(partida_ref):
-    """Llamar cada frame: drena la cola de eventos del line-in y los
-    inyecta como pulsaciones de columna con compensación de latencia.
-    Si partida_ref es None, inyecta eventos sin filtro de columnas
-    (usado durante medicion de latencia y calibracion)."""
+    """Drena la cola de eventos del line-in, inyecta DOWN y programa
+    auto-release (UP) para que teclas_sostenidas no se quede pegada."""
+    global linein_release_pendientes
+    ahora = pygame.time.get_ticks()
+    # procesar releases pendientes
+    nuevos = []
+    for t_rel, col_rel in linein_release_pendientes:
+        if ahora >= t_rel:
+            ev = pygame.event.Event(pygame.KEYUP, key=None, _linein_col_up=col_rel)
+            pygame.event.post(ev)
+        else:
+            nuevos.append((t_rel, col_rel))
+    linein_release_pendientes = nuevos
+    # procesar nuevos downs
     while not linein_queue.empty():
         try:
             tipo, col, ts = linein_queue.get_nowait()
@@ -7903,8 +7916,9 @@ def linein_procesar_eventos(partida_ref):
                                                 _linein_col=col_mapeada,
                                                 _linein_offset=LINEIN_OFFSET_MS)
                         pygame.event.post(ev)
+                        linein_release_pendientes.append(
+                            (ahora + LINEIN_AUTO_RELEASE_MS, col_mapeada))
                 else:
-                    # sin partida: inyectar evento generico (para medir latencia)
                     ev = pygame.event.Event(pygame.KEYDOWN, key=None,
                                             _linein_col=col,
                                             _linein_offset=LINEIN_OFFSET_MS)
@@ -9309,6 +9323,11 @@ while corriendo:
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
 
+            # LINE-IN auto-release: soltar columna después del delay
+            if evento.type == pygame.KEYUP and hasattr(evento, "_linein_col_up"):
+                col = evento._linein_col_up
+                teclas_sostenidas.discard(col)
+
             # GAMEPAD: soltar boton = soltar hold
             if evento.type == pygame.JOYBUTTONUP:
                 _pad_col = pad_col_down(evento.button)
@@ -9437,7 +9456,9 @@ while corriendo:
         # inicio al momento actual. Asi el t_musical arranca en 0 y las
         # primeras notas no estan atrasadas por el tiempo de carga/warm-up.
         if not partida.get("_inicio_real"):
+            _viejo = partida["inicio"]
             partida["inicio"] = pygame.time.get_ticks()
+            _delta = partida["inicio"] - _viejo
             partida["t_musical"] = 0.0
             partida["_arranco_audio"] = False
             partida["_arranco_notas"] = False
@@ -9445,6 +9466,7 @@ while corriendo:
             partida["indice_bajo"] = 0
             partida["indice_jugador"] = 0
             partida["_inicio_real"] = True
+            print(f"[RESET RELOJ] delta={_delta}ms (warm-up tardó {_delta}ms, notas resincronizadas a t=0)")
         # procesar eventos del teclado musical por line-in
         if linein_activo and partida and not partida.get("game_over") and not partida.get("terminada"):
             linein_procesar_eventos(partida)
