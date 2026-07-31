@@ -4513,6 +4513,24 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
     _dur_nudo_s = max(1.0, (t_nudo_fin - t_intro_fin) / 1000.0)
     cantidad_pu = max(1, int(_dur_nudo_s / 20.0 * rng.uniform(0.7, 1.4)))
     if cantidad_pu > 0:
+        # tipos sesgados por dificultad: en niveles faciles ayudan a
+        # sobrevivir (VIDA/LENTO), en niveles altos premian el score (x2).
+        # AUTO mantiene peso medio en todos lados.
+        if nivel_dif <= 5:
+            _pesos_pu = {"vida": 3, "reloj": 3, "estrella": 2, "doble": 1}
+        elif nivel_dif <= 9:
+            _pesos_pu = {"vida": 2, "reloj": 2, "estrella": 2, "doble": 2}
+        else:
+            _pesos_pu = {"vida": 1, "reloj": 1, "estrella": 2, "doble": 3}
+        _pool_pu = [p for p in POWER_UPS for _ in range(_pesos_pu.get(p["id"], 1))]
+        # indexar notas por columna para NO pisar otras notas: el power-up
+        # necesita su carril libre 250ms alrededor (igual que las bombas,
+        # que se colocan despues y por eso ya esquivan a los power-ups).
+        GAP_PU = 250
+        _notas_col_pu = {}
+        for _n in notas_jugador:
+            for _c in _n["cols"]:
+                _notas_col_pu.setdefault(_c, []).append(_n["tiempo"])
         # distribuir en la duracion util del nudo, con un jitter aleatorio
         margen_ini = 8000
         margen_fin = 5000
@@ -4521,18 +4539,28 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
             # posicion base equiespaciada + jitter de +/- 20% del segmento
             base = (t_intro_fin + margen_ini
                     + int(dur_util * (i + 0.5) / cantidad_pu))
-            jitter = rng.randint(-int(dur_util / cantidad_pu * 0.2),
-                                  int(dur_util / cantidad_pu * 0.2))
-            t_pu = max(t_intro_fin + margen_ini,
-                       min(t_nudo_fin - margen_fin, base + jitter))
-            col_pu = rng.randint(0, num_columnas - 1)
-            tipo_pu = rng.choice(POWER_UPS)
+            _seg_pu = max(1, int(dur_util / cantidad_pu * 0.2))
+            colocado_pu = False
+            for _intento_pu in range(12):
+                jitter = rng.randint(-_seg_pu, _seg_pu)
+                t_pu = max(t_intro_fin + margen_ini,
+                           min(t_nudo_fin - margen_fin, base + jitter))
+                col_pu = rng.randint(0, num_columnas - 1)
+                if any(abs(t - t_pu) < GAP_PU
+                       for t in _notas_col_pu.get(col_pu, [])):
+                    continue
+                colocado_pu = True
+                break
+            if not colocado_pu:
+                continue  # zona muy densa: mejor saltear que pisar una nota
+            tipo_pu = rng.choice(_pool_pu)
             notas_jugador.append({
                 "cols": [col_pu], "midis": [notas_columnas[col_pu]],
                 "tiempo": int(t_pu), "es_acorde": False,
                 "parte": "nudo", "hold": 0,
                 "power_up": tipo_pu["id"],
             })
+            _notas_col_pu.setdefault(col_pu, []).append(int(t_pu))
 
     # BOMBAS: notas rojas que NO deben tocarse. Si el jugador las pega,
     # explotan y pierde vida. Si las esquiva, no pasa nada (no cuentan como
