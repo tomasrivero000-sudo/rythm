@@ -10,3 +10,18 @@ leaderboard.json
 *.SF2
 *.dll
 elementos/
+
+# PyInstaller
+build/
+dist/
+
+# datos personales / guardado de partidas
+config.json
+carrera.json
+progreso.json
+linein_notas.json
+crash_log.txt
+
+# canciones exportadas
+export/
+*.wav
