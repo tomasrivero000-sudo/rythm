@@ -9327,6 +9327,16 @@ while corriendo:
                             del canal_hold[col]
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
+                        # bonus por completar hold (HOLD MASTER lo duplica)
+                        _hb = partida.get("hold_bonus", 5)
+                        partida["puntos"] += _hb
+                        num_cols = partida["dificultad"]["columnas"]
+                        ancho_col = ANCHO // num_cols
+                        cx = col * ancho_col + ancho_col // 2
+                        crear_texto_flotante(cx, zy_p - 40, f"+{_hb}", BLANCO)
+                        if grupo in partida["notas_cayendo"]:
+                            partida["notas_cayendo"].remove(grupo)
+                        del partida["holds_activos"][col]
 
             # LINE-IN auto-release: soltar columna después del delay
             if evento.type == pygame.KEYUP and hasattr(evento, "_linein_col_up"):
