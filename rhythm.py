@@ -4504,19 +4504,14 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
                 filtradas.append(n)
         notas_jugador = filtradas
 
-    # --- power-ups: cantidad variable por cancion (decidida por seed) ---
-    #   ~25% ninguno   ~50% uno solo   ~20% dos o tres   ~5% varios (4-5)
-    # Asi la aparicion se siente organica: a veces la cancion no trae nada,
-    # a veces un premio, y ocasionalmente una lluvia.
-    _roll_pu = rng.random()
-    if _roll_pu < 0.25:
-        cantidad_pu = 0
-    elif _roll_pu < 0.75:
-        cantidad_pu = 1
-    elif _roll_pu < 0.95:
-        cantidad_pu = rng.randint(2, 3)
-    else:
-        cantidad_pu = rng.randint(4, 5)
+    # --- power-ups: cantidad segun la DURACION de la cancion ---
+    # Las canciones ahora cubren el stage entero (dur_mult), asi que una
+    # cantidad fija por cancion los volvia escasos en canciones largas.
+    # Regla: ~1 power-up cada ~20s de nudo, con variacion por seed
+    # (0.7x a 1.4x: algunas canciones son generosas, otras austeras).
+    # Siempre al menos 1 (antes el 25% de las canciones no traia ninguno).
+    _dur_nudo_s = max(1.0, (t_nudo_fin - t_intro_fin) / 1000.0)
+    cantidad_pu = max(1, int(_dur_nudo_s / 20.0 * rng.uniform(0.7, 1.4)))
     if cantidad_pu > 0:
         # distribuir en la duracion util del nudo, con un jitter aleatorio
         margen_ini = 8000
