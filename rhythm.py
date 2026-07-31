@@ -5383,7 +5383,7 @@ def dibujar_fondo_lissajous(partida, ahora):
     ultimo_hit = partida.get("ultimo_hit") or {}
     _hit_texto = ultimo_hit.get("texto", "")
     _hit_age = ahora - ultimo_hit.get("tiempo", 0)
-    if _hit_texto in ("MAL", "BOMBA") and _hit_age < 600:
+    if _hit_texto in ("MAL", "TEMPRANO", "TARDE", "BOMBA") and _hit_age < 600:
         # el enemigo se fortalece cuando fallas: brilla fuerte y deja de temblar
         recuperacion = 1.0 - (_hit_age / 600.0)
         pulso = max(pulso, recuperacion * 0.9)
@@ -6118,9 +6118,10 @@ def dibujar_tutorial(pagina):
             l = fuente_chica.render(lbl, True, GRIS_MED)
             pantalla.blit(l, (demo_x + i * col_w + col_w // 2 - l.get_width() // 2, linea_y + 12))
         linea("PRECISION:", 395, BLANCO)
-        linea("PERFECTO > BIEN > OK > MAL (rompe combo)", 417)
-        linea("APRETAR SIN NOTA CERCA: -1 PUNTO", 439, GRIS)
-        linea("EN FACIL LA TECLA SE ILUMINA CUANDO HAY QUE APRETAR", 465, (255, 180, 60))
+        linea("PERFECTO > BIEN > OK > TEMPRANO/TARDE (rompe combo)", 417)
+        linea("TEMPRANO NO GASTA LA NOTA: PODES VOLVER A PEGARLE", 439)
+        linea("APRETAR SIN NOTA CERCA: -1 PUNTO", 461, GRIS)
+        linea("EN FACIL LA TECLA SE ILUMINA CUANDO HAY QUE APRETAR", 487, (255, 180, 60))
 
     elif pagina == 2:
         # HOLDS Y ACORDES
@@ -9388,11 +9389,25 @@ while corriendo:
                                 else:
                                     pts = 0
                                     partida["combo"] = 0
-                                    partida["ultimo_hit"] = {"texto": "MAL", "tiempo": ahora_ms}
                                     partida["n_mal"] = partida.get("n_mal", 0) + 1
                                     crear_explosion(cx, zy_p, 8, GRIS_MED)
                                     crear_shake(8)
                                     crear_indicador_hit(col, "error")
+                                    if grupo["tiempo_ms"] > ahora_juego:
+                                        # TEMPRANO: la nota todavia no llego a la
+                                        # linea. Rompe el combo pero NO consume la
+                                        # nota: sigue cayendo y se puede volver a
+                                        # pegar bien. (Antes se la comia: castigo
+                                        # doble y una nota que "desaparecia" antes
+                                        # de llegar, confuso en pasajes densos.)
+                                        partida["ultimo_hit"] = {"texto": "TEMPRANO", "tiempo": ahora_ms}
+                                        grupo["acertadas"].discard(col)
+                                        crear_texto_flotante(cx, zy_p - 20, "TEMPRANO", GRIS_MED)
+                                        break
+                                    # TARDE: la nota ya paso la linea. Se consume
+                                    # como siempre: dejarla seguir cayendo seria
+                                    # sumarle ADEMAS el MISS de -2 de vida.
+                                    partida["ultimo_hit"] = {"texto": "TARDE", "tiempo": ahora_ms}
                                 if partida["combo"] > partida["max_combo"]:
                                     partida["max_combo"] = partida["combo"]
                                 if (partida.get("perk_regen") and partida["combo"] > 0
@@ -9455,8 +9470,8 @@ while corriendo:
                                         crear_texto_flotante(cx, zy_p - 20, txt_pts, BLANCO, es_grande)
                                         partida["puntos"] += total_pts
                                     else:
-                                        # mal timing: rompe combo pero NO resta puntos
-                                        crear_texto_flotante(cx, zy_p - 20, "MAL", GRIS_MED)
+                                        # tarde: rompe combo pero NO resta puntos
+                                        crear_texto_flotante(cx, zy_p - 20, "TARDE", GRIS_MED)
                                     if partida["combo"] > 0 and partida["combo"] % 5 == 0 and partida["combo"] % 10 != 0:
                                         crear_texto_flotante(ANCHO // 2, zy_p - 80, f"{partida['combo']}x", col_g, True)
                                     if grupo["acertadas"] == set(grupo["cols"]):
