@@ -2938,24 +2938,33 @@ def get_dificultad(seed):
             d = dict(DIFICULTADES[i + 1]); d["nivel"] = i + 1; return d
     d = dict(DIFICULTADES[15]); d["nivel"] = 15; return d
 
-# --- meta de puntuacion por stage (objetivo roguelike) ---
-# la meta base escala con el nivel de dificultad; stages sucesivos piden mas
-META_BASE = {
-    # niveles mas largos en general, y progresivamente MAS largos a partir
-    # de NORMAL (nivel 3): el factor de escala sube ~x1.2 en facil hasta
-    # ~x2.5 en GOD/CHAOS. La meta controla la duracion real del stage
-    # (la cancion loopea hasta alcanzarla).
-    1: 150,   2: 220,   3: 420,   4: 680,   5: 950,
-    6: 1350,  7: 2000,  8: 2850,  9: 4000,  10: 5900,
-    11: 7700, 12: 10500, 13: 14500, 14: 20000, 15: 25000,
+# --- meta por stage: NOTAS ACERTADAS (objetivo roguelike) ---
+# La meta se mide en notas acertadas (PERFECTO/BIEN/OK), NO en puntos.
+# Antes era una meta de puntos y eso acoplaba el score con la duracion del
+# stage: todo multiplicador (mods, perks MULTI/PERFECTO+, combo) acortaba
+# el stage ademas de subir el score, y al jugador que le iba mal el stage
+# se le alargaba justo cuando menos vida le quedaba (espiral de castigo).
+# Con la meta en notas, el progreso depende SOLO de la precision del
+# jugador: los multiplicadores afectan el leaderboard, no la duracion.
+#
+# LOOPS_NIVEL: vueltas de cancion que pide un stage a precision perfecta.
+# Sube suave con el nivel (las canciones de niveles altos ya son mas
+# largas y densas de por si). META_MULT_STAGE alarga stages sucesivos.
+LOOPS_NIVEL = {
+    1: 0.9,  2: 0.9,  3: 1.0,  4: 1.0,  5: 1.1,
+    6: 1.1,  7: 1.2,  8: 1.2,  9: 1.3,  10: 1.3,
+    11: 1.4, 12: 1.4, 13: 1.5, 14: 1.5, 15: 1.6,
 }
 META_MULT_STAGE = {1: 1.0, 2: 1.3, 3: 1.6, 4: 2.0}
 
-def calcular_meta(nivel_dif, stage_n):
-    """Devuelve la meta de puntos para un stage (puntos a ganar EN ese stage)."""
-    base = META_BASE.get(nivel_dif, 1000)
-    mult = META_MULT_STAGE.get(stage_n, 1.0)
-    return int(base * mult)
+def meta_loops(nivel_dif, stage_n):
+    """Vueltas de cancion que pide el stage (a precision perfecta)."""
+    return LOOPS_NIVEL.get(nivel_dif, 1.0) * META_MULT_STAGE.get(stage_n, 1.0)
+
+def calcular_meta(nivel_dif, stage_n, hits_por_loop):
+    """Meta del stage en NOTAS ACERTADAS. hits_por_loop = aciertos posibles
+    en una vuelta de la cancion (columnas de notas y power-ups, sin bombas)."""
+    return max(10, int(hits_por_loop * meta_loops(nivel_dif, stage_n)))
 
 def elegir_kit(rng):
     return sintetizar_kit(rng)
@@ -4802,7 +4811,8 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         "notas_cayendo":  [],
         "puntos":         puntos_iniciales,
         "puntos_stage_inicio": puntos_iniciales,  # puntos con los que arranco este stage
-        "meta_puntos":   0,    # meta del stage (se calcula abajo con perks)
+        "meta_notas":    0,    # meta del stage en notas acertadas (0 = modo libre)
+        "meta_hits":     0,    # notas acertadas hasta ahora (progreso de la meta)
         "loop_offset":   0,    # offset temporal para loop de cancion (ms)
         "terminada":      False,
         "holds_activos":  {},
@@ -4867,13 +4877,17 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         elif pid == "cazador":
             p["perk_cazador"] = True       # power-ups duran el doble
     # calcular meta del stage (en modo run; en modo libre meta=0 = sin limite)
+    # se calcula desde la cancion REAL (despues de aplicar mods como rafagas)
+    # asi la meta refleja las notas que de verdad van a caer.
     if stage_info:
         nivel = dif.get("nivel", 1)
-        p["meta_puntos"] = calcular_meta(nivel, stage_info.get("n", 1))
+        _hits_loop = sum(len(n["cols"]) for n in cancion["notas_jugador"]
+                         if not n.get("es_bomba"))
+        p["meta_notas"] = calcular_meta(nivel, stage_info.get("n", 1), _hits_loop)
     # modo TUTORIAL: meta chica, imposible morir
     if tutorial:
         p["es_tutorial"] = True
-        p["meta_puntos"] = 60
+        p["meta_notas"] = 15
 
     # --- ventanas de timing escaladas por dificultad ---
     # niveles faciles perdonan mas; niveles altos exigen precision.
@@ -5058,11 +5072,10 @@ def tick_background(partida, ahora):
     kit = c["kit"]
     loop_off = partida.get("loop_offset", 0)
 
-    # --- WIN CONDITION: alcanzar la meta de puntos del stage ---
-    meta = partida.get("meta_puntos", 0)
+    # --- WIN CONDITION: alcanzar la meta de notas acertadas del stage ---
+    meta = partida.get("meta_notas", 0)
     if meta > 0 and not partida["terminada"]:
-        ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
-        if ganado >= meta:
+        if partida.get("meta_hits", 0) >= meta:
             partida["terminada"] = True
             partida["terminada_t"] = pygame.time.get_ticks()
             pygame.mixer.stop()  # parar la musica al ganar
@@ -5267,10 +5280,9 @@ def dibujar_fondo_lissajous(partida, ahora):
     dano = (stage_n - 1) / max(1, NUM_STAGES - 1)  # 0.0 a 1.0
     # progreso dentro del stage actual: el daño aumenta a medida que se juega
     dur_total = partida["cancion"].get("duracion_loop", 1)
-    meta = partida.get("meta_puntos", 0)
+    meta = partida.get("meta_notas", 0)
     if meta > 0:
-        ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
-        prog_stage = min(ganado / max(1, meta), 1.0)
+        prog_stage = min(partida.get("meta_hits", 0) / max(1, meta), 1.0)
     else:
         prog_stage = min(ahora / max(1, dur_total), 1.0)
     # daño efectivo: base del stage + algo de progreso del stage actual
@@ -5771,16 +5783,16 @@ def dibujar_juego(partida, ahora):
     vida_lbl = fuente_chica.render("HP", True, GRIS)
     pantalla.blit(vida_lbl, (vida_x - vida_lbl.get_width() - 4, vida_y - 2))
 
-    meta = partida.get("meta_puntos", 0)
+    meta = partida.get("meta_notas", 0)
     if meta > 0:
-        ganado = partida["puntos"] - partida.get("puntos_stage_inicio", 0)
-        meta_pct = min(1.0, ganado / max(1, meta))
+        _hits_m = partida.get("meta_hits", 0)
+        meta_pct = min(1.0, _hits_m / max(1, meta))
         meta_y = 28
         pygame.draw.rect(pantalla, GRIS, (vida_x, meta_y, vida_w, 8))
         if meta_pct > 0:
             pygame.draw.rect(pantalla, col_nota, (vida_x, meta_y, int(vida_w * meta_pct), 8))
         pygame.draw.rect(pantalla, BLANCO, (vida_x, meta_y, vida_w, 8), 1)
-        meta_txt = fuente_chica.render(f"{ganado}/{meta}", True, GRIS_MED)
+        meta_txt = fuente_chica.render(f"{_hits_m}/{meta}", True, GRIS_MED)
         pantalla.blit(meta_txt, (vida_x - meta_txt.get_width() - 4, meta_y - 2))
 
     # instrumento actual: icono identitario + nombre (discreto, derecha)
@@ -5926,7 +5938,7 @@ def dibujar_juego(partida, ahora):
 
     elif partida["terminada"] and not partida["notas_cayendo"]:
         col_g = COLOR_GENERO.get(partida["cancion"].get("genero", ""), BLANCO)
-        meta = partida.get("meta_puntos", 0)
+        meta = partida.get("meta_notas", 0)
         if partida.get("es_tutorial"):
             fin = fuente.render("TUTORIAL COMPLETADO!", True, col_g)
         elif meta > 0:
@@ -5997,7 +6009,7 @@ def dibujar_tutorial(pagina):
 
     if pagina == 0:
         # COMO JUGAR
-        linea("CADA STAGE TIENE UNA META DE PUNTOS", 125, BLANCO, fuente)
+        linea("CADA STAGE TIENE UNA META DE NOTAS ACERTADAS", 125, BLANCO, fuente)
         linea("LA CANCION SE REPITE HASTA QUE LA ALCANCES", 160)
         linea("(O HASTA QUE TE QUEDES SIN VIDA)", 180)
         bar_w, bar_x, bar_y = 360, cx - 180, 235
@@ -6988,9 +7000,11 @@ def dibujar_run_overview():
         pd = fuente_chica.render(_ld, True, GRIS_MED)
         pantalla.blit(pd, (panel_x + 18, panel_y + 42 + _i * 16))
 
-    meta_st = calcular_meta(run_actual["nivel"], stage_act)
+    # la meta exacta en notas depende de la cancion (todavia no generada):
+    # mostrar la duracion objetivo en vueltas de cancion
+    _loops_st = meta_loops(run_actual["nivel"], stage_act)
     inst_st = run_actual.get("instrumentos", [""] * NUM_STAGES)[idx_act]
-    info_str = f"META: {meta_st} PTS"
+    info_str = f"META: CANCION x{_loops_st:.1f}"
     if inst_st:
         info_str += f" · {inst_st}"
     if p_mult:
@@ -9243,6 +9257,8 @@ while corriendo:
                                         crear_shake(6)
                                         sfx_power_up(pu_id)
                                         partida["combo"] += 1
+                                        # atrapar un power-up tambien avanza la meta
+                                        partida["meta_hits"] = partida.get("meta_hits", 0) + 1
                                         if partida["combo"] > partida["max_combo"]:
                                             partida["max_combo"] = partida["combo"]
                                         if (partida.get("perk_regen") and partida["combo"] > 0
@@ -9258,6 +9274,7 @@ while corriendo:
                                     pot = min(1.0 + partida["combo"] * 0.03, 1.8)
                                     partida["ultimo_hit"] = {"texto": "PERFECTO", "tiempo": ahora_ms}
                                     partida["n_perfecto"] = partida.get("n_perfecto", 0) + 1
+                                    partida["meta_hits"] = partida.get("meta_hits", 0) + 1
                                     combo_particulas = min(50 + partida["combo"] * 4, 250)
                                     crear_explosion(cx, zy_p, combo_particulas, color=col_g, potencia=pot, combo=partida["combo"])
                                     crear_onda(cx, zy_p, 0.7)
@@ -9274,6 +9291,7 @@ while corriendo:
                                     pot = min(1.0 + partida["combo"] * 0.02, 1.5)
                                     partida["ultimo_hit"] = {"texto": "BIEN", "tiempo": ahora_ms}
                                     partida["n_bien"] = partida.get("n_bien", 0) + 1
+                                    partida["meta_hits"] = partida.get("meta_hits", 0) + 1
                                     crear_explosion(cx, zy_p, min(30 + partida["combo"] * 2, 150), color=col_g, potencia=pot, combo=partida["combo"])
                                     crear_onda(cx, zy_p, 0.5)
                                     crear_flash(col, 0.4)
@@ -9285,6 +9303,7 @@ while corriendo:
                                     partida["combo"] += 1
                                     partida["ultimo_hit"] = {"texto": "OK", "tiempo": ahora_ms}
                                     partida["n_ok"] = partida.get("n_ok", 0) + 1
+                                    partida["meta_hits"] = partida.get("meta_hits", 0) + 1
                                     crear_explosion(cx, zy_p, 20, color=col_g, combo=partida["combo"])
                                     crear_onda(cx, zy_p, 0.4)
                                     crear_flash(col, 0.3)
@@ -9735,9 +9754,14 @@ while corriendo:
                                     crear_texto_flotante(cxa, zy_p - 30, pu_def_a["nombre"], pu_def_a["color"], True)
                                 crear_explosion(cxa, zy_p, 80, color=pu_def_a["color"])
                                 sfx_power_up(pu_id_a)
+                            partida["meta_hits"] = partida.get("meta_hits", 0) + 1
                             continue  # power-up consumido, no vuelve a la lista
-                        # acreditar como PERFECTO
+                        # acreditar como PERFECTO (cuenta para el rank y para
+                        # la meta: si no, el power-up AUTO frenaria el
+                        # progreso del stage en vez de ser un premio)
                         partida["combo"] += 1
+                        partida["n_perfecto"] = partida.get("n_perfecto", 0) + len(grupo["cols"])
+                        partida["meta_hits"] = partida.get("meta_hits", 0) + len(grupo["cols"])
                         if partida["combo"] > partida["max_combo"]:
                             partida["max_combo"] = partida["combo"]
                         if (partida.get("perk_regen") and partida["combo"] > 0
