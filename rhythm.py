@@ -2942,18 +2942,19 @@ def get_dificultad(seed):
             d = dict(DIFICULTADES[i + 1]); d["nivel"] = i + 1; return d
     d = dict(DIFICULTADES[15]); d["nivel"] = 15; return d
 
-# --- meta por stage: NOTAS ACERTADAS (objetivo roguelike) ---
-# La meta se mide en notas acertadas (PERFECTO/BIEN/OK), NO en puntos.
-# Antes era una meta de puntos y eso acoplaba el score con la duracion del
-# stage: todo multiplicador (mods, perks MULTI/PERFECTO+, combo) acortaba
-# el stage ademas de subir el score, y al jugador que le iba mal el stage
-# se le alargaba justo cuando menos vida le quedaba (espiral de castigo).
-# Con la meta en notas, el progreso depende SOLO de la precision del
-# jugador: los multiplicadores afectan el leaderboard, no la duracion.
+# --- meta por stage: NOTAS ACERTADAS sobre una cancion a medida ---
+# La meta se mide en notas acertadas (PERFECTO/BIEN/OK), NO en puntos:
+# el progreso del stage depende SOLO de la precision del jugador, y los
+# multiplicadores de puntos (mods, perks, combo) afectan el leaderboard
+# sin alargar ni acortar el stage.
 #
-# LOOPS_NIVEL: vueltas de cancion que pide un stage a precision perfecta.
-# Sube suave con el nivel (las canciones de niveles altos ya son mas
-# largas y densas de por si). META_MULT_STAGE alarga stages sucesivos.
+# La cancion de cada stage se GENERA del largo del stage completo
+# (dur_mult = meta_loops): una sola pieza con intro, desarrollo y final
+# que avanza junto con el jugador, sin reiniciar. La meta es META_FRAC
+# de las notas acertables de esa cancion: jugando bien, el stage se
+# completa cerca del climax. Si el jugador se atrasa por misses, la
+# cancion retoma desde el nudo (nunca vuelve a la intro).
+META_FRAC = 0.92
 LOOPS_NIVEL = {
     1: 0.9,  2: 0.9,  3: 1.0,  4: 1.0,  5: 1.1,
     6: 1.1,  7: 1.2,  8: 1.2,  9: 1.3,  10: 1.3,
@@ -2962,13 +2963,8 @@ LOOPS_NIVEL = {
 META_MULT_STAGE = {1: 1.0, 2: 1.3, 3: 1.6, 4: 2.0}
 
 def meta_loops(nivel_dif, stage_n):
-    """Vueltas de cancion que pide el stage (a precision perfecta)."""
+    """Multiplicador de duracion de la cancion del stage."""
     return LOOPS_NIVEL.get(nivel_dif, 1.0) * META_MULT_STAGE.get(stage_n, 1.0)
-
-def calcular_meta(nivel_dif, stage_n, hits_por_loop):
-    """Meta del stage en NOTAS ACERTADAS. hits_por_loop = aciertos posibles
-    en una vuelta de la cancion (columnas de notas y power-ups, sin bombas)."""
-    return max(10, int(hits_por_loop * meta_loops(nivel_dif, stage_n)))
 
 def elegir_kit(rng):
     return sintetizar_kit(rng)
@@ -3508,9 +3504,8 @@ FORMAS_CANCION = {
 def elegir_forma(rng, nivel_dif):
     """Elige un arquetipo de forma segun la seed y el nivel de dificultad.
     Niveles bajos -> formas mas simples y cortas; altos -> mas elaboradas.
-    A partir de NORMAL (nivel 3) las formas crecen progresivamente: como los
-    niveles ahora duran mas (metas mas altas), la cancion base mas larga hace
-    que el loop se repita menos veces y la repeticion se note menos."""
+    (El largo final del stage lo ajusta dur_mult en generar_cancion,
+    repitiendo ciclos verso/estribillo hasta cubrir el stage entero.)"""
     if nivel_dif <= 2:
         pool = ["corta", "minima", "simple", "simple"]
     elif nivel_dif <= 5:
@@ -3540,7 +3535,10 @@ def compases_por_seccion(nombre, rng, nivel_dif):
     return rng.choice([8, 8])
 
 
-def generar_cancion(seed, dif, instrumento_forzado=None):
+def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
+    """dur_mult alarga la cancion (mas ciclos verso/estribillo) sin tocar
+    el resto: en los stages la cancion se genera del largo del stage
+    completo para que avance junto con el jugador, sin reiniciar."""
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
     rng          = random.Random(seed)
@@ -3605,6 +3603,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     dur_total_min, dur_total_max = 26.0, 115.0
     dur_total_obj = dur_total_min + (nivel_dif - 1) / 14 * (dur_total_max - dur_total_min)
     dur_total_obj *= rng.uniform(0.9, 1.1)
+    # stages: la cancion cubre el stage entero (x1.0 stage 1 .. x3.2 CHAOS st4)
+    dur_total_obj *= max(0.5, dur_mult)
     seg_por_compas = (4 * beat) / 1000.0
 
     forma = elegir_forma(rng, nivel_dif)
@@ -3630,7 +3630,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
     idx_nucleo = [i for i, s in enumerate(plan_secciones)
                   if s["nombre"] in ("verso", "estribillo")]
     guard = 0
-    while compases_forma < compases_obj * 0.85 and idx_nucleo and guard < 8:
+    # guard 20: con dur_mult 3.2 (CHAOS stage 4) hacen falta muchos ciclos
+    while compases_forma < compases_obj * 0.85 and idx_nucleo and guard < 20:
         # insertar una repeticion de verso+estribillo antes del outro
         pos_outro = next((i for i, s in enumerate(plan_secciones)
                           if s["nombre"] == "outro"), len(plan_secciones))
@@ -4643,7 +4644,11 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         dif = dict(dif)
         dif["columnas"] = 4
         dif["acordes"] = False
-    cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado)
+    # en stages, la cancion se genera del largo del stage completo: asi la
+    # musica avanza junto con el jugador y no hace falta loopear (casi) nunca
+    _dur_mult = meta_loops(dif.get("nivel", 1), stage_info.get("n", 1)) if stage_info else 1.0
+    cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado,
+                              dur_mult=_dur_mult)
     # modo instrumento: simplificar la cancion para line-in
     if modo_instrumento:
         simplificar_para_instrumento(cancion)
@@ -4884,13 +4889,14 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         elif pid == "cazador":
             p["perk_cazador"] = True       # power-ups duran el doble
     # calcular meta del stage (en modo run; en modo libre meta=0 = sin limite)
-    # se calcula desde la cancion REAL (despues de aplicar mods como rafagas)
-    # asi la meta refleja las notas que de verdad van a caer.
+    # la cancion ya se genero del largo del stage completo (dur_mult), asi
+    # que la meta es un % de sus notas: jugando bien, el stage se completa
+    # cerca del final de la cancion (sin verla reiniciar). Se cuenta desde
+    # la cancion REAL (post-mods como rafagas), sin bombas.
     if stage_info:
-        nivel = dif.get("nivel", 1)
-        _hits_loop = sum(len(n["cols"]) for n in cancion["notas_jugador"]
-                         if not n.get("es_bomba"))
-        p["meta_notas"] = calcular_meta(nivel, stage_info.get("n", 1), _hits_loop)
+        _hits_total = sum(len(n["cols"]) for n in cancion["notas_jugador"]
+                          if not n.get("es_bomba"))
+        p["meta_notas"] = max(10, int(_hits_total * META_FRAC))
     # modo TUTORIAL: meta chica, imposible morir
     if tutorial:
         p["es_tutorial"] = True
@@ -5094,16 +5100,50 @@ def tick_background(partida, ahora):
     if meta == 0 and ahora >= c["duracion_loop"] and not partida["terminada"]:
         partida["terminada"] = True
 
-    # --- LOOP: cuando se agotan perc/bajo/jugador, resetear y avanzar offset ---
+    # --- LOOP DE FALLBACK: la cancion se genera del largo del stage, asi
+    # que esto solo pasa si el jugador se atraso por misses. Para que no
+    # se sienta que la cancion "vuelve a empezar", se salta la intro y
+    # retoma desde el nudo (menos un margen de anticipacion, para que las
+    # primeras notas entren desde arriba y no aparezcan sobre la linea).
     perc_done = partida["indice_perc"] >= len(c["percusion"])
     bajo_done = partida["indice_bajo"] >= len(c["bajo"]["eventos"])
     jug_done  = partida["indice_jugador"] >= len(c["notas_jugador"])
     if perc_done and bajo_done and not partida["terminada"]:
-        partida["loop_offset"] = loop_off + c["duracion_loop"]
-        partida["indice_perc"] = 0
-        partida["indice_bajo"] = 0
+        t_skip = 0
+        _t_intro_lp = 0
+        if partida.get("meta_notas", 0) > 0:
+            _vel_lp = partida.get("velocidad", VELOCIDAD)
+            _px_ms_lp = _vel_lp / (1000 / 60)
+            _zy_lp = partida.get("zona_y", ZONA_Y)
+            if partida.get("es_inverso"):
+                _antic_lp = (ALTO - _zy_lp + 60) / max(0.01, _px_ms_lp)
+            else:
+                _antic_lp = (_zy_lp + 60) / max(0.01, _px_ms_lp)
+            _t_intro_lp = c.get("estructura", {}).get("intro_fin", 0)
+            t_skip = max(0, _t_intro_lp - int(_antic_lp) - 300)
+        partida["loop_offset"] = loop_off + c["duracion_loop"] - t_skip
+        _ip = 0
+        _perc0 = c["percusion"]
+        while _ip < len(_perc0) and _perc0[_ip]["tiempo"] < t_skip:
+            _ip += 1
+        partida["indice_perc"] = _ip
+        _ib = 0
+        _bajo0 = c["bajo"]["eventos"]
+        while _ib < len(_bajo0) and _bajo0[_ib]["tiempo"] < t_skip:
+            _ib += 1
+        partida["indice_bajo"] = _ib
         if jug_done:
-            partida["indice_jugador"] = 0
+            # las notas jugables saltean la intro COMPLETA aunque el audio
+            # retome un poco antes (t_skip): ese tramo suena como fill de
+            # entrada sin notas, y la primera nota jugable del nudo entra
+            # desde arriba con la anticipacion completa (no aparece en
+            # mitad de pantalla).
+            _t_skip_notas = _t_intro_lp if t_skip > 0 else 0
+            _ij = 0
+            _njug0 = c["notas_jugador"]
+            while _ij < len(_njug0) and _njug0[_ij]["tiempo"] < _t_skip_notas:
+                _ij += 1
+            partida["indice_jugador"] = _ij
         partida["_arranco_audio"] = False   # re-aplicar anti-avalancha en el nuevo loop
         partida["_arranco_notas"] = False  # re-aplicar anti-avalancha de notas
         loop_off = partida["loop_offset"]
@@ -6017,8 +6057,8 @@ def dibujar_tutorial(pagina):
     if pagina == 0:
         # COMO JUGAR
         linea("CADA STAGE TIENE UNA META DE NOTAS ACERTADAS", 125, BLANCO, fuente)
-        linea("LA CANCION SE REPITE HASTA QUE LA ALCANCES", 160)
-        linea("(O HASTA QUE TE QUEDES SIN VIDA)", 180)
+        linea("LA CANCION DURA TODO EL STAGE Y AVANZA CON VOS", 160)
+        linea("(SI TE QUEDAS SIN VIDA, PERDES EL RUN)", 180)
         bar_w, bar_x, bar_y = 360, cx - 180, 235
         prog = (math.sin(t_anim * 0.8) * 0.5 + 0.5)
         pygame.draw.rect(pantalla, GRIS, (bar_x, bar_y, bar_w, 16))
@@ -7007,11 +7047,11 @@ def dibujar_run_overview():
         pd = fuente_chica.render(_ld, True, GRIS_MED)
         pantalla.blit(pd, (panel_x + 18, panel_y + 42 + _i * 16))
 
-    # la meta exacta en notas depende de la cancion (todavia no generada):
-    # mostrar la duracion objetivo en vueltas de cancion
+    # la cancion del stage se genera de este largo (x1.0 = duracion base
+    # del nivel); la meta exacta en notas depende de la cancion generada
     _loops_st = meta_loops(run_actual["nivel"], stage_act)
     inst_st = run_actual.get("instrumentos", [""] * NUM_STAGES)[idx_act]
-    info_str = f"META: CANCION x{_loops_st:.1f}"
+    info_str = f"CANCION x{_loops_st:.1f}"
     if inst_st:
         info_str += f" · {inst_st}"
     if p_mult:
