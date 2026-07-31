@@ -134,6 +134,7 @@ config = {
     "vol_menu": 0.5,    # 0.0 a 1.0 (volumen de la musica del menu)
     "res_idx": 2,       # indice en RESOLUCIONES (1080x960)
     "audio_idx": 0,     # 0 = default, 1+ = dispositivo especifico
+    "judge_offset": 0,  # compensacion de latencia (ms) para teclado/gamepad
 }
 
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -160,6 +161,7 @@ def cargar_config():
         config["vol_menu"] = max(0.0, min(1.0, config["vol_menu"]))
         config["res_idx"] = max(0, min(len(RESOLUCIONES) - 1, config["res_idx"]))
         config["audio_idx"] = max(0, min(len(AUDIO_DEVICES) - 1, config["audio_idx"]))
+        config["judge_offset"] = max(0, min(300, int(config["judge_offset"])))
     except Exception:
         pass
 
@@ -6484,7 +6486,7 @@ def dibujar_selector_seed(seed_actual, cargando):
     esc = fuente_chica.render("ESC = VOLVER AL MENU", True, GRIS)
     pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 40))
 
-config_opcion = 0  # 0=brillo, 1=volumen, 2=vol_menu, 3=resolucion, 4=audio
+config_opcion = 0  # 0=brillo 1=volumen 2=vol_menu 3=resolucion 4=audio 5=latencia 6=teclas 7=linein
 pausa_opcion = 0   # 0=continuar, 1=reiniciar, 2=salir
 mods_opcion = 0    # opcion seleccionada en pantalla de modificadores
 carrera_cursor = 0 # nivel seleccionado en la pantalla de carrera (0-indexed)
@@ -7505,12 +7507,13 @@ def dibujar_config():
         ("VOL. MENU", config["vol_menu"], "barra"),
         ("RESOLUCION", config["res_idx"], "res"),
         ("AUDIO", config["audio_idx"], "audio"),
+        ("LATENCIA", config.get("judge_offset", 0), "latencia"),
         ("TECLAS", 0, "teclas"),
         ("TECLADO MUSICAL", 0, "linein"),
     ]
     y0 = 145
     for i, (nombre, valor, tipo) in enumerate(opciones):
-        y = y0 + i * 48
+        y = y0 + i * 44
         sel = (i == config_opcion)
         marca = "> " if sel else "  "
         color = BLANCO if sel else GRIS_MED
@@ -7536,6 +7539,11 @@ def dibujar_config():
                 dev_name = dev_name[:22] + ".."
             dev_txt = fuente_chica.render(dev_name, True, color)
             pantalla.blit(dev_txt, (ANCHO - 300, y + 6))
+        elif tipo == "latencia":
+            lat_txt = fuente.render(f"{valor}ms", True, color)
+            pantalla.blit(lat_txt, (ANCHO - 300, y))
+            hint = fuente_chica.render("ENTER = MEDIR", True, (255, 180, 60) if sel else GRIS)
+            pantalla.blit(hint, (ANCHO - 190, y + 6))
         elif tipo == "teclas":
             keys_str = " ".join(LABELS[:min(8, len(LABELS))])
             keys_txt = fuente_chica.render(keys_str, True, color)
@@ -8174,7 +8182,7 @@ if LINEIN_DISPONIBLE and linein_notas_cal:
         print(f"No se pudo auto-activar line-in: {e}")
 
 
-# --- MEDICION DE LATENCIA DEL LINE-IN ---
+# --- MEDICION DE LATENCIA (line-in, teclado o gamepad) ---
 latencia_muestras = []
 latencia_flash_time = 0
 latencia_flash_activo = False
@@ -8182,6 +8190,10 @@ latencia_esperando = False
 latencia_intervalo = 2200
 latencia_resultado = -1
 LATENCIA_NUM_MUESTRAS = 6
+# desde donde se abrio la medicion: "config" aplica el resultado al offset
+# global de teclado/gamepad (config["judge_offset"]); "linein_setup" al
+# offset del teclado musical (LINEIN_OFFSET_MS).
+latencia_origen = "linein_setup"
 
 def dibujar_medir_latencia():
     pantalla.fill(NEGRO)
@@ -8192,7 +8204,10 @@ def dibujar_medir_latencia():
     pygame.draw.line(pantalla, (255, 180, 60), (60, 65), (ANCHO - 60, 65), 1)
     n_hechas = len(latencia_muestras)
     if n_hechas < LATENCIA_NUM_MUESTRAS:
-        inst = fuente_chica.render("TOCA CUALQUIER NOTA CUANDO APARECE  YA!", True, GRIS_MED)
+        if latencia_origen == "config":
+            inst = fuente_chica.render("APRETA CUALQUIER TECLA DE JUEGO CUANDO APARECE  YA!", True, GRIS_MED)
+        else:
+            inst = fuente_chica.render("TOCA CUALQUIER NOTA CUANDO APARECE  YA!", True, GRIS_MED)
         pantalla.blit(inst, (cx - inst.get_width() // 2, 80))
         prog = fuente_chica.render(f"MUESTRA {n_hechas + 1} DE {LATENCIA_NUM_MUESTRAS}", True, GRIS)
         pantalla.blit(prog, (cx - prog.get_width() // 2, 105))
@@ -8248,7 +8263,8 @@ def dibujar_medir_latencia():
         esc = fuente_chica.render("ESC = CANCELAR", True, GRIS)
         pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 35))
         # indicador del offset actual + promedio parcial
-        off_actual = fuente_chica.render(f"OFFSET ACTUAL: {LINEIN_OFFSET_MS}ms", True, GRIS)
+        _off_ref = config.get("judge_offset", 0) if latencia_origen == "config" else LINEIN_OFFSET_MS
+        off_actual = fuente_chica.render(f"OFFSET ACTUAL: {_off_ref}ms", True, GRIS)
         pantalla.blit(off_actual, (cx - off_actual.get_width() // 2, ALTO - 60))
         if latencia_muestras:
             _prom_parcial = sum(latencia_muestras) // len(latencia_muestras)
@@ -8584,20 +8600,29 @@ while corriendo:
                     guardar_config()
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
-                    config_opcion = (config_opcion - 1) % 7
+                    config_opcion = (config_opcion - 1) % 8
                     sfx_select()
                 elif evento.key == pygame.K_DOWN:
-                    config_opcion = (config_opcion + 1) % 7
+                    config_opcion = (config_opcion + 1) % 8
                     sfx_select()
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if config_opcion == 5:
+                        # medir latencia global (teclado/gamepad)
+                        sfx_confirm()
+                        latencia_origen = "config"
+                        latencia_muestras.clear()
+                        latencia_flash_time = pygame.time.get_ticks()
+                        latencia_flash_activo = False
+                        latencia_esperando = False
+                        ESTADO = "medir_latencia"
+                    elif config_opcion == 6:
                         # abrir pantalla de rebind de teclas
                         sfx_confirm()
                         rebind_col = 0
                         rebind_esperando = False
                         rebind_bindings = dict(cargar_bindings())
                         ESTADO = "rebind"
-                    elif config_opcion == 6:
+                    elif config_opcion == 7:
                         # abrir setup de teclado musical (seleccion de dispositivo)
                         sfx_confirm()
                         if LINEIN_DISPONIBLE:
@@ -8621,6 +8646,8 @@ while corriendo:
                         nuevo = max(0, config["audio_idx"] - 1)
                         if nuevo != config["audio_idx"]:
                             cambiar_audio_device(nuevo)
+                    elif config_opcion == 5:
+                        config["judge_offset"] = max(0, config.get("judge_offset", 0) - 10)
                 elif evento.key == pygame.K_RIGHT:
                     if config_opcion == 0:
                         config["brillo"] = min(1.0, round(config["brillo"] + 0.1, 1))
@@ -8635,6 +8662,8 @@ while corriendo:
                         nuevo = min(len(AUDIO_DEVICES) - 1, config["audio_idx"] + 1)
                         if nuevo != config["audio_idx"]:
                             cambiar_audio_device(nuevo)
+                    elif config_opcion == 5:
+                        config["judge_offset"] = min(300, config.get("judge_offset", 0) + 10)
 
         elif ESTADO == "rebind":
             if evento.type == pygame.KEYDOWN:
@@ -8721,6 +8750,7 @@ while corriendo:
                     if not linein_activo and linein_devices:
                         dev_info = linein_devices[linein_dev_idx]
                         linein_abrir(dev_info["idx"], con_monitor=True)
+                    latencia_origen = "linein_setup"
                     latencia_muestras.clear()
                     latencia_flash_time = pygame.time.get_ticks()
                     latencia_flash_activo = False
@@ -8769,28 +8799,59 @@ while corriendo:
                     linein_monitor = not linein_monitor
 
         elif ESTADO == "medir_latencia":
+            # una muestra puede venir del line-in (evento sintetico), del
+            # gamepad (cualquier boton) o del teclado (cualquier tecla que
+            # no sea de control: ESC/ENTER/SPACE/R navegan la pantalla).
+            _lat_completa = len(latencia_muestras) >= LATENCIA_NUM_MUESTRAS
+            _es_muestra_lat = False
+            if evento.type == pygame.KEYDOWN and hasattr(evento, "_linein_col"):
+                _es_muestra_lat = True
+            elif evento.type == pygame.JOYBUTTONDOWN and not _lat_completa:
+                # mientras se mide, cualquier boton del pad es una muestra;
+                # con la medicion completa, los botones pasan a navegar.
+                _es_muestra_lat = True
+            elif (evento.type == pygame.KEYDOWN
+                  and evento.key not in (pygame.K_ESCAPE, pygame.K_RETURN,
+                                         pygame.K_SPACE, pygame.K_r)):
+                _es_muestra_lat = True
+            if _es_muestra_lat:
+                if latencia_esperando and latencia_flash_time > 0:
+                    delay = pygame.time.get_ticks() - latencia_flash_time
+                    if delay < 1500:
+                        latencia_muestras.append(delay)
+                        latencia_esperando = False
+                        latencia_flash_activo = False
+                        latencia_flash_time = pygame.time.get_ticks()
+                continue
+            _aplicar_lat = False
+            _salir_lat = False
             if evento.type == pygame.KEYDOWN:
-                if hasattr(evento, "_linein_col"):
-                    if latencia_esperando and latencia_flash_time > 0:
-                        delay = pygame.time.get_ticks() - latencia_flash_time
-                        if delay < 1500:
-                            latencia_muestras.append(delay)
-                            latencia_esperando = False
-                            latencia_flash_activo = False
-                            latencia_flash_time = pygame.time.get_ticks()
-                    continue
                 if evento.key == pygame.K_ESCAPE:
-                    ESTADO = "linein_setup"
+                    _salir_lat = True
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if len(latencia_muestras) >= LATENCIA_NUM_MUESTRAS:
-                        LINEIN_OFFSET_MS = sum(latencia_muestras) // len(latencia_muestras)
-                        sfx_confirm()
-                        ESTADO = "linein_setup"
+                    _aplicar_lat = True
                 elif evento.key == pygame.K_r:
                     latencia_muestras.clear()
                     latencia_flash_time = pygame.time.get_ticks()
                     latencia_flash_activo = False
                     latencia_esperando = False
+            elif evento.type == pygame.JOYBUTTONDOWN:
+                # solo llega aca con la medicion completa (pantalla de resultado)
+                if pad_es_back(evento.button):
+                    _salir_lat = True
+                elif pad_es_confirm(evento.button):
+                    _aplicar_lat = True
+            if _salir_lat:
+                ESTADO = latencia_origen
+            elif _aplicar_lat and _lat_completa:
+                _prom_lat = sum(latencia_muestras) // len(latencia_muestras)
+                if latencia_origen == "config":
+                    config["judge_offset"] = max(0, min(300, _prom_lat))
+                    guardar_config()
+                else:
+                    LINEIN_OFFSET_MS = _prom_lat
+                sfx_confirm()
+                ESTADO = latencia_origen
 
         elif ESTADO == "input_nombre":
             if evento.type == pygame.KEYDOWN:
@@ -9031,12 +9092,13 @@ while corriendo:
 
                 # buscar la nota objetivo más cercana en esta columna
                 ahora_rel = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
-                # LINE-IN: compensar latencia adelantando el tiempo de comparacion
-                # Esto hace que el scoring juzgue como si el jugador hubiera
-                # tocado OFFSET ms antes (la nota le "llega" tarde al juego
-                # por el buffer de audio, asi que lo corregimos aca).
-                if _es_linein:
-                    ahora_rel += LINEIN_OFFSET_MS
+                # COMPENSACION DE LATENCIA: adelanta el tiempo de comparacion
+                # para que el scoring juzgue como si el jugador hubiera tocado
+                # OFFSET ms antes (el input le "llega" tarde al juego por la
+                # latencia del audio/input). Line-in usa su offset propio;
+                # teclado y gamepad usan el offset global medido en CONFIG.
+                _off_juicio = LINEIN_OFFSET_MS if _es_linein else config.get("judge_offset", 0)
+                ahora_rel += _off_juicio
                 midi_a_tocar = midi_fijo
                 mejor_dist = 99999
                 mejor_target = ahora_rel   # tiempo target de la mejor nota (para cuantizar)
@@ -9105,7 +9167,11 @@ while corriendo:
                 w_hit = partida.get("w_hit", 150)
                 w_perf = partida.get("w_perf", 30)
                 # auto-perfecto por power-up estrella
-                ahora_juego = int(partida.get("t_musical", ahora_ms - partida["inicio"]))
+                # ahora_juego lleva la MISMA compensacion de latencia que
+                # ahora_rel: es el reloj contra el que se juzga la distancia
+                # de cada nota (antes el offset solo afectaba la seleccion
+                # de nota y el volumen, no el juicio real).
+                ahora_juego = int(partida.get("t_musical", ahora_ms - partida["inicio"])) + _off_juicio
                 auto_perf = ahora_juego < partida.get("efectos_activos", {}).get("estrella", 0)
                 for grupo in partida["notas_cayendo"]:
                     if col in grupo["cols"]:
