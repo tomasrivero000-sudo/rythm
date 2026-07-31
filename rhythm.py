@@ -340,11 +340,15 @@ GRADOS_DOMINANTE = {4}   # el V
 DIFICULTADES = {
     1:  {"nombre": "FACIL",      "columnas": 3, "acordes": False, "dens": 0.20, "bpm_mult": 0.70, "vel_mult": 0.60},
     2:  {"nombre": "FACIL+",     "columnas": 3, "acordes": False, "dens": 0.26, "bpm_mult": 0.75, "vel_mult": 0.70},
-    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.38, "bpm_mult": 0.85, "vel_mult": 0.75},
-    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.65, "bpm_mult": 0.85, "vel_mult": 0.80},
-    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.75, "bpm_mult": 0.90, "vel_mult": 0.85},
-    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.85, "bpm_mult": 0.90, "vel_mult": 0.90},
-    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.92, "bpm_mult": 0.95, "vel_mult": 0.95},
+    # curva 3-7 suavizada: antes NORMAL+ saltaba a dens 0.65 (+71% vs NORMAL)
+    # y era una pared. Cada nivel ahora agrega UNA cosa nueva (acordes en 3,
+    # 4ta columna y bombas en 4) con la densidad subiendo de a poco.
+    # DIFICIL (8) para arriba queda igual: esos deben ser duros.
+    3:  {"nombre": "NORMAL",     "columnas": 3, "acordes": True,  "dens": 0.32, "bpm_mult": 0.80, "vel_mult": 0.75},
+    4:  {"nombre": "NORMAL+",    "columnas": 4, "acordes": False, "dens": 0.42, "bpm_mult": 0.85, "vel_mult": 0.80},
+    5:  {"nombre": "NORMAL++",   "columnas": 4, "acordes": True,  "dens": 0.55, "bpm_mult": 0.90, "vel_mult": 0.85},
+    6:  {"nombre": "INTERMEDIO", "columnas": 4, "acordes": True,  "dens": 0.68, "bpm_mult": 0.90, "vel_mult": 0.90},
+    7:  {"nombre": "INTERMEDIO+","columnas": 4, "acordes": True,  "dens": 0.82, "bpm_mult": 0.95, "vel_mult": 0.95},
     8:  {"nombre": "DIFICIL",    "columnas": 5, "acordes": True,  "dens": 1.00, "bpm_mult": 1.0,  "vel_mult": 1.0},
     9:  {"nombre": "DIFICIL+",   "columnas": 5, "acordes": True,  "dens": 1.10, "bpm_mult": 1.0,  "vel_mult": 1.0},
     10: {"nombre": "PRO",        "columnas": 6, "acordes": True,  "dens": 1.20, "bpm_mult": 1.0,  "vel_mult": 1.0},
@@ -4481,14 +4485,17 @@ def generar_cancion(seed, dif, instrumento_forzado=None):
 
     # --- CAPA 2: mutacion de timbre ya aplicada a las notas del nudo ---
 
-    # --- anti-simultaneas en niveles faciles ---
-    # nivel 1-2: eliminar notas que caen muy juntas (< 250ms). En facil,
-    # ninguna nota deberia caer antes de que el jugador pueda reaccionar
-    # a la anterior. Mantenemos la primera del par y descartamos las
-    # siguientes hasta que haya un gap suficiente.
+    # --- anti-simultaneas en niveles faciles y medios ---
+    # eliminar notas que caen muy juntas: ninguna nota deberia caer antes
+    # de que el jugador pueda reaccionar a la anterior. El gap minimo se
+    # achica con el nivel (400ms en FACIL, 180ms en NORMAL+) y desaparece
+    # en NORMAL++ (5+), donde las rafagas son parte del desafio.
+    # Mantenemos la primera del par y descartamos las siguientes hasta
+    # que haya un gap suficiente.
     _niv_f = dif.get("nivel", 1)
-    if _niv_f <= 2 and notas_jugador:
-        gap_min = 400 if _niv_f == 1 else 300
+    _GAPS_MIN = {1: 400, 2: 300, 3: 260, 4: 180}
+    if _niv_f in _GAPS_MIN and notas_jugador:
+        gap_min = _GAPS_MIN[_niv_f]
         notas_jugador.sort(key=lambda n: n["tiempo"])
         filtradas = [notas_jugador[0]]
         for n in notas_jugador[1:]:
