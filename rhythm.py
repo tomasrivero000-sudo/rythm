@@ -363,6 +363,12 @@ SEED_MAX       = 9999
 SEED_VELOCIDAD = 9.0
 ZONA_Y         = ALTO - 90
 VELOCIDAD      = 5.5
+# tope del multiplicador de combo. Sin tope, con combos largos el mult
+# crecia sin limite y aplastaba la diferencia entre PERFECTO (5) y OK (1):
+# la unica habilidad que media el score era "no cortar el combo". Con tope,
+# mantener la racha sigue premiando (hasta x8) pero la PRECISION vuelve a
+# diferenciar: PERFECTO al tope vale 40/nota vs 8/nota de un OK.
+COMBO_MULT_MAX = 8
 
 # --- modificadores de partida (suben el multiplicador de puntos) ---
 MODIFICADORES = [
@@ -6149,7 +6155,7 @@ def dibujar_tutorial(pagina):
         combo_n = int((t_anim * 4) % 30) + 1
         ctxt = fuente.render(f"{combo_n}x COMBO", True, (255, 180, 60))
         pantalla.blit(ctxt, (cx - ctxt.get_width() // 2, 305))
-        linea("CADA 5 DE COMBO SUBE EL MULTIPLICADOR DE PUNTOS", 345)
+        linea("CADA 5 DE COMBO SUBE EL MULTIPLICADOR DE PUNTOS (HASTA x8)", 345)
         linea("UN MISS ROMPE EL COMBO (SALVO CON EL PERK COMBO SAVE)", 370)
         linea("TU COMBO DANA AL ENEMIGO: CUANTO MAS ALTO, MAS SUFRE", 415, (255, 180, 60))
 
@@ -9410,7 +9416,8 @@ while corriendo:
                                         })
                                     crear_texto_flotante(ANCHO // 2, zy_p - 120,
                                                          f"{partida['combo']}x COMBO!", col_g, grande=True)
-                                combo_mult = 1 + partida["combo"] // partida.get("combo_div", 5)
+                                combo_mult = min(COMBO_MULT_MAX,
+                                                 1 + partida["combo"] // partida.get("combo_div", 5))
                                 if grupo.get("hold", 0) > 0 and not grupo.get("es_acorde"):
                                     # usar el midi REAL de la nota (con octava/armonia),
                                     # no la nota base de la columna: asi el hold suena
@@ -9839,7 +9846,8 @@ while corriendo:
                             partida["vida"] = min(partida["vida_max"], partida["vida"] + 1)
                             crear_texto_flotante(ANCHO // 2, zy_p - 60, "+1 VIDA", (120, 255, 120))
                         pts_a = 10 if partida.get("perk_perfecto") else 5
-                        combo_mult_a = 1 + partida["combo"] // partida.get("combo_div", 5)
+                        combo_mult_a = min(COMBO_MULT_MAX,
+                                           1 + partida["combo"] // partida.get("combo_div", 5))
                         _pu_doble_a = 2.0 if ahora < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
                         bonus_hold = partida.get("hold_bonus", 5) if grupo.get("hold", 0) > 0 else 0
                         total_a = int((pts_a * len(grupo["cols"]) + bonus_hold) * combo_mult_a
