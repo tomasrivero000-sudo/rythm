@@ -7838,6 +7838,7 @@ linein_silencio_desde = 0  # timestamp de cuando empezó el silencio
 linein_energy_prev = 0.0   # energia del bloque anterior (para detectar ataque)
 LINEIN_ATTACK_RATIO = 1.4  # ratio de energia actual/anterior para detectar ataque (bajado para notas rapidas)
 linein_monitor = False     # True = reproducir el audio de entrada por los parlantes
+linein_duplex = False      # True = el stream actual es duplex (monitoreo posible)
 
 def _detectar_pitch(data):
     """Detecta LA frecuencia fundamental del audio (una sola nota).
@@ -7954,31 +7955,51 @@ def _linein_callback_proceso(indata):
         except queue.Full:
             pass
 
+linein_ultimo_error = ""   # ultimo error al abrir el stream (visible en el setup)
+
 def linein_abrir(device_idx, con_monitor=False):
-    """Abre el stream de line-in. Si con_monitor=True, usa stream duplex
-    para que el audio de entrada se reproduzca por los parlantes."""
-    global linein_stream, linein_activo, linein_monitor
+    """Abre el stream de line-in. Si con_monitor=True intenta un stream
+    duplex (entrada + salida, para escuchar el teclado por los parlantes).
+    El duplex es fragil en Windows/MME: si falla, cae automaticamente a
+    entrada sola (sin monitoreo) en vez de dejar la calibracion muerta."""
+    global linein_stream, linein_activo, linein_monitor, linein_ultimo_error
+    global linein_duplex
     linein_detener()
     linein_monitor = con_monitor
-    try:
-        if con_monitor:
+    linein_duplex = False
+    if con_monitor:
+        try:
             linein_stream = sd.Stream(
                 device=(device_idx, None),  # input=device, output=default
                 samplerate=LINEIN_SR, channels=1,
                 blocksize=LINEIN_BLOCK, dtype="float32",
                 callback=_linein_callback_duplex)
-        else:
-            linein_stream = sd.InputStream(
-                device=device_idx,
-                samplerate=LINEIN_SR, channels=1,
-                blocksize=LINEIN_BLOCK, dtype="float32",
-                callback=_linein_callback_solo)
+            linein_stream.start()
+            linein_activo = True
+            linein_duplex = True
+            linein_ultimo_error = ""
+            print("Line-in abierto con monitoreo")
+            return True
+        except Exception as e:
+            print(f"Duplex fallo ({e}); reintentando sin monitoreo")
+            linein_monitor = False
+            linein_stream = None
+    try:
+        linein_stream = sd.InputStream(
+            device=device_idx,
+            samplerate=LINEIN_SR, channels=1,
+            blocksize=LINEIN_BLOCK, dtype="float32",
+            callback=_linein_callback_solo)
         linein_stream.start()
         linein_activo = True
-        print(f"Line-in abierto {'con' if con_monitor else 'sin'} monitoreo")
+        linein_ultimo_error = ""
+        print("Line-in abierto sin monitoreo")
         return True
     except Exception as e:
         print(f"Error abriendo line-in: {e}")
+        linein_ultimo_error = "NO SE PUDO ABRIR LA ENTRADA (¿otro programa la esta usando?)"
+        linein_stream = None
+        linein_activo = False
         return False
 
 def linein_detener():
@@ -8127,6 +8148,10 @@ def dibujar_linein_setup():
     else:
         est = fuente.render("ESTADO: NO CONFIGURADO", True, GRIS_MED)
     pantalla.blit(est, (cx - est.get_width() // 2, 120))
+    # error del ultimo intento de abrir el stream (dispositivo ocupado, etc.)
+    if linein_ultimo_error:
+        err = fuente_chica.render(linein_ultimo_error, True, (255, 100, 100))
+        pantalla.blit(err, (cx - err.get_width() // 2, 150))
 
     # dispositivos de entrada
     sub = fuente.render("DISPOSITIVO DE ENTRADA:", True, BLANCO)
@@ -8196,12 +8221,19 @@ def dibujar_calibracion_linein():
     pygame.draw.rect(pantalla, GRIS_MED, (vu_x, vu_y, vu_w, 10), 1)
     vu_lbl = fuente_chica.render("ENTRADA", True, GRIS)
     pantalla.blit(vu_lbl, (vu_x - 75, vu_y - 2))
-    # indicador de monitoreo
-    if linein_monitor:
+    # indicador de monitoreo (solo tiene sentido si el stream es duplex;
+    # si el duplex fallo y caimos a entrada sola, avisar que no hay monitor)
+    if not linein_duplex:
+        mon = fuente_chica.render("MONITOR NO DISP.", True, GRIS)
+    elif linein_monitor:
         mon = fuente_chica.render("MONITOR ON (M)", True, (140, 230, 100))
     else:
         mon = fuente_chica.render("MONITOR OFF (M)", True, GRIS)
     pantalla.blit(mon, (vu_x + vu_w + 15, vu_y - 2))
+    # stream caido: avisar en rojo (antes el VU quedaba muerto sin explicacion)
+    if not linein_activo:
+        sin_st = fuente_chica.render("SIN SEÑAL: NO SE PUDO ABRIR LA ENTRADA", True, (255, 100, 100))
+        pantalla.blit(sin_st, (cx - sin_st.get_width() // 2, vu_y + 18))
     # columnas
     y0, fila_h = 135, 42
     for i in range(8):
@@ -8815,17 +8847,20 @@ while corriendo:
                     sfx_select()
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if linein_devices:
-                        # abrir calibracion con el dispositivo seleccionado
+                        # abrir calibracion con el dispositivo seleccionado.
+                        # Solo entrar si el stream abrio: si fallo (dispositivo
+                        # ocupado por otro programa), el error queda visible
+                        # en esta pantalla en vez de una calibracion muerta.
                         sfx_confirm()
                         dev_info = linein_devices[linein_dev_idx]
-                        linein_abrir(dev_info["idx"], con_monitor=True)
-                        linein_cal_col = 0
-                        linein_cal_estado = "idle"
-                        linein_cal_muestras = []
-                        linein_en_silencio = True
-                        linein_nota_activa = -1
-                        linein_silencio_desde = 0
-                        ESTADO = "calibrar_linein"
+                        if linein_abrir(dev_info["idx"], con_monitor=True):
+                            linein_cal_col = 0
+                            linein_cal_estado = "idle"
+                            linein_cal_muestras = []
+                            linein_en_silencio = True
+                            linein_nota_activa = -1
+                            linein_silencio_desde = 0
+                            ESTADO = "calibrar_linein"
                     else:
                         print("No hay dispositivos de entrada disponibles")
                 elif evento.key == pygame.K_a:
