@@ -7899,15 +7899,23 @@ def _linein_callback_solo(indata, frames, time_info, status):
     """Callback para stream solo input (sin monitoreo)."""
     _linein_callback_proceso(indata)
 
+_linein_dbg_t = 0
+
 def _linein_callback_proceso(indata):
     """Logica compartida de deteccion de pitch."""
     global linein_last_col, linein_last_time, linein_energy, linein_freq_actual
     global linein_nota_activa, linein_en_silencio, linein_silencio_desde
-    global linein_energy_prev
+    global linein_energy_prev, _linein_dbg_t
     freq, rms = _detectar_pitch(indata)
     linein_energy = rms
     linein_freq_actual = freq
     ahora = pygame.time.get_ticks()
+    # telemetria (1 linea/seg, solo en pantallas de setup): nivel y pitch
+    # crudos del stream, para diagnosticar sin adivinar.
+    if ESTADO in ("calibrar_linein", "medir_latencia") and ahora - _linein_dbg_t > 1000:
+        _linein_dbg_t = ahora
+        print(f"[linein] rms={rms:.4f} freq={freq:.1f}Hz "
+              f"(umbral_on={LINEIN_THRESHOLD_ON} umbral_off={LINEIN_THRESHOLD_OFF})")
 
     es_ataque = (rms >= LINEIN_THRESHOLD_ON
                  and linein_energy_prev > 0.001
@@ -7957,6 +7965,21 @@ def _linein_callback_proceso(indata):
 
 linein_ultimo_error = ""   # ultimo error al abrir el stream (visible en el setup)
 
+def _misma_placa(nombre_a, nombre_b):
+    """Heuristica: dos dispositivos pertenecen a la misma placa de audio si
+    comparten alguna palabra distintiva (marca/modelo). Se ignoran palabras
+    genericas de Windows. Sirve para detectar el conflicto tipico de placas
+    USB cuyo driver es exclusivo: si el juego tiene la SALIDA de la placa,
+    la ENTRADA de esa misma placa no se puede abrir (pasa con BEHRINGER)."""
+    genericas = {"SPEAKERS", "LINE", "AUDIO", "USB", "WDM", "INPUT", "OUTPUT",
+                 "MICROPHONE", "SOUND", "MAPPER", "WINDOWS", "HIGH",
+                 "DEFINITION", "DEVICE", "DRIVER", "PRIMARY", "CAPTURE"}
+    def tokens(s):
+        limpio = "".join(c if c.isalnum() else " " for c in s.upper())
+        return {t for t in limpio.split()
+                if len(t) >= 4 and not t.isdigit() and t not in genericas}
+    return bool(tokens(nombre_a) & tokens(nombre_b))
+
 def linein_abrir(device_idx, con_monitor=False):
     """Abre el stream de line-in. Si con_monitor=True intenta un stream
     duplex (entrada + salida, para escuchar el teclado por los parlantes).
@@ -7997,7 +8020,19 @@ def linein_abrir(device_idx, con_monitor=False):
         return True
     except Exception as e:
         print(f"Error abriendo line-in: {e}")
+        # diagnostico: ¿la salida del juego esta usando la misma placa?
+        # (driver exclusivo: tener la salida bloquea la entrada, y viceversa)
         linein_ultimo_error = "NO SE PUDO ABRIR LA ENTRADA (¿otro programa la esta usando?)"
+        try:
+            _idx_out = config.get("audio_idx", 0)
+            _out_name = AUDIO_DEVICES[_idx_out] if 0 < _idx_out < len(AUDIO_DEVICES) else ""
+            _in_name = next((d["nombre"] for d in linein_devices
+                             if d["idx"] == device_idx), "")
+            if _out_name and _in_name and _misma_placa(_in_name, _out_name):
+                linein_ultimo_error = ("CONFLICTO: LA SALIDA DE AUDIO USA ESTA MISMA PLACA"
+                                       " - CAMBIALA EN CONFIG > AUDIO")
+        except Exception:
+            pass
         linein_stream = None
         linein_activo = False
         return False
@@ -8907,6 +8942,11 @@ while corriendo:
                     elif linein_cal_estado == "escuchando":
                         if linein_freq_actual > 0:
                             linein_notas_cal[linein_cal_col] = round(linein_freq_actual, 1)
+                            # AUTOSAVE: guardar tras cada columna confirmada.
+                            # Antes solo se guardaba con ENTER al final: si
+                            # cerrabas el juego, la calibracion se perdia en
+                            # silencio y habia que rehacer las 8 notas.
+                            guardar_linein_notas()
                             sfx_confirm()
                             linein_cal_estado = "idle"
                             linein_cal_col += 1
