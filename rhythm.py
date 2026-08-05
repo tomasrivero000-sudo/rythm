@@ -4678,9 +4678,6 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     _dur_mult = meta_loops(dif.get("nivel", 1), stage_info.get("n", 1)) if stage_info else 1.0
     cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado,
                               dur_mult=_dur_mult)
-    # modo instrumento: simplificar la cancion para line-in
-    if modo_instrumento:
-        simplificar_para_instrumento(cancion)
     inst = cancion["instrumento"]
     # limitar holds: percusivos max 800ms, todos max 4s (duracion del sample)
     hold_max = HOLD_MAX_PERCUSIVO if inst not in INST_SUSTAIN else HOLD_MAX
@@ -4751,6 +4748,14 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
                 cancion["tiene_rafagas"] = True
                 cancion["rafaga_ciclo_ms"] = ciclo_ms
                 cancion["rafaga_compas_ms"] = compas_ms
+    # MODO INSTRUMENTO: simplificar al FINAL, despues de cualquier mod que
+    # agregue o mueva notas (p.ej. rafagas). Antes corria justo despues de
+    # generar la cancion, y rafagas re-densificaba lo simplificado rompiendo
+    # las garantias del modo (espaciado 300ms, sin acordes/holds/bombas).
+    # Correr aca tambien garantiza que la meta (calculada mas abajo) cuente
+    # exactamente las notas que van a caer.
+    if modo_instrumento:
+        simplificar_para_instrumento(cancion)
     # mostrar el tag de la partida antes de arrancar
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("* RHYTHM *", True, BLANCO)
@@ -4790,9 +4795,11 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
 
     # --- aplicar modificadores de columnas ---
     num_cols_p = dif["columnas"]
-    # ESPEJO: invierte el mapeo de teclas
+    # ESPEJO: invierte el mapeo de teclas. En modo instrumento NUNCA se
+    # aplica: las notas calibradas del teclado fisico mapean a columnas
+    # fijas, e invertirlas haria que tocar la nota correcta falle siempre.
     mapa_teclas = {c: c for c in range(num_cols_p)}
-    if "espejo" in mods_partida:
+    if "espejo" in mods_partida and not modo_instrumento:
         mapa_teclas = {c: (num_cols_p - 1 - c) for c in range(num_cols_p)}
 
     mult_mods = 1.0
@@ -6682,15 +6689,22 @@ def calcular_mult_mods():
     return mult
 
 # ---------------- SISTEMA DE STAGES (modo roguelike) ----------------
-def mods_de_stage(n, rng):
+def mods_de_stage(n, rng, instrumento=False):
     """Devuelve el set de mods para el stage n (1..4).
     Los mods se escalonan por dificultad:
       - suaves (stage 2+): inverso, acelerando, rafagas, monocromo
       - medios (stage 3+): niebla, veloz, apagon, + espejo con 30%
       - duros  (stage 4):  espejo con 35%, sudden death 10%
-    ESPEJO: nunca en stages 1-2, 30% en stage 3, 35% en stage 4."""
+    ESPEJO: nunca en stages 1-2, 30% en stage 3, 35% en stage 4.
+    instrumento=True (runs con teclado musical por line-in): se excluyen
+    los mods incompatibles con un instrumento fisico — espejo (invierte el
+    mapeo de las notas calibradas), rafagas (re-densifica la cancion
+    simplificada) y veloz/sudden (injustos con la latencia del line-in)."""
     suaves = ["inverso", "acelerando", "rafagas", "monocromo"]
     medios = ["niebla", "veloz", "apagon"]
+    if instrumento:
+        suaves = [m for m in suaves if m != "rafagas"]
+        medios = [m for m in medios if m != "veloz"]
     if n == 1:
         return set()
     elif n == 2:
@@ -6698,12 +6712,12 @@ def mods_de_stage(n, rng):
         return {rng.choice(suaves)}
     elif n == 3:
         # stage 3: espejo con 30%; si no, un mod suave o medio
-        if rng.random() < 0.30:
+        if not instrumento and rng.random() < 0.30:
             return {"espejo"}
         return {rng.choice(suaves + medios)}
     else:  # stage 4: espejo con 35% + otro mod (incluye los duros) + sudden 10%
         mods = set()
-        if rng.random() < 0.35:
+        if not instrumento and rng.random() < 0.35:
             mods.add("espejo")
         # pool completo de movimiento para el stage final
         otros = suaves + medios
@@ -6713,13 +6727,14 @@ def mods_de_stage(n, rng):
                 mods.add(rng.choice(otros))
         elif rng.random() < 0.5:
             mods.add(rng.choice(otros))
-        if rng.random() < 0.10:
+        if not instrumento and rng.random() < 0.10:
             mods.add("sudden")
         return mods
 
-def crear_run(seed_inicial):
+def crear_run(seed_inicial, instrumento=False):
     """Crea un run de stages a partir de la seed cargada.
-    Garantiza un instrumento distinto en cada stage para dar variedad."""
+    Garantiza un instrumento distinto en cada stage para dar variedad.
+    instrumento=True: run para teclado musical (mods incompatibles fuera)."""
     nivel = num_dificultad(seed_inicial)
     genero = genero_de_seed(seed_inicial)
     rng = random.Random(int(seed_inicial) * 31 + 7)
@@ -6732,7 +6747,7 @@ def crear_run(seed_inicial):
             s = int(seed_inicial)   # fallback: reusar
         usadas.add(s)
         seeds.append(s)
-        mods_stages.append(mods_de_stage(n, rng))
+        mods_stages.append(mods_de_stage(n, rng, instrumento))
 
     # --- asignar un instrumento distinto a cada stage ---
     gdef = GENEROS.get(genero, {})
@@ -8543,7 +8558,7 @@ while corriendo:
                     ESTADO = "menu"
                 if evento.key == pygame.K_RETURN and seed_acumulada > 0:
                     sfx_confirm()
-                    run_actual = crear_run(int(seed_acumulada))
+                    run_actual = crear_run(int(seed_acumulada), instrumento=True)
                     carrera_activa = False
                     modo_instrumento = True
                     ESTADO = "run_overview"
@@ -8574,6 +8589,7 @@ while corriendo:
                         # ultima pagina: arrancar la PRACTICA
                         sfx_confirm()
                         cortar_audio_suave()
+                        modo_instrumento = False  # la practica es con teclado
                         partida = iniciar_partida(150, mods=set(), tutorial=True)
                         score_guardado = True   # la practica no guarda score
                         ESTADO = "jugando"
@@ -8602,6 +8618,7 @@ while corriendo:
                         carrera_registrar_intento(nivel_sel)
                         run_actual = crear_run(seed_carrera)
                         carrera_activa = True
+                        modo_instrumento = False  # la carrera nunca simplifica
                         ESTADO = "run_overview"
 
         elif ESTADO == "run_overview":
@@ -8742,6 +8759,7 @@ while corriendo:
                 elif evento.key == pygame.K_RETURN:
                     detener_musica_menu()
                     cortar_audio_suave()
+                    modo_instrumento = False  # modo libre: sin simplificar
                     dibujar_carga_seed(seed_acumulada)
                     partida = iniciar_partida(int(seed_acumulada))
                     score_guardado = False
@@ -9084,9 +9102,9 @@ while corriendo:
                                 puntos_iniciales=run_actual["puntos_total"],
                                 instrumento_forzado=inst_stage,
                                 perks=run_actual.get("perks"))
-                            # modo instrumento: simplificar notas para line-in
-                            if modo_instrumento:
-                                simplificar_para_instrumento(partida["cancion"])
+                            # (la simplificacion de modo instrumento ya ocurre
+                            #  DENTRO de iniciar_partida; re-simplificar aca
+                            #  generaba un chart distinto al del 1er intento)
                         else:
                             partida = iniciar_partida(int(seed_acumulada))
                         score_guardado = False
