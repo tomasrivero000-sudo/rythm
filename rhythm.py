@@ -3346,7 +3346,8 @@ def _generar_patrones_drums_legacy(rng):
     return pats
 
 def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
-                      c_intro, c_nudo, c_desenlace, kit, genero=None, pats_pre=None):
+                      c_intro, c_nudo, c_desenlace, kit, genero=None, pats_pre=None,
+                      secciones=None):
     paso = beat // 4
     # pats_pre: patrones pre-generados (para anclar la melodia del jugador
     # al kick). Si vienen, son el set principal; los otros 2 varian.
@@ -3377,6 +3378,50 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
         modo_tempo = "normal"
         tempo_tercio = -1
 
+    # --- ARREGLO POR SECCIONES ---
+    # La bateria sigue la estructura de la cancion (verso/estribillo/puente)
+    # en vez de cambiar por tercios de tiempo absoluto:
+    #   verso:      patron base SIN open-hat, clap y percu latina suaves
+    #   estribillo: hats/snare/clap con patron propio (pats2) pero el KICK
+    #               sigue siendo el ancla de la melodia (pats) -> contraste
+    #               sin romper la cohesion melodia-bombo
+    #   puente:     half-time (breakdown que respira)
+    #   bordes:     fill de toms al TERMINAR cada seccion y crash al ENTRAR
+    #               a la siguiente (mas fuerte si entra el estribillo)
+    # El roll de tempo del genero se integra al arreglo: "double" acelera el
+    # ULTIMO estribillo (climax) y "half" frena el verso previo (tension
+    # antes del drop final). Sin secciones (fallback) rige el sistema viejo.
+    sec_de = {}
+    ult_estr = None
+    verso_pre_drop = None
+    if secciones:
+        for _ini, _fin, _nom in secciones:
+            for _cc in range(_ini, _fin):
+                sec_de[_cc] = (_nom, _cc == _ini, _cc == _fin - 1)
+        _inis_estr = [_ini for _ini, _fin, _nom in secciones if _nom == "estribillo"]
+        ult_estr = max(_inis_estr) if _inis_estr else None
+        if modo_tempo == "half" and ult_estr is not None:
+            _versos_pre = [(_ini, _fin) for _ini, _fin, _nom in secciones
+                           if _nom == "verso" and _fin <= ult_estr]
+            if _versos_pre:
+                verso_pre_drop = max(_versos_pre)
+
+    # --- DINAMICA: acentos fuerte/debil por posicion en el compas ---
+    # El downbeat pega mas fuerte, los tiempos de negra un poco, los octavos
+    # menos, y los 16avos sueltos quedan como ghost notes. Un jitter chico de
+    # volumen humaniza el conjunto SIN tocar el timing (que debe seguir
+    # clavado al grid porque las notas del jugador se juzgan contra el).
+    def _vol(base, i):
+        if i == 0:
+            m = 1.25
+        elif i % 4 == 0:
+            m = 1.10
+        elif i % 2 == 0:
+            m = 0.90
+        else:
+            m = 0.78
+        return base * m * rng.uniform(0.92, 1.08)
+
     # patron half-time: kick en el 1, snare/clap en el 3 (medio compas)
     ht_kick  = [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0]
     ht_snare = [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0]
@@ -3393,20 +3438,37 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
         tc = c * 4 * beat
         if tc >= t_desenlace_fin:
             break
-        es_fill = (c > 0) and (c % 4 == 3)
-        if tc < tercio1:
-            p = pats
-            tercio_actual = 0
-        elif tc < tercio2:
-            p = pats2
-            tercio_actual = 1
+        info_sec = sec_de.get(c)
+        if info_sec:
+            nombre_sec, es_inicio_sec, es_fin_sec = info_sec
+            # kick SIEMPRE de pats (ancla de la melodia); hats/snare/clap
+            # cambian a pats2 en el estribillo para dar contraste
+            p_kick = pats
+            p = pats2 if nombre_sec == "estribillo" else pats
+            en_half_time = (nombre_sec == "puente"
+                            or (verso_pre_drop is not None
+                                and verso_pre_drop[0] <= c < verso_pre_drop[1]))
+            en_double_time = (modo_tempo == "double" and ult_estr is not None
+                              and nombre_sec == "estribillo" and c >= ult_estr)
+            es_fill = es_fin_sec and nombre_sec not in ("outro",)
+            es_fill_suave = (not es_fill) and (c > 0) and (c % 4 == 3)
         else:
-            p = pats3
-            tercio_actual = 2
-
-        en_tempo_mod = (tercio_actual == tempo_tercio) and (t_intro_fin <= tc < t_nudo_fin)
-        en_half_time = en_tempo_mod and modo_tempo == "half"
-        en_double_time = en_tempo_mod and modo_tempo == "double"
+            nombre_sec, es_inicio_sec, es_fin_sec = "nudo", False, False
+            if tc < tercio1:
+                p = pats
+                tercio_actual = 0
+            elif tc < tercio2:
+                p = pats2
+                tercio_actual = 1
+            else:
+                p = pats3
+                tercio_actual = 2
+            p_kick = p
+            en_tempo_mod = (tercio_actual == tempo_tercio) and (t_intro_fin <= tc < t_nudo_fin)
+            en_half_time = en_tempo_mod and modo_tempo == "half"
+            en_double_time = en_tempo_mod and modo_tempo == "double"
+            es_fill = (c > 0) and (c % 4 == 3)
+            es_fill_suave = False
 
         for i in range(16):
             t = tc + i * paso
@@ -3415,59 +3477,71 @@ def generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
                 t += int(paso * swing_amt)
             if t < t_intro_fin:
                 if p["hihat"][i] and kit["hihat"]:
-                    percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.04})
+                    percusion.append({"tiempo": t, "sample": "hihat", "vol": _vol(0.04, i)})
                 continue
             if t >= t_nudo_fin:
-                if p["kick"][i] and kit["kick"]:
-                    percusion.append({"tiempo": t, "sample": "kick", "vol": 0.15})
+                if p_kick["kick"][i] and kit["kick"]:
+                    percusion.append({"tiempo": t, "sample": "kick", "vol": _vol(0.15, i)})
                 if p["clap"][i] and kit["clap"]:
-                    percusion.append({"tiempo": t, "sample": "clap", "vol": 0.09})
+                    percusion.append({"tiempo": t, "sample": "clap", "vol": _vol(0.09, i)})
                 continue
+
+            # crash al ENTRAR a una seccion nueva (mas fuerte en el estribillo)
+            if (i == 0 and es_inicio_sec and kit["crash"]
+                    and nombre_sec in ("verso", "preestribillo", "estribillo", "puente")):
+                percusion.append({"tiempo": t, "sample": "crash",
+                                  "vol": 0.09 if nombre_sec == "estribillo" else 0.05})
 
             if en_half_time:
                 # bateria a mitad de tempo: patron fijo espaciado, mas peso
                 if ht_kick[i] and kit["kick"]:
-                    percusion.append({"tiempo": t, "sample": "kick", "vol": 0.22})
+                    percusion.append({"tiempo": t, "sample": "kick", "vol": _vol(0.22, i)})
                 if ht_snare[i] and kit["snare"]:
-                    percusion.append({"tiempo": t, "sample": "snare", "vol": 0.14})
+                    percusion.append({"tiempo": t, "sample": "snare", "vol": _vol(0.14, i)})
                 if ht_snare[i] and kit["clap"]:
-                    percusion.append({"tiempo": t, "sample": "clap", "vol": 0.11})
+                    percusion.append({"tiempo": t, "sample": "clap", "vol": _vol(0.11, i)})
                 if ht_hihat[i] and kit["hihat"]:
-                    percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.05})
-                if i == 0 and kit["crash"]:
+                    percusion.append({"tiempo": t, "sample": "hihat", "vol": _vol(0.05, i)})
+                if i == 0 and not es_inicio_sec and kit["crash"]:
                     percusion.append({"tiempo": t, "sample": "crash", "vol": 0.05})
                 continue
             if en_double_time:
                 # bateria al doble de tempo: todo mas denso y rapido
                 if dt_kick[i] and kit["kick"]:
-                    percusion.append({"tiempo": t, "sample": "kick", "vol": 0.16})
+                    percusion.append({"tiempo": t, "sample": "kick", "vol": _vol(0.16, i)})
                 if dt_snare[i] and kit["snare"]:
-                    percusion.append({"tiempo": t, "sample": "snare", "vol": 0.10})
+                    percusion.append({"tiempo": t, "sample": "snare", "vol": _vol(0.10, i)})
                 if dt_hihat[i] and kit["hihat"]:
-                    percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.04})
-                if i == 0 and kit["crash"]:
+                    percusion.append({"tiempo": t, "sample": "hihat", "vol": _vol(0.04, i)})
+                if i == 0 and not es_inicio_sec and kit["crash"]:
                     percusion.append({"tiempo": t, "sample": "crash", "vol": 0.05})
                 continue
 
-            if p["kick"][i] and kit["kick"]:
-                percusion.append({"tiempo": t, "sample": "kick", "vol": 0.18})
+            if p_kick["kick"][i] and kit["kick"]:
+                percusion.append({"tiempo": t, "sample": "kick", "vol": _vol(0.18, i)})
             if p["snare"][i] and kit["snare"]:
-                percusion.append({"tiempo": t, "sample": "snare", "vol": 0.11})
+                percusion.append({"tiempo": t, "sample": "snare", "vol": _vol(0.11, i)})
             if p["hihat"][i] and kit["hihat"]:
-                percusion.append({"tiempo": t, "sample": "hihat", "vol": 0.05})
-            if p["hihat_o"][i] and kit["hihat_o"]:
-                percusion.append({"tiempo": t, "sample": "hihat_o", "vol": 0.06})
+                percusion.append({"tiempo": t, "sample": "hihat", "vol": _vol(0.05, i)})
+            # open-hat: el verso lo omite (respira); pre/estribillo lo llevan
+            if p["hihat_o"][i] and kit["hihat_o"] and nombre_sec != "verso":
+                percusion.append({"tiempo": t, "sample": "hihat_o", "vol": _vol(0.06, i)})
             if p["clap"][i] and kit["clap"]:
-                percusion.append({"tiempo": t, "sample": "clap", "vol": 0.10})
+                _base_clap = 0.07 if nombre_sec == "verso" else 0.10
+                percusion.append({"tiempo": t, "sample": "clap", "vol": _vol(_base_clap, i)})
             if p["clave"][i] and kit["clave"]:
-                percusion.append({"tiempo": t, "sample": "clave", "vol": 0.03})
+                percusion.append({"tiempo": t, "sample": "clave",
+                                  "vol": _vol(0.02 if nombre_sec == "verso" else 0.03, i)})
             if p["agogo"][i] and kit["agogo"]:
-                percusion.append({"tiempo": t, "sample": "agogo", "vol": 0.03})
-            if es_fill and p["fill"][i]:
+                percusion.append({"tiempo": t, "sample": "agogo",
+                                  "vol": _vol(0.02 if nombre_sec == "verso" else 0.03, i)})
+            if (es_fill or es_fill_suave) and p["fill"][i]:
                 tk = rng.choice(["tom1", "tom2"])
                 if kit[tk]:
-                    percusion.append({"tiempo": t, "sample": tk, "vol": 0.07})
-            if i == 0 and c % 8 == 0 and kit["crash"]:
+                    # el fill de fin de seccion pega mas que el mecanico de relleno
+                    percusion.append({"tiempo": t, "sample": tk,
+                                      "vol": _vol(0.09 if es_fill else 0.05, i)})
+            if info_sec is None and i == 0 and c % 8 == 0 and kit["crash"]:
                 percusion.append({"tiempo": t, "sample": "crash", "vol": 0.06})
     return sorted(percusion, key=lambda n: n["tiempo"])
 
@@ -4390,9 +4464,18 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
                 "tiempo": t, "es_acorde": False, "parte": "desenlace", "hold": hold_dur,
             })
 
+    # rangos de secciones en compases absolutos, para que bateria y bajo
+    # sigan la estructura de la cancion (arreglo por secciones)
+    secciones_rango = [(s["inicio_compas"], s["inicio_compas"] + s["compases"], s["nombre"])
+                       for s in plan_secciones]
+    nombre_sec_de = {}
+    for _ini_s, _fin_s, _nom_s in secciones_rango:
+        for _cc_s in range(_ini_s, _fin_s):
+            nombre_sec_de[_cc_s] = _nom_s
+
     percusion = generar_percusion(rng, beat, t_intro_fin, t_nudo_fin, t_desenlace_fin,
                                   C_INTRO, C_NUDO, C_DESENLACE, kit, genero,
-                                  pats_pre=pats_drums_ancla)
+                                  pats_pre=pats_drums_ancla, secciones=secciones_rango)
 
     # --- linea de bajo procedural (estilo y patron segun genero) ---
     estilos_g = [e for e in gdef.get("bajo_estilos", []) if e in ("round","pluck","sub","reese")]
@@ -4404,7 +4487,14 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
         [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],   # corcheas
         [1,0,0,0,1,0,1,0,1,0,0,0,1,0,1,0],   # groove
     ]
-    pat_bajo = list(rng.choice(patrones_bajo))
+    # ARREGLO POR SECCIONES tambien en el bajo: el verso usa una version
+    # rala del patron (solo tiempos 1 y 3: deja aire), el puente solo la
+    # fundamental por compas (breakdown), y pre/estribillo el patron
+    # completo del genero. Antes un unico patron sonaba toda la cancion.
+    pat_bajo_full = list(rng.choice(patrones_bajo))
+    pat_bajo_ralo = [(pat_bajo_full[s] if s in (0, 8) else 0) for s in range(16)]
+    pat_bajo_ralo[0] = 1   # garantizar al menos el downbeat
+    pat_bajo_puente = [1] + [0] * 15
     bajo_eventos = []
     # nota fundamental de cada grado de la progresion, una octava abajo de la tonica
     midi_bajo_base = tonica - 12
@@ -4413,6 +4503,13 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
     usar_walking = rng.random() < 0.5
     for c in range(C_NUDO):
         compas_t = t_intro_fin + c * 4 * beat
+        _nsec_b = nombre_sec_de.get(C_INTRO + c, "verso")
+        if _nsec_b == "puente":
+            pat_bajo = pat_bajo_puente
+        elif _nsec_b == "verso":
+            pat_bajo = pat_bajo_ralo
+        else:
+            pat_bajo = pat_bajo_full
         grado = progresion[c % len(progresion)]
         grado_sig = progresion[(c + 1) % len(progresion)]
         # fundamental y quinta del acorde
@@ -4430,6 +4527,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
         for i, s in enumerate(activos):
             t = compas_t + s * paso16
             midi_nota = fund  # por defecto, la fundamental (lo mas estable)
+            # DINAMICA: el downbeat acentua, el resto acompana mas suave
+            vol_ev = 1.0 if s == 0 else 0.85
             es_ultimo_del_compas = (i == len(activos) - 1)
             if es_ultimo_del_compas and usar_walking and grado_sig != grado:
                 # nota de aproximacion: un semitono/tono hacia la fundamental
@@ -4438,13 +4537,16 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
                     midi_nota = fund_sig - 1   # aproximacion cromatica ascendente
                 else:
                     midi_nota = fund_sig + 1   # aproximacion descendente
+                vol_ev = 0.9
             elif i > 0 and s % 8 == 4 and rng.random() < 0.35:
                 # en tiempos intermedios, a veces la quinta (da movimiento)
                 midi_nota = quinta
+                vol_ev = 0.8
             bajo_eventos.append({
                 "tiempo": t,
                 "midi": midi_nota,
                 "dur": beat / 1000.0 * 0.9,
+                "vol": vol_ev,
             })
     cancion_bajo = {
         "estilo": estilo_bajo,
@@ -5250,7 +5352,8 @@ def tick_background(partida, ahora):
                 # efecto de "pompeo" clasico de electronica. Une bajo y kick
                 # en una sola sensacion ritmica en vez de dos capas separadas.
                 duck = 0.60 if ev.get("duckea") else 1.0
-                ch_b.set_volume(min(1.0, config["volumen"] * vol_bajo * duck))
+                # acento por evento (downbeat fuerte, resto suave)
+                ch_b.set_volume(min(1.0, config["volumen"] * vol_bajo * duck * ev.get("vol", 1.0)))
         partida["indice_bajo"] += 1
 
 def _explotar_notas_muerte(partida):
