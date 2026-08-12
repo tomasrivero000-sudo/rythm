@@ -361,6 +361,14 @@ DIFICULTADES = {
 
 SEED_MAX       = 9999
 SEED_VELOCIDAD = 9.0
+# tramos de seed por nivel: tope de seed (inclusive) de cada nivel 1..15.
+# FACIL y FACIL+ ocupan el 25% inicial para que el jugador nuevo tenga mas
+# seeds jugables. UNICA fuente de verdad del mapeo seed->nivel: la usan
+# get_dificultad, num_dificultad, rango_seeds_dificultad y la carrera.
+# (Antes habia dos tablas divergentes y el selector mostraba una dificultad
+# mientras el juego jugaba otra.)
+TRAMOS_DIFICULTAD = [1500, 2500, 3200, 3800, 4400, 5000, 5600, 6200, 6800,
+                     7300, 7800, 8300, 8800, 9400, 9999]
 ZONA_Y         = ALTO - 90
 VELOCIDAD      = 5.5
 # tope del multiplicador de combo. Sin tope, con combos largos el mult
@@ -2938,12 +2946,7 @@ def dibujar_input_nombre(nombre_actual):
 def get_dificultad(seed):
     if seed <= 0:
         d = dict(DIFICULTADES[1]); d["nivel"] = 1; return d
-    # FACIL y FACIL+ ocupan el 25% inicial del selector (antes 9%) para que
-    # el jugador nuevo tenga mas seeds jugables. Los tramos medios y altos
-    # se comprimen proporcionalmente, manteniendo GOD y CHAOS al final.
-    tramos = [1500, 2500, 3200, 3800, 4400, 5000, 5600, 6200, 6800,
-              7300, 7800, 8300, 8800, 9400, 9999]
-    for i, tope in enumerate(tramos):
+    for i, tope in enumerate(TRAMOS_DIFICULTAD):
         if seed <= tope:
             d = dict(DIFICULTADES[i + 1]); d["nivel"] = i + 1; return d
     d = dict(DIFICULTADES[15]); d["nivel"] = 15; return d
@@ -3252,19 +3255,15 @@ def num_dificultad(seed):
     """Devuelve el numero de nivel (1-15) de una seed."""
     if seed <= 0:
         return 1
-    tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
-              7100, 7800, 8400, 9000, 9500, 9999]
-    for i, tope in enumerate(tramos):
+    for i, tope in enumerate(TRAMOS_DIFICULTAD):
         if seed <= tope:
             return i + 1
     return 15
 
 def rango_seeds_dificultad(nivel):
     """Devuelve (seed_min, seed_max) para un nivel de dificultad."""
-    tramos = [400, 900, 1500, 2200, 3000, 3900, 4900, 5700, 6400,
-              7100, 7800, 8400, 9000, 9500, 9999]
-    lo = 1 if nivel == 1 else tramos[nivel - 2] + 1
-    hi = tramos[nivel - 1]
+    lo = 1 if nivel == 1 else TRAMOS_DIFICULTAD[nivel - 2] + 1
+    hi = TRAMOS_DIFICULTAD[nivel - 1]
     return lo, hi
 
 def buscar_seed_genero(genero, nivel, rng, evitar=None):
@@ -6665,14 +6664,17 @@ def dibujar_selector_seed(seed_actual, cargando):
     pygame.draw.line(pantalla, GRIS, (60, 360), (ANCHO - 60, 360), 1)
 
     if seed_actual > 0:
+        # marca de run completado (genero x nivel). Antes esta linea mostraba
+        # la dificultad calculada con una tabla vieja divergente y aparecia
+        # una dificultad distinta a la real; ahora solo aporta lo que el
+        # titulo grande no dice: si este run ya fue completado.
         gen_seed = genero_de_seed(int(seed_actual))
         niv_seed = num_dificultad(int(seed_actual))
         comp = cargar_progreso()
-        ya = clave_run(gen_seed, niv_seed) in comp
-        marca_ok = "  [COMPLETADO]" if ya else ""
-        col_gs = COLOR_GENERO.get(gen_seed, col_ac)
-        run_txt = fuente_chica.render(f"{DIFICULTADES[niv_seed]['nombre']}{marca_ok}", True, col_gs)
-        pantalla.blit(run_txt, (cx - run_txt.get_width() // 2, 375))
+        if clave_run(gen_seed, niv_seed) in comp:
+            col_gs = COLOR_GENERO.get(gen_seed, col_ac)
+            run_txt = fuente_chica.render("[RUN COMPLETADO]", True, col_gs)
+            pantalla.blit(run_txt, (cx - run_txt.get_width() // 2, 375))
 
     if seed_actual > 0:
         ctrl = fuente_chica.render("ENTER = RUN     M = MODS LIBRE     R = RESET", True, GRIS_MED)
@@ -8712,11 +8714,8 @@ while corriendo:
                     c_data = cargar_carrera()
                     if nivel_sel <= c_data.get("nivel_max", 1):
                         sfx_confirm()
-                        # seed aleatoria para este nivel
-                        tramos = [1500, 2500, 3200, 3800, 4400, 5000, 5600, 6200, 6800,
-                                  7300, 7800, 8300, 8800, 9400, 9999]
-                        s_min = tramos[nivel_sel - 2] + 1 if nivel_sel >= 2 else 1
-                        s_max = tramos[nivel_sel - 1]
+                        # seed aleatoria para este nivel (misma tabla que todo el juego)
+                        s_min, s_max = rango_seeds_dificultad(nivel_sel)
                         seed_carrera = random.randint(s_min, s_max)
                         carrera_registrar_intento(nivel_sel)
                         run_actual = crear_run(seed_carrera)
