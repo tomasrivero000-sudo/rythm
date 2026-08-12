@@ -411,10 +411,9 @@ PERKS = [
     {"id": "racha",      "nombre": "RACHA",      "desc": "el multiplicador de combo sube mas rapido", "cat": "ofe"},
     {"id": "hold_master","nombre": "HOLD MASTER","desc": "las notas largas dan puntos x2", "cat": "ofe"},
     {"id": "cazador",    "nombre": "CAZADOR",    "desc": "power-ups temporales duran el doble", "cat": "ofe"},
-    {"id": "lento",      "nombre": "LENTO",      "desc": "las notas bajan 15% mas lento", "cat": "mec"},
+    {"id": "lento",      "nombre": "LENTO",      "desc": "cancion 10% mas lenta y notas caen 15% mas lento", "cat": "mec"},
     {"id": "iman",       "nombre": "IMAN",       "desc": "zona PERFECT mas amplia (mas facil clavar)", "cat": "mec"},
     {"id": "suerte",     "nombre": "SUERTE",     "desc": "aparecen 50% mas power-ups", "cat": "mec"},
-    {"id": "calma",      "nombre": "CALMA",      "desc": "la cancion suena 10% mas lenta (BPM)", "cat": "mec"},
 ]
 
 # color de cada categoria de perk, usado en la pantalla de seleccion y HUD.
@@ -3622,8 +3621,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1
     el resto: en los stages la cancion se genera del largo del stage
     completo para que avance junto con el jugador, sin reiniciar.
     pu_mult multiplica la cantidad de power-ups (perk SUERTE).
-    bpm_extra multiplica el BPM final (perk CALMA: 0.9 = 10% mas lenta;
-    frena la cancion ENTERA, no solo la caida visual como LENTO)."""
+    bpm_extra multiplica el BPM final (perk LENTO: 0.9 = 10% mas lenta;
+    frena la cancion ENTERA, ademas de la caida visual)."""
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
     rng          = random.Random(seed)
@@ -4784,10 +4783,11 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     # musica avanza junto con el jugador y no hace falta loopear (casi) nunca
     _dur_mult = meta_loops(dif.get("nivel", 1), stage_info.get("n", 1)) if stage_info else 1.0
     # perks que afectan la GENERACION de la cancion (no solo la partida):
-    # SUERTE = mas power-ups | CALMA = BPM 10% mas lento (cancion entera)
+    # SUERTE = mas power-ups | LENTO = BPM 10% mas lento (la otra mitad
+    # del perk, la caida 15% mas lenta, se aplica abajo sobre velocidad)
     _perk_ids_gen = {pk.get("id") for pk in (perks or [])}
     _pu_mult = 1.5 if "suerte" in _perk_ids_gen else 1.0
-    _bpm_extra = 0.9 if "calma" in _perk_ids_gen else 1.0
+    _bpm_extra = 0.9 if "lento" in _perk_ids_gen else 1.0
     cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado,
                               dur_mult=_dur_mult, pu_mult=_pu_mult, bpm_extra=_bpm_extra)
     inst = cancion["instrumento"]
@@ -5023,6 +5023,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         elif pid == "perfecto":
             p["perk_perfecto"] = True  # perfectos valen doble
         elif pid == "lento":
+            # mitad visual del perk (la otra mitad es bpm_extra=0.9 arriba)
             p["velocidad"] *= 0.85
         elif pid == "iman":
             p["perk_iman"] = True  # perfecto window 30 -> 50ms
