@@ -413,6 +413,7 @@ PERKS = [
     {"id": "cazador",    "nombre": "CAZADOR",    "desc": "power-ups temporales duran el doble", "cat": "ofe"},
     {"id": "lento",      "nombre": "LENTO",      "desc": "las notas bajan 15% mas lento", "cat": "mec"},
     {"id": "iman",       "nombre": "IMAN",       "desc": "zona PERFECT mas amplia (mas facil clavar)", "cat": "mec"},
+    {"id": "suerte",     "nombre": "SUERTE",     "desc": "aparecen 50% mas power-ups", "cat": "mec"},
 ]
 
 # color de cada categoria de perk, usado en la pantalla de seleccion y HUD.
@@ -3614,10 +3615,11 @@ def compases_por_seccion(nombre, rng, nivel_dif):
     return rng.choice([8, 8])
 
 
-def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
+def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1.0):
     """dur_mult alarga la cancion (mas ciclos verso/estribillo) sin tocar
     el resto: en los stages la cancion se genera del largo del stage
-    completo para que avance junto con el jugador, sin reiniciar."""
+    completo para que avance junto con el jugador, sin reiniciar.
+    pu_mult multiplica la cantidad de power-ups (perk SUERTE)."""
     num_columnas = dif["columnas"]
     usar_acordes = dif["acordes"]
     rng          = random.Random(seed)
@@ -4618,7 +4620,7 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0):
     # (0.7x a 1.4x: algunas canciones son generosas, otras austeras).
     # Siempre al menos 1 (antes el 25% de las canciones no traia ninguno).
     _dur_nudo_s = max(1.0, (t_nudo_fin - t_intro_fin) / 1000.0)
-    cantidad_pu = max(1, int(_dur_nudo_s / 20.0 * rng.uniform(0.7, 1.4)))
+    cantidad_pu = max(1, int(_dur_nudo_s / 20.0 * rng.uniform(0.7, 1.4) * pu_mult))
     if cantidad_pu > 0:
         # tipos sesgados por dificultad: en niveles faciles ayudan a
         # sobrevivir (VIDA/LENTO), en niveles altos premian el score (x2).
@@ -4777,8 +4779,11 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
     # en stages, la cancion se genera del largo del stage completo: asi la
     # musica avanza junto con el jugador y no hace falta loopear (casi) nunca
     _dur_mult = meta_loops(dif.get("nivel", 1), stage_info.get("n", 1)) if stage_info else 1.0
+    # perk SUERTE: mas power-ups (se aplica en la generacion, que es donde
+    # se decide cuantos trae la cancion)
+    _pu_mult = 1.5 if any(pk.get("id") == "suerte" for pk in (perks or [])) else 1.0
     cancion = generar_cancion(int(seed * 23819), dif, instrumento_forzado=instrumento_forzado,
-                              dur_mult=_dur_mult)
+                              dur_mult=_dur_mult, pu_mult=_pu_mult)
     inst = cancion["instrumento"]
     # limitar holds: percusivos max 800ms, todos max 4s (duracion del sample)
     hold_max = HOLD_MAX_PERCUSIVO if inst not in INST_SUSTAIN else HOLD_MAX
