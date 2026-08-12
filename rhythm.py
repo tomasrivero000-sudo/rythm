@@ -411,6 +411,9 @@ PERKS = [
     {"id": "racha",      "nombre": "RACHA",      "desc": "el multiplicador de combo sube mas rapido", "cat": "ofe"},
     {"id": "hold_master","nombre": "HOLD MASTER","desc": "las notas largas dan puntos x2", "cat": "ofe"},
     {"id": "cazador",    "nombre": "CAZADOR",    "desc": "power-ups temporales duran el doble", "cat": "ofe"},
+    {"id": "interes",    "nombre": "INTERES",    "desc": "al empezar cada stage: +5% de tus puntos acumulados", "cat": "ofe"},
+    {"id": "pacto",      "nombre": "PACTO",      "desc": "-5 vida maxima, +25% puntos para siempre", "cat": "ofe"},
+    {"id": "sangre_fria","nombre": "SANGRE FRIA","desc": "al ganar el stage: +30 pts por cada vida sobrante", "cat": "ofe"},
     {"id": "lento",      "nombre": "LENTO",      "desc": "cancion 10% mas lenta y notas caen 15% mas lento", "cat": "mec"},
     {"id": "iman",       "nombre": "IMAN",       "desc": "zona PERFECT mas amplia (mas facil clavar)", "cat": "mec"},
     {"id": "suerte",     "nombre": "SUERTE",     "desc": "aparecen 50% mas power-ups", "cat": "mec"},
@@ -5037,6 +5040,22 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
             p["hold_bonus"] = 10           # holds completos +10 (vs +5)
         elif pid == "cazador":
             p["perk_cazador"] = True       # power-ups duran el doble
+        elif pid == "interes":
+            # interes compuesto: 5% de lo acumulado, al ARRANCAR el stage.
+            # Elegirlo temprano en el run rinde mucho mas que al final.
+            if stage_info and puntos_iniciales > 0:
+                _bono_int = int(puntos_iniciales * 0.05)
+                if _bono_int > 0:
+                    p["puntos"] += _bono_int
+                    p["_bono_interes"] = _bono_int
+        elif pid == "pacto":
+            # trato con el diablo: espejo de CORAZON. Piso de 5 de vida
+            # maxima para que apilar penalidades nunca deje un run muerto.
+            p["vida_max"] = max(5, p["vida_max"] - 5)
+            p["vida"] = min(p["vida"], p["vida_max"])
+            p["mult_mods"] *= 1.25
+        elif pid == "sangre_fria":
+            p["perk_sangre_fria"] = True   # vida sobrante -> puntos al ganar
     # calcular meta del stage (en modo run; en modo libre meta=0 = sin limite)
     # la cancion ya se genero del largo del stage completo (dur_mult), asi
     # que la meta es un % de sus notas: jugando bien, el stage se completa
@@ -5118,6 +5137,11 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
         pass  # el warm-up nunca debe romper el arranque
     p["notas_cayendo"] = []
     gc.collect()
+    # INTERES: mostrar el bono al arrancar (el texto sobrevive porque los
+    # efectos visuales se limpiaron al PRINCIPIO de esta funcion)
+    if p.get("_bono_interes"):
+        crear_texto_flotante(ANCHO // 2, 150, f"INTERES +{p['_bono_interes']}",
+                             (255, 215, 60), True)
     pygame.event.pump()
     pygame.event.clear()
     p["inicio"] = pygame.time.get_ticks()   # ULTIMA operacion: reloj en cero real
@@ -5238,6 +5262,13 @@ def tick_background(partida, ahora):
     meta = partida.get("meta_notas", 0)
     if meta > 0 and not partida["terminada"]:
         if partida.get("meta_hits", 0) >= meta:
+            # SANGRE FRIA: la vida sobrante se convierte en puntos al ganar
+            if partida.get("perk_sangre_fria") and partida["vida"] > 0:
+                _bono_sf = int(partida["vida"] * 30)
+                partida["puntos"] += _bono_sf
+                crear_texto_flotante(ANCHO // 2, ALTO // 2 - 40,
+                                     f"SANGRE FRIA +{_bono_sf}",
+                                     (100, 200, 255), True)
             partida["terminada"] = True
             partida["terminada_t"] = pygame.time.get_ticks()
             pygame.mixer.stop()  # parar la musica al ganar
