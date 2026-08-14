@@ -2715,9 +2715,22 @@ def dibujar_particulas():
         txt = f.render(t["texto"], True, color)
         pantalla.blit(txt, (int(t["x"]) - txt.get_width() // 2 + shake_dx, int(t["y"]) + shake_dy))
 
+def grados_por_octava(escala):
+    """Grados diatonicos reales por octava: las entradas por debajo de 12.
+    Los arrays de ESCALAS traen ademas la octava (12) y extensiones (14, 15...)
+    al final; esos NO son grados nuevos, son los primeros grados repetidos una
+    octava arriba, asi que la envoltura de grados debe ignorarlos."""
+    n = 0
+    for v in escala:
+        if v >= 12:
+            break
+        n += 1
+    return max(1, n)
+
 def nota_midi(tonica, escala, grado):
-    octava = grado // len(escala)
-    return tonica + escala[grado % len(escala)] + octava * 12
+    n = grados_por_octava(escala)
+    octava = grado // n
+    return tonica + escala[grado % n] + octava * 12
 
 def _escala_es_menor(escala):
     """Detecta si una escala es menor: la tercera (grado 2) esta a 3 semitonos."""
@@ -3676,8 +3689,10 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1
     # la cancion se mantiene, pero el jugador siempre toca "notas seguras".
     penta = PENTA_GRADOS.get(nombre_escala, [0, 1, 2, 4, 5])
     def _grado_pent(i):
-        # extender la penta a mas de 5 columnas subiendo por octavas
-        octava_dg = 7  # 7 grados diatonicos por octava en la escala completa
+        # extender la penta a mas de 5 columnas subiendo por octavas.
+        # la octava se expresa en grados de la escala completa (7 en las
+        # diatonicas, 5 en pentatonica/blues), consistente con nota_midi.
+        octava_dg = grados_por_octava(escala)
         return penta[i % 5] + (i // 5) * octava_dg
     notas_columnas = [nota_midi(tonica + 12, escala, _grado_pent(i)) for i in range(num_columnas)]
     kit = elegir_kit(rng)
@@ -4536,8 +4551,8 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1
             pat_bajo = pat_bajo_full
         grado = progresion[c % len(progresion)]
         grado_sig = progresion[(c + 1) % len(progresion)]
-        # fundamental y quinta del acorde
-        fund = midi_bajo_base + escala[grado % len(escala)]
+        # fundamental y quinta del acorde (misma convencion que nota_midi)
+        fund = nota_midi(midi_bajo_base, escala, grado)
         quinta = midi_bajo_base + nota_midi(0, escala, grado + 4) % 12
         # ajustar quinta a la octava del bajo (cerca de la fundamental)
         while quinta < fund:
@@ -4545,7 +4560,7 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1
         if quinta - fund > 7:
             quinta -= 12
         # nota fundamental del acorde siguiente (destino de la aproximacion)
-        fund_sig = midi_bajo_base + escala[grado_sig % len(escala)]
+        fund_sig = nota_midi(midi_bajo_base, escala, grado_sig)
         # posiciones activas del patron en este compas
         activos = [s for s in range(16) if pat_bajo[s] != 0]
         for i, s in enumerate(activos):
