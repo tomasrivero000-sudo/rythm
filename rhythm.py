@@ -146,12 +146,23 @@ config = {
 
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
+def guardar_json_atomico(ruta, data):
+    """Escritura atomica de JSON: escribe a ruta+'.tmp', fsync y os.replace.
+    Un corte de luz a mitad de escritura deja el archivo viejo intacto en
+    vez de un JSON truncado que borra todo el progreso. Critico para la
+    instalacion/arcade, donde el apagado es desenchufar."""
+    tmp = ruta + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, ruta)
+
 # ══════════════════════════════════════════════════════ >>CONFIG<< ═══
 
 def guardar_config():
     try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
+        guardar_json_atomico(CONFIG_FILE, config)
     except Exception:
         pass
 
@@ -2823,14 +2834,16 @@ def cargar_carrera():
       intentos: {str(nivel): int} veces que lo intentaste"""
     try:
         with open(CARRERA_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
     except:
-        return {"nivel_max": 1, "ranks": {}, "intentos": {}}
+        pass
+    return {"nivel_max": 1, "ranks": {}, "intentos": {}}
 
 def guardar_carrera(data):
     try:
-        with open(CARRERA_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        guardar_json_atomico(CARRERA_FILE, data)
     except Exception as e:
         print(f"Error guardando carrera: {e}")
 
@@ -2860,14 +2873,16 @@ def cargar_progreso():
     """Devuelve un set de claves 'GENERO|nivel' completadas."""
     try:
         with open(PROGRESO_FILE, "r") as f:
-            return set(json.load(f))
+            data = json.load(f)
+        if isinstance(data, list):
+            return {c for c in data if isinstance(c, str)}
     except:
-        return set()
+        pass
+    return set()
 
 def guardar_progreso(completados):
     try:
-        with open(PROGRESO_FILE, "w") as f:
-            json.dump(sorted(completados), f, indent=2)
+        guardar_json_atomico(PROGRESO_FILE, sorted(completados))
     except Exception as e:
         print(f"Error guardando progreso: {e}")
 
@@ -2906,13 +2921,32 @@ def marcar_completado(genero, nivel):
 def cargar_leaderboard():
     try:
         with open(LEADERBOARD_FILE, "r") as f:
-            return json.load(f)
+            lb = json.load(f)
     except:
         return []
+    if not isinstance(lb, list):
+        return []
+    # filtrar/normalizar entradas malformadas: es_highscore hace
+    # lb[-1]["puntos"] y dibujar_leaderboard indexa todas las claves;
+    # una entrada sin "puntos" crasheaba en pleno game over.
+    valido = []
+    for e in lb:
+        if not (isinstance(e, dict) and isinstance(e.get("puntos"), (int, float))):
+            continue
+        valido.append({
+            "nombre": str(e.get("nombre", "???")),
+            "puntos": e["puntos"],
+            "seed": e.get("seed", 0),
+            "dificultad": e.get("dificultad", "?"),
+            "max_combo": e.get("max_combo", 0),
+        })
+    return valido
 
 def guardar_leaderboard(lb):
-    with open(LEADERBOARD_FILE, "w") as f:
-        json.dump(lb, f, indent=2)
+    try:
+        guardar_json_atomico(LEADERBOARD_FILE, lb)
+    except Exception as e:
+        print(f"Error guardando leaderboard: {e}")
 
 def es_highscore(puntos):
     lb = cargar_leaderboard()
@@ -7984,8 +8018,7 @@ def cargar_bindings():
 def guardar_bindings(bindings):
     """Guarda el mapeo tecla->columna."""
     try:
-        with open(BINDINGS_FILE, "w") as f:
-            json.dump({str(k): v for k, v in bindings.items()}, f, indent=2)
+        guardar_json_atomico(BINDINGS_FILE, {str(k): v for k, v in bindings.items()})
     except Exception as e:
         print(f"Error guardando bindings: {e}")
 
@@ -8391,8 +8424,7 @@ def guardar_linein_notas():
             "offset": LINEIN_OFFSET_MS,
             "device": dev_nombre,
         }
-        with open(LINEIN_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        guardar_json_atomico(LINEIN_FILE, data)
     except Exception as e:
         print(f"Error guardando calibracion: {e}")
 
