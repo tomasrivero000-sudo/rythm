@@ -6056,21 +6056,43 @@ def dibujar_juego(partida, ahora):
     if cargas > 0:
         esc_c = fuente_chica.render(f"ESCUDO x{cargas}", True, (100, 200, 255))
         pantalla.blit(esc_c, (10, 62))
+    # efectos temporales (power-ups AUTO/LENTO/x2): chip con barra de
+    # tiempo que se VACIA + parpadeo rapido y aviso sonoro al final.
+    # Antes era solo texto chiquito con countdown: en pleno gameplay el
+    # jugador no se enteraba de que el efecto estaba por cortarse.
     efectos = partida.get("efectos_activos", {})
     ey = 80
+    _avisados = partida.setdefault("_efectos_avisados", set())
     for eid, t_fin in list(efectos.items()):
         restante = max(0, t_fin - ahora)
         if restante <= 0:
+            _avisados.discard(eid)
             continue
         pu_def = next((pu for pu in POWER_UPS if pu["id"] == eid), None)
-        if not pu_def:
+        if not pu_def or pu_def["dur"] <= 0:
             continue
+        dur_total = pu_def["dur"] * (2 if partida.get("perk_cazador") else 1)
+        pct_e = max(0.0, min(1.0, restante / dur_total))
+        por_terminar = restante < 2500
+        if not por_terminar:
+            # si el efecto se re-agarro y volvio a estirarse, rearmar el aviso
+            _avisados.discard(eid)
+        elif eid not in _avisados:
+            _avisados.add(eid)
+            SND_DADO.set_volume(0.5 * config["volumen"])
+            SND_DADO.play()
         colr = pu_def["color"]
-        if restante < 2000 and (pygame.time.get_ticks() // 200) % 2 == 0:
-            colr = GRIS
-        etxt = fuente_chica.render(f"{pu_def['nombre']} {restante/1000:.1f}s", True, colr)
-        pantalla.blit(etxt, (10, ey))
-        ey += 18
+        bar_w, bar_h = 130, 16
+        pygame.draw.rect(pantalla, GRIS, (10, ey, bar_w, bar_h))
+        relleno_e = colr
+        if por_terminar and (pygame.time.get_ticks() // 150) % 2 == 0:
+            relleno_e = BLANCO  # parpadeo rapido = se esta terminando
+        pygame.draw.rect(pantalla, relleno_e, (10, ey, int(bar_w * pct_e), bar_h))
+        pygame.draw.rect(pantalla, BLANCO if por_terminar else colr, (10, ey, bar_w, bar_h), 1)
+        etxt = fuente_chica.render(f"{pu_def['nombre']} {restante/1000:.1f}s", True,
+                                   BLANCO if por_terminar else colr)
+        pantalla.blit(etxt, (10 + bar_w + 8, ey + 1))
+        ey += 22
 
     # evento activo (aviso puntual, centro)
     ev_act = partida.get("evento_activo")
