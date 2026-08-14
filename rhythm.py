@@ -294,7 +294,6 @@ PAD_COLUMNAS = {
 # Botones de navegacion (para menus). Estos NO mapean a columnas.
 PAD_CONFIRM = {0}       # A / Cross = confirmar
 PAD_BACK    = {1}       # B / Circle = atras/ESC
-PAD_START   = {7, 11}   # Start / Options = pausar (varía por controlador)
 # Umbral del eje digital del hat/dpad
 PAD_AXIS_THRESHOLD = 0.5
 
@@ -307,9 +306,6 @@ def pad_es_confirm(button):
 
 def pad_es_back(button):
     return button in PAD_BACK
-
-def pad_es_start(button):
-    return button in PAD_START
 
 ESCALAS = {
     "mayor":       [0, 2, 4, 5, 7, 9, 11, 12],
@@ -1086,10 +1082,6 @@ INSTRUMENTOS_JUGADOR = {
     "DREAM PAD":  "dream_pad",
     "SPACE CHOIR":"space_choir",
     "ANALOG STR": "analog_string",
-}
-
-# instrumentos raros: baja probabilidad de aparecer
-INSTRUMENTOS_RAROS = {
 }
 
 # instrumentos que sostienen bien (se pueden loopear en holds)
@@ -2375,7 +2367,7 @@ def _preparar_cancion_menu(seed):
     cancion = generar_cancion(int(seed * 23819), dif)
     inst = cancion["instrumento"]
     if inst not in cache_por_instrumento:
-        tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
+        tipo = INSTRUMENTOS_JUGADOR.get(inst)
         if tipo:
             renderizar_instrumento(inst, tipo, dibujar_progreso=False)
     # pre-renderizar bajo
@@ -2426,7 +2418,7 @@ def prerender_instrumento_seed(seed, instrumento=None):
                 cancion = generar_cancion(int(seed * 23819), dif)
                 inst = cancion["instrumento"]
             if inst not in cache_por_instrumento:
-                tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
+                tipo = INSTRUMENTOS_JUGADOR.get(inst)
                 if tipo:
                     renderizar_instrumento(inst, tipo, dibujar_progreso=False)
         except Exception:
@@ -2761,13 +2753,6 @@ def tonos_acorde(tonica_midi, escala, grado):
         terc += 1
     return [fund, terc, quin]
 
-def tonos_septima(tonica_midi, escala, grado):
-    """Como tonos_acorde pero agrega la septima (grado +6) para acordes de 4 notas.
-    Enriquece la armonia en acordes tocados por el jugador."""
-    base = tonos_acorde(tonica_midi, escala, grado)
-    sept = nota_midi(tonica_midi, escala, grado + 6)
-    return base + [sept]
-
 def ajustar_a_acorde(midi, tonos_ac, escala, tonica_midi, fuerza=1.0):
     """Corrige una nota MIDI hacia el tono de acorde mas cercano.
     fuerza=1.0 -> siempre al tono de acorde; 0.0 -> sin cambio.
@@ -2812,10 +2797,6 @@ def resolver_disonancia(midi, tonos_ac, escala, tonica_midi):
             return midi - baja
     # si no encuentra abajo, usar el ajuste normal
     return ajustar_a_acorde(midi, tonos_ac, escala, tonica_midi)
-
-NOMBRES_NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-def midi_a_nombre(midi):
-    return NOMBRES_NOTAS[midi % 12] + str(midi // 12 - 1)
 
 # --- leaderboard ---
 LEADERBOARD_FILE = os.path.join(BASE_DIR, "leaderboard.json")
@@ -3381,65 +3362,19 @@ def buscar_seed_genero(genero, nivel, rng, evitar=None):
             return s
     return None
 
-def generar_patrones_drums(rng, genero=None):
-    if genero is not None and genero in GENEROS:
-        g = GENEROS[genero]["drums"]
-        pats = {}
-        pats["kick"]    = list(rng.choice(g["kick"]))
-        pats["snare"]   = list(rng.choice(g["snare"]))
-        pats["hihat"]   = list(rng.choice(g["hihat"]))
-        pats["hihat_o"] = list(g["hihat_o"])
-        pats["clap"]    = list(g["clap"])
-        pats["clave"]   = [0] * 16
-        pats["agogo"]   = [0] * 16
-        # (clave/agogo se dejan en 0: los 9 generos actuales son todos de
-        # electronica y no usan percusion latina auxiliar)
-        pats["fill"]    = [0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1]
-        return pats
-    return _generar_patrones_drums_legacy(rng)
-
-def _generar_patrones_drums_legacy(rng):
-    pat_kick_all = [
-        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,1,0,0,1,1,0,0,0],
-        [1,0,0,1,0,0,1,0,0,0,1,0,0,0,1,0],
-        [1,0,0,0,1,0,1,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,1,0,0,0,1,0,0,0,1,0,1,0],
-        [1,0,1,0,0,0,1,0,1,0,0,0,1,0,0,0],
-        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
-        [1,0,0,0,1,0,0,1,0,0,1,0,0,0,1,0],
-        [1,0,0,1,0,0,0,0,1,0,0,1,0,0,0,0],
-        [1,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0],
-    ]
-    pat_hh_all = [
-        [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-        [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1],
-        [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
-        [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,1],
-        [1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],
-        [0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
-        [1,0,1,0,0,1,0,1,1,0,1,0,0,1,0,1],
-    ]
-    pat_snare_all = [
-        [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
-        [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1],
-        [0,0,0,0,1,0,0,1,0,0,0,0,1,0,0,0],
-        [0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],
-        [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    ]
+def generar_patrones_drums(rng, genero):
+    # todos los callers pasan un genero valido (sale de elegir_genero)
+    g = GENEROS[genero]["drums"]
     pats = {}
-    pats["kick"]    = rng.choice(pat_kick_all)
-    pats["snare"]   = rng.choice(pat_snare_all)
-    pats["hihat"]   = rng.choice(pat_hh_all)
-    pats["hihat_o"] = [0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0]
-    pats["clap"]    = [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]
+    pats["kick"]    = list(rng.choice(g["kick"]))
+    pats["snare"]   = list(rng.choice(g["snare"]))
+    pats["hihat"]   = list(rng.choice(g["hihat"]))
+    pats["hihat_o"] = list(g["hihat_o"])
+    pats["clap"]    = list(g["clap"])
     pats["clave"]   = [0] * 16
-    for p in rng.sample(range(16), rng.randint(2, 4)):
-        pats["clave"][p] = 1
     pats["agogo"]   = [0] * 16
-    for p in rng.sample(range(16), rng.randint(1, 3)):
-        pats["agogo"][p] = 1
+    # (clave/agogo se dejan en 0: los generos actuales son todos de
+    # electronica y no usan percusion latina auxiliar)
     pats["fill"]    = [0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1]
     return pats
 
@@ -3764,12 +3699,9 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1
     notas_columnas = [nota_midi(tonica + 12, escala, _grado_pent(i)) for i in range(num_columnas)]
     kit = elegir_kit(rng)
     # instrumento: si viene forzado (runs, para garantizar variedad) se respeta.
-    # si no: 2% raro (si hay raros), si no del pool del genero
-    if instrumento_forzado and (instrumento_forzado in INSTRUMENTOS_JUGADOR
-                                or instrumento_forzado in INSTRUMENTOS_RAROS):
+    # si no, del pool del genero
+    if instrumento_forzado and instrumento_forzado in INSTRUMENTOS_JUGADOR:
         instrumento = instrumento_forzado
-    elif INSTRUMENTOS_RAROS and rng.random() < 0.02:
-        instrumento = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
     else:
         pool = [i for i in gdef.get("instrumentos", []) if i in INSTRUMENTOS_JUGADOR]
         if not pool:
@@ -4992,7 +4924,7 @@ def iniciar_partida(seed, mods=None, stage_info=None, puntos_iniciales=0,
 
     # renderizar el instrumento si no está en cache
     if inst not in cache_por_instrumento:
-        tipo = INSTRUMENTOS_JUGADOR.get(inst) or INSTRUMENTOS_RAROS.get(inst)
+        tipo = INSTRUMENTOS_JUGADOR.get(inst)
         renderizar_instrumento(inst, tipo, dibujar_progreso=True)
     cache_notas = cache_por_instrumento[inst]
     cache_notas_largas = cache_largas_por_instrumento[inst]
@@ -7131,12 +7063,6 @@ def crear_run(seed_inicial, instrumento=False):
         else:
             # pool mas chico que la cantidad de stages: reusar sin repetir consecutivo
             instrumentos_stage.append(rng.choice(pool_sin_reso))
-    # 15% de chance de que un stage al azar (no el primero) traiga un instrumento raro
-    # (solo si hay raros disponibles: puede quedar vacio si se eliminaron)
-    if INSTRUMENTOS_RAROS and rng.random() < 0.15 and NUM_STAGES > 1:
-        idx_raro = rng.randint(1, NUM_STAGES - 1)
-        instrumentos_stage[idx_raro] = rng.choice(list(INSTRUMENTOS_RAROS.keys()))
-
     return {
         "genero": genero,
         "nivel": nivel,
@@ -8713,8 +8639,6 @@ latencia_muestras = []
 latencia_flash_time = 0
 latencia_flash_activo = False
 latencia_esperando = False
-latencia_intervalo = 2200
-latencia_resultado = -1
 LATENCIA_NUM_MUESTRAS = 6
 # desde donde se abrio la medicion: "config" aplica el resultado al offset
 # global de teclado/gamepad (config["judge_offset"]); "linein_setup" al
