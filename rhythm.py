@@ -6090,6 +6090,31 @@ def dibujar_juego(partida, ahora):
         hit_y = zy + 10 if es_inv else zy - 60
         pantalla.blit(hit_txt, (ANCHO // 2 - hit_txt.get_width() // 2, hit_y))
 
+    # --- OVERLAY DE RESURRECCION: aviso grande e inconfundible (~2s) ---
+    # flash dorado de pantalla completa + titulo con pulso + estado de vida.
+    # Un texto flotante no alcanzaba: en medio del caos el jugador ni se
+    # enteraba de que habia revivido (y creia que el perk no funcionaba).
+    _res_t = partida.get("resurreccion_t")
+    if _res_t and not partida.get("game_over"):
+        _dt_res = pygame.time.get_ticks() - _res_t
+        if _dt_res < 2000:
+            _fade_res = 1.0 - _dt_res / 2000.0
+            _flash_res = pygame.Surface((ANCHO, ALTO))
+            _flash_res.fill((255, 215, 90))
+            _flash_res.set_alpha(int(80 * _fade_res))
+            pantalla.blit(_flash_res, (0, 0))
+            _t_res = fuente_grande.render("RESURRECCION", True, (255, 220, 100))
+            # pulso de escala en los primeros 400ms
+            if _dt_res < 400:
+                _esc_res = 1.0 + (1.0 - _dt_res / 400.0) * 0.35
+                _w_r = int(_t_res.get_width() * _esc_res)
+                _h_r = int(_t_res.get_height() * _esc_res)
+                _t_res = pygame.transform.scale(_t_res, (_w_r, _h_r))
+            pantalla.blit(_t_res, (ANCHO // 2 - _t_res.get_width() // 2,
+                                   ALTO // 2 - 60 - _t_res.get_height() // 2))
+            _sub_res = fuente.render("+5 DE VIDA  ·  SEGUI TOCANDO", True, BLANCO)
+            pantalla.blit(_sub_res, (ANCHO // 2 - _sub_res.get_width() // 2, ALTO // 2 + 4))
+
     if partida.get("game_over"):
         # --- ANIMACION DE MUERTE ---
         # t=0: flash rojo fuerte que se desvanece en 500ms
@@ -9572,8 +9597,7 @@ while corriendo:
                                                                        if pk.get("id") != "resurreccion"]
                                             partida["perks"] = [pk for pk in partida.get("perks", [])
                                                                 if pk.get("id") != "resurreccion"]
-                                            crear_texto_flotante(ANCHO // 2, ALTO // 2, "RESURRECCION!", (255, 220, 100), True)
-                                            crear_texto_flotante(ANCHO // 2, ALTO // 2 + 40, "+5 VIDA (SE CONSUMIO)", (255, 220, 100))
+                                            partida["resurreccion_t"] = pygame.time.get_ticks()
                                             crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
                                             crear_shake(10)
                                             sfx_power_up("vida")
@@ -10205,8 +10229,7 @@ while corriendo:
                                                            if pk.get("id") != "resurreccion"]
                                 partida["perks"] = [pk for pk in partida.get("perks", [])
                                                     if pk.get("id") != "resurreccion"]
-                                crear_texto_flotante(ANCHO // 2, ALTO // 2, "RESURRECCION!", (255, 220, 100), True)
-                                crear_texto_flotante(ANCHO // 2, ALTO // 2 + 40, "+5 VIDA (SE CONSUMIO)", (255, 220, 100))
+                                partida["resurreccion_t"] = pygame.time.get_ticks()
                                 crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
                                 crear_shake(10)
                                 sfx_power_up("vida")
