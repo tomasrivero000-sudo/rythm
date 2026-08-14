@@ -5445,6 +5445,36 @@ def _explotar_figura(partida):
     SND_EXPLOSION_BIG.set_volume(0.6 * config["volumen"])
     SND_EXPLOSION_BIG.play()
 
+def chequear_muerte(partida, zy_p):
+    """UNICO punto de verdad para morir (lo llaman miss, bomba y error de
+    tecla): si la vida llego a 0, consume RESURRECCION (revive con 5,
+    overlay dorado via resurreccion_t) o dispara el game over."""
+    if dev_mode or partida["vida"] > 0 or partida.get("game_over"):
+        return
+    if partida.get("perk_resurreccion"):
+        # se consume del run y de la lista visible del HUD
+        partida["perk_resurreccion"] = False
+        partida["vida"] = 5
+        if run_actual is not None:
+            run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
+                                   if pk.get("id") != "resurreccion"]
+        partida["perks"] = [pk for pk in partida.get("perks", [])
+                            if pk.get("id") != "resurreccion"]
+        partida["resurreccion_t"] = pygame.time.get_ticks()
+        crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
+        crear_shake(10)
+        sfx_power_up("vida")
+        print("[muerte] RESURRECCION consumida -> vida=5")
+    else:
+        print(f"[muerte] game over | perks={[pk.get('id') for pk in partida.get('perks', [])]}")
+        partida["game_over"] = True
+        partida["game_over_t"] = pygame.time.get_ticks()
+        _explotar_notas_muerte(partida)
+        pygame.mixer.stop()
+        crear_shake(15)
+        SND_GAMEOVER.set_volume(0.6 * config["volumen"])
+        SND_GAMEOVER.play()
+
 def get_parte(partida, ahora):
     e = partida["cancion"]["estructura"]
     # usar tiempo dentro del loop actual
@@ -6338,7 +6368,7 @@ def dibujar_tutorial(pagina):
         linea("PRECISION:", 395, BLANCO)
         linea("PERFECTO > BIEN > OK > TEMPRANO/TARDE (rompe combo)", 417)
         linea("TEMPRANO NO GASTA LA NOTA: PODES VOLVER A PEGARLE", 439)
-        linea("APRETAR SIN NOTA CERCA: -1 PUNTO", 461, GRIS)
+        linea("APRETAR SIN NOTA CERCA: -1 PUNTO Y -1 HP", 461, GRIS)
         linea("EN FACIL LA TECLA SE ILUMINA CUANDO HAY QUE APRETAR", 487, (255, 180, 60))
 
     elif pagina == 2:
@@ -9592,33 +9622,7 @@ while corriendo:
                                     SND_EXPLOSION_BIG.play()
                                     if grupo in partida["notas_cayendo"]:
                                         partida["notas_cayendo"].remove(grupo)
-                                    if not dev_mode and partida["vida"] <= 0:
-                                        if partida.get("perk_resurreccion"):
-                                            partida["perk_resurreccion"] = False
-                                            partida["vida"] = 5
-                                            # sacarlo TAMBIEN de las listas visibles: el
-                                            # HUD mostraba "RES" despues de consumido y
-                                            # el jugador creia que seguia teniendolo
-                                            if run_actual is not None:
-                                                run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
-                                                                       if pk.get("id") != "resurreccion"]
-                                            partida["perks"] = [pk for pk in partida.get("perks", [])
-                                                                if pk.get("id") != "resurreccion"]
-                                            partida["resurreccion_t"] = pygame.time.get_ticks()
-                                            crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
-                                            crear_shake(10)
-                                            sfx_power_up("vida")
-                                            print("[muerte] RESURRECCION consumida (bomba) -> vida=5")
-                                        else:
-                                            print(f"[muerte] game over por bomba | resurreccion={partida.get('perk_resurreccion', False)} "
-                                                  f"perks={[pk.get('id') for pk in partida.get('perks', [])]}")
-                                            partida["game_over"] = True
-                                            partida["game_over_t"] = pygame.time.get_ticks()
-                                            _explotar_notas_muerte(partida)
-                                            pygame.mixer.stop()
-                                            crear_shake(15)
-                                            SND_GAMEOVER.set_volume(0.6 * config["volumen"])
-                                            SND_GAMEOVER.play()
+                                    chequear_muerte(partida, zy_p)
                                     break
                                 # --- POWER-UP: nota especial ---
                                 pu_id = grupo.get("power_up")
@@ -9779,20 +9783,26 @@ while corriendo:
                                         partida["notas_cayendo"].remove(grupo)
                             break
 
-                # tecla equivocada: ninguna nota cerca en esa columna
+                # tecla equivocada: ninguna nota cerca en esa columna.
+                # CUESTA VIDA (-1 HP): sin esto, machacar todas las teclas
+                # atrapaba las notas gratis — la penalizacion de -1 punto
+                # era simbolica y el spam resultaba estrategia dominante.
                 if not acerto_algo:
                     partida["combo"] = 0
                     partida["puntos"] = max(0, partida["puntos"] - 1)
+                    if not dev_mode and not partida.get("es_tutorial"):
+                        partida["vida"] = max(0, partida["vida"] - 1)
                     partida["ultimo_hit"] = {"texto": "ERROR", "tiempo": ahora_ms}
                     num_cols = partida["dificultad"]["columnas"]
                     ancho_col = ANCHO // num_cols
                     cx = col * ancho_col + ancho_col // 2
-                    crear_texto_flotante(cx, zy_p - 20, "-1", GRIS_MED)
+                    crear_texto_flotante(cx, zy_p - 20, "-1 HP", (255, 90, 90))
                     crear_explosion(cx, zy_p, 6, GRIS_MED)
                     crear_shake(3)
                     crear_indicador_hit(col, "error")
                     SND_ERROR.set_volume(0.35 * config["volumen"])
                     SND_ERROR.play()
+                    chequear_muerte(partida, zy_p)
 
             if evento.type == pygame.KEYUP:
                 if evento.key in COLUMNAS:
@@ -10222,35 +10232,7 @@ while corriendo:
                         crear_shake(4)
                         SND_ERROR.set_volume(0.3 * config["volumen"])
                         SND_ERROR.play()
-                        if not dev_mode and partida["vida"] <= 0:
-                            if partida.get("perk_resurreccion"):
-                                # RESURRECCION: revive UNA vez con 5 de vida.
-                                # se consume tambien del run (para no re-aplicarse
-                                # en stages siguientes) y de la lista visible del
-                                # HUD (mostraba "RES" despues de consumido y el
-                                # jugador creia que seguia teniendolo).
-                                partida["perk_resurreccion"] = False
-                                partida["vida"] = 5
-                                if run_actual is not None:
-                                    run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
-                                                           if pk.get("id") != "resurreccion"]
-                                partida["perks"] = [pk for pk in partida.get("perks", [])
-                                                    if pk.get("id") != "resurreccion"]
-                                partida["resurreccion_t"] = pygame.time.get_ticks()
-                                crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
-                                crear_shake(10)
-                                sfx_power_up("vida")
-                                print("[muerte] RESURRECCION consumida (miss) -> vida=5")
-                            else:
-                                print(f"[muerte] game over por miss | resurreccion={partida.get('perk_resurreccion', False)} "
-                                      f"perks={[pk.get('id') for pk in partida.get('perks', [])]}")
-                                partida["game_over"] = True
-                                partida["game_over_t"] = pygame.time.get_ticks()
-                                _explotar_notas_muerte(partida)
-                                pygame.mixer.stop()
-                                crear_shake(15)
-                                SND_GAMEOVER.set_volume(0.6 * config["volumen"])
-                                SND_GAMEOVER.play()
+                        chequear_muerte(partida, zy_p)
                     else:
                         notas_vivas.append(n)
                 else:
