@@ -5597,8 +5597,11 @@ def dibujar_fondo_lissajous(partida, ahora):
     # Refuerza la idea de que los misses le dan fuerza al enemigo.
     ultimo_hit = partida.get("ultimo_hit") or {}
     _hit_texto = ultimo_hit.get("texto", "")
-    _hit_age = ahora - ultimo_hit.get("tiempo", 0)
-    if _hit_texto in ("MAL", "TEMPRANO", "TARDE", "BOMBA") and _hit_age < 600:
+    # ultimo_hit["tiempo"] es get_ticks() absoluto (como en el HUD):
+    # compararlo contra "ahora" (t_musical relativo) dejaba la figura con
+    # la "recuperacion" pegada para siempre tras el primer TEMPRANO/TARDE
+    _hit_age = pygame.time.get_ticks() - ultimo_hit.get("tiempo", 0)
+    if _hit_texto in ("TEMPRANO", "TARDE", "BOMBA") and _hit_age < 600:
         # el enemigo se fortalece cuando fallas: brilla fuerte y deja de temblar
         recuperacion = 1.0 - (_hit_age / 600.0)
         pulso = max(pulso, recuperacion * 0.9)
@@ -8993,6 +8996,11 @@ while corriendo:
 
         elif ESTADO == "run_completado":
             if evento.type == pygame.KEYDOWN:
+                # bloquear input al entrar (mismo patron que run_fallido):
+                # el machaqueo de ENTER/SPACE del final del stage se
+                # tragaba la pantalla de celebracion entera
+                if pygame.time.get_ticks() - run_completado_inicio < 1800:
+                    continue
                 if evento.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
                     pts_run = run_actual.get("puntos_total", 0)
                     if not score_guardado and pts_run > 0 and es_highscore(pts_run):
@@ -9412,6 +9420,11 @@ while corriendo:
                             # (la simplificacion de modo instrumento ya ocurre
                             #  DENTRO de iniciar_partida; re-simplificar aca
                             #  generaba un chart distinto al del 1er intento)
+                        elif partida.get("es_tutorial"):
+                            # preservar la practica del tutorial: antes
+                            # reiniciaba como seed 0 puntuable con los
+                            # mods sucios del modo libre
+                            partida = iniciar_partida(150, mods=set(), tutorial=True)
                         else:
                             partida = iniciar_partida(int(seed_acumulada))
                         score_guardado = False
@@ -9430,6 +9443,10 @@ while corriendo:
                         elif not score_guardado and partida["puntos"] > 0 and es_highscore(partida["puntos"]):
                             nombre_input = ""
                             ESTADO = "input_nombre"
+                            # las demas entradas a input_nombre ya arrancan
+                            # musica de menu; sin esto quedaba en silencio
+                            # total hasta la proxima transicion
+                            nueva_musica_menu_aleatoria()
                         else:
                             ESTADO = "leaderboard"
                             nueva_musica_menu_aleatoria()
@@ -9837,6 +9854,7 @@ while corriendo:
                                     partida["holds_activos"][col] = {
                                         "grupo": grupo,
                                         "midi":  midi_fijo,
+                                        "t0":    pygame.time.get_ticks(),
                                     }
                                     if pts > 0:
                                         _pu_doble = 2.0 if ahora_juego < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
@@ -9897,13 +9915,18 @@ while corriendo:
                             del canal_hold[col]
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
-                        # bonus por completar hold (HOLD MASTER lo duplica)
-                        _hb = partida.get("hold_bonus", 5)
-                        partida["puntos"] += _hb
-                        num_cols = partida["dificultad"]["columnas"]
-                        ancho_col = ANCHO // num_cols
-                        cx = col * ancho_col + ancho_col // 2
-                        crear_texto_flotante(cx, zy_p - 40, f"+{_hb}", BLANCO)
+                        # bonus SOLO si se sostuvo de verdad (>=80% de la
+                        # duracion del hold): antes se pagaba en el KEYUP
+                        # sin chequear y un tap instantaneo lo cobraba
+                        _sost = pygame.time.get_ticks() - hold.get("t0", 0)
+                        if _sost >= grupo.get("hold", 0) * 0.8:
+                            # bonus por completar hold (HOLD MASTER lo duplica)
+                            _hb = partida.get("hold_bonus", 5)
+                            partida["puntos"] += _hb
+                            num_cols = partida["dificultad"]["columnas"]
+                            ancho_col = ANCHO // num_cols
+                            cx = col * ancho_col + ancho_col // 2
+                            crear_texto_flotante(cx, zy_p - 40, f"+{_hb}", BLANCO)
                         if grupo in partida["notas_cayendo"]:
                             partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
@@ -9925,13 +9948,17 @@ while corriendo:
                             del canal_hold[col]
                         hold = partida["holds_activos"][col]
                         grupo = hold["grupo"]
-                        # bonus por completar hold (HOLD MASTER lo duplica)
-                        _hb = partida.get("hold_bonus", 5)
-                        partida["puntos"] += _hb
-                        num_cols = partida["dificultad"]["columnas"]
-                        ancho_col = ANCHO // num_cols
-                        cx = col * ancho_col + ancho_col // 2
-                        crear_texto_flotante(cx, zy_p - 40, f"+{_hb}", BLANCO)
+                        # bonus SOLO si se sostuvo de verdad (>=80% de la
+                        # duracion del hold), igual que en el KEYUP de teclado
+                        _sost = pygame.time.get_ticks() - hold.get("t0", 0)
+                        if _sost >= grupo.get("hold", 0) * 0.8:
+                            # bonus por completar hold (HOLD MASTER lo duplica)
+                            _hb = partida.get("hold_bonus", 5)
+                            partida["puntos"] += _hb
+                            num_cols = partida["dificultad"]["columnas"]
+                            ancho_col = ANCHO // num_cols
+                            cx = col * ancho_col + ancho_col // 2
+                            crear_texto_flotante(cx, zy_p - 40, f"+{_hb}", BLANCO)
                         if grupo in partida["notas_cayendo"]:
                             partida["notas_cayendo"].remove(grupo)
                         del partida["holds_activos"][col]
