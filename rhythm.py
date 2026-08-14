@@ -8757,6 +8757,67 @@ dev_mode       = False
 dibujar_pantalla_carga(1.0, "MUSICA", 1, 1)
 nueva_musica_menu_aleatoria()
 
+# ═══════════════════════════════════════════════════════ >>BENCH<< ═══
+# RHYTHM_BENCH=1: mide lo que cuesta la carga de un stage (sintesis de kit
+# e instrumento, generacion de cancion) y el dibujado de gameplay, imprime
+# un reporte y sale sin abrir el juego. Sirve para estimar si un hardware
+# mas lento (Raspberry Pi) llega: multiplicar por el factor single-core.
+if os.environ.get("RHYTHM_BENCH") == "1":
+    import time as _tb
+
+    def _bench(nombre, fn):
+        _t0 = _tb.perf_counter()
+        fn()
+        _ms = (_tb.perf_counter() - _t0) * 1000
+        print(f"[bench] {nombre}: {_ms:.0f} ms")
+        return _ms
+
+    print(f"[bench] resolucion logica {ANCHO}x{ALTO}, sample rate {SR}")
+    _rng_b = random.Random(4242)
+    ms_kit = _bench("sintetizar_kit", lambda: sintetizar_kit(_rng_b))
+    ms_insts = []
+    for _nom_b in ("PLUCK", "SAW", "FM BELL"):
+        cache_por_instrumento.pop(_nom_b, None)
+        cache_largas_por_instrumento.pop(_nom_b, None)
+        ms_insts.append(_bench(
+            f"renderizar_instrumento {_nom_b} (62 notas, corta+hold)",
+            lambda _n=_nom_b: renderizar_instrumento(_n, INSTRUMENTOS_JUGADOR[_n])))
+    ms_gen = _bench("generar_cancion seed 8810 nivel 15",
+                    lambda: generar_cancion(8810, DIFICULTADES[15]))
+    # carga de stage completa como la ve el jugador (cancion + bajo +
+    # percusion + instrumento si no esta cacheado + warmup de render)
+    _t0_c = _tb.perf_counter()
+    partida_b = iniciar_partida(8810)
+    ms_carga = (_tb.perf_counter() - _t0_c) * 1000
+    print(f"[bench] iniciar_partida(8810) completo: {ms_carga:.0f} ms")
+    # dibujado de gameplay con notas en pantalla (mismas fake del warmup)
+    _zy_b = partida_b.get("zona_y", ZONA_Y)
+    _nc_b = partida_b["cancion"]["notas_columnas"]
+    partida_b["notas_cayendo"] = [
+        {"cols": [i % len(_nc_b)], "midis": [_nc_b[i % len(_nc_b)]],
+         "tiempo_ms": 99999, "acertadas": set(), "es_acorde": (i % 4 == 1),
+         "hold": 800 if i % 4 == 2 else 0, "hold_px": 60 if i % 4 == 2 else 0,
+         "power_up": "estrella" if i % 4 == 3 else None,
+         "y": _zy_b - 60 - i * 55}
+        for i in range(8)
+    ]
+    _t0_f = _tb.perf_counter()
+    _NF = 240
+    for _f in range(_NF):
+        pantalla.fill(NEGRO)
+        ahora_ms = pygame.time.get_ticks()  # global que dibujar_juego consulta
+        dibujar_juego(partida_b, _f * 16)
+    ms_frame = (_tb.perf_counter() - _t0_f) * 1000 / _NF
+    print(f"[bench] dibujar_juego: {ms_frame:.2f} ms/frame (presupuesto 60fps = 16.7 ms)")
+    ms_inst_prom = sum(ms_insts) / len(ms_insts)
+    print("[bench] extrapolacion single-core aproximada:")
+    for _hw_b, _fac_b in (("Pi 5 (~x2.8)", 2.8), ("Pi 4 (~x5)", 5.0), ("Pi 3 (~x10)", 10.0)):
+        print(f"[bench]   {_hw_b}: instrumento ~{ms_inst_prom * _fac_b / 1000:.1f} s, "
+              f"carga stage ~{ms_carga * _fac_b / 1000:.1f} s, "
+              f"frame ~{ms_frame * _fac_b:.1f} ms")
+    pygame.quit()
+    sys.exit(0)
+
 corriendo = True
 while corriendo:
     pantalla.fill(NEGRO)
