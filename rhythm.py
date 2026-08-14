@@ -2968,12 +2968,15 @@ def get_dificultad(seed):
 # completa cerca del climax. Si el jugador se atrasa por misses, la
 # cancion retoma desde el nudo (nunca vuelve a la intro).
 META_FRAC = 0.92
+# curva RECORTADA para contexto instalacion/arcade: la gente que mira
+# tiene que poder jugar sin hacer 20 minutos de fila. Runs completos:
+# FACIL ~3min, NORMAL ~4, DIFICIL ~6, CHAOS ~10 (antes 3.3/4.8/9.3/19).
 LOOPS_NIVEL = {
-    1: 0.9,  2: 0.9,  3: 1.0,  4: 1.0,  5: 1.1,
-    6: 1.1,  7: 1.2,  8: 1.2,  9: 1.3,  10: 1.3,
-    11: 1.4, 12: 1.4, 13: 1.5, 14: 1.5, 15: 1.6,
+    1: 0.90,  2: 0.90,  3: 0.95,  4: 0.95,  5: 1.00,
+    6: 1.00,  7: 1.05,  8: 1.05,  9: 1.10,  10: 1.10,
+    11: 1.15, 12: 1.15, 13: 1.20, 14: 1.20, 15: 1.20,
 }
-META_MULT_STAGE = {1: 1.0, 2: 1.3, 3: 1.6, 4: 2.0}
+META_MULT_STAGE = {1: 1.0, 2: 1.2, 3: 1.4, 4: 1.6}
 
 def meta_loops(nivel_dif, stage_n):
     """Multiplicador de duracion de la cancion del stage."""
@@ -3687,7 +3690,9 @@ def generar_cancion(seed, dif, instrumento_forzado=None, dur_mult=1.0, pu_mult=1
     # asigna una duracion a cada seccion. La duracion total sigue escalando con
     # la dificultad ajustando cuantos compases dura cada seccion.
     nivel_dif = dif.get("nivel", 5)
-    dur_total_min, dur_total_max = 26.0, 115.0
+    # tope bajado de 115s a 85s: niveles altos con canciones base mas
+    # cortas (contexto instalacion: runs de ~10min maximo, no de 19)
+    dur_total_min, dur_total_max = 26.0, 85.0
     dur_total_obj = dur_total_min + (nivel_dif - 1) / 14 * (dur_total_max - dur_total_min)
     dur_total_obj *= rng.uniform(0.9, 1.1)
     # stages: la cancion cubre el stage entero (x1.0 stage 1 .. x3.2 CHAOS st4)
