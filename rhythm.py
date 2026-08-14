@@ -156,21 +156,26 @@ def guardar_config():
         pass
 
 def cargar_config():
+    # Blindado contra config.json corrupto o editado a mano: antes los
+    # valores crudos se copiaban a config ANTES de validar y un tipo
+    # invalido (p.ej. "brillo": "0.9" como string) quedaba aplicado con
+    # el error tragado -> crash-loop en cada arranque. Ahora solo se
+    # aceptan valores numericos y cualquier clave invalida conserva el
+    # default en vez de romper el juego.
     try:
         with open(CONFIG_FILE, "r") as f:
             guardado = json.load(f)
-        for k, v in guardado.items():
-            if k in config:
-                config[k] = v
-        # validar rangos
-        config["brillo"] = max(0.3, min(1.0, config["brillo"]))
-        config["volumen"] = max(0.0, min(1.0, config["volumen"]))
-        config["vol_menu"] = max(0.0, min(1.0, config["vol_menu"]))
-        config["res_idx"] = max(0, min(len(RESOLUCIONES) - 1, config["res_idx"]))
-        config["audio_idx"] = max(0, min(len(AUDIO_DEVICES) - 1, config["audio_idx"]))
-        config["judge_offset"] = max(0, min(300, int(config["judge_offset"])))
     except Exception:
-        pass
+        return
+    for k, v in guardado.items():
+        if k in config and isinstance(v, (int, float)) and not isinstance(v, bool):
+            config[k] = v
+    config["brillo"] = max(0.3, min(1.0, float(config["brillo"])))
+    config["volumen"] = max(0.0, min(1.0, float(config["volumen"])))
+    config["vol_menu"] = max(0.0, min(1.0, float(config["vol_menu"])))
+    config["res_idx"] = max(0, min(len(RESOLUCIONES) - 1, int(config["res_idx"])))
+    config["audio_idx"] = max(0, min(len(AUDIO_DEVICES) - 1, int(config["audio_idx"])))
+    config["judge_offset"] = max(0, min(300, int(config["judge_offset"])))
 
 cargar_config()
 
@@ -5455,8 +5460,10 @@ def _explotar_figura(partida):
 def chequear_muerte(partida, zy_p):
     """UNICO punto de verdad para morir (lo llaman miss, bomba y error de
     tecla): si la vida llego a 0, consume RESURRECCION (revive con 5,
-    overlay dorado via resurreccion_t) o dispara el game over."""
-    if dev_mode or partida["vida"] > 0 or partida.get("game_over"):
+    overlay dorado via resurreccion_t) o dispara el game over.
+    Un stage GANADO (terminada) no puede perderse: la victoria es final."""
+    if (dev_mode or partida["vida"] > 0 or partida.get("game_over")
+            or partida.get("terminada")):
         return
     if partida.get("perk_resurreccion"):
         # se consume del run y de la lista visible del HUD
@@ -9479,7 +9486,11 @@ while corriendo:
                     partida["exportando"] = False
                     if ruta:
                         partida["export_ruta"] = ruta
-                elif evento.key in COLUMNAS:
+                elif (evento.key in COLUMNAS and not partida.get("game_over")
+                        and not partida.get("terminada")):
+                    # gate de game_over/terminada: sin el, machacar teclas en
+                    # la pantalla de victoria/derrota seguia restando puntos
+                    # y vida (el path de gamepad ya lo tenia)
                     col = COLUMNAS[evento.key]
                     # ESPEJO: la tecla fisica se mapea a otra columna
                     col = partida.get("mapa_teclas", {}).get(col, col)
@@ -10158,6 +10169,19 @@ while corriendo:
                         # es lo correcto, y el jugador no controla nada bajo AUTO)
                         if grupo.get("es_bomba"):
                             continue
+                        # NO re-acreditar lo ya golpeado: un hold en curso espera
+                        # su KEYUP (esta en holds_activos), y de un acorde parcial
+                        # solo se pagan las columnas pendientes. Antes AUTO
+                        # acreditaba el grupo ENTERO otra vez: puntos y meta_hits
+                        # dobles, y holds_activos quedaba apuntando a grupos
+                        # removidos.
+                        if any(_h["grupo"] is grupo for _h in partida["holds_activos"].values()):
+                            auto_restantes.append(grupo)
+                            continue
+                        _cols_pend_a = [c for c in grupo["cols"]
+                                        if c not in grupo.get("acertadas", set())]
+                        if not _cols_pend_a:
+                            continue  # todo ya acreditado: solo retirar la nota
                         pu_id_a = grupo.get("power_up")
                         if pu_id_a:
                             # auto-atrapar power-ups tambien
@@ -10178,8 +10202,8 @@ while corriendo:
                         # la meta: si no, el power-up AUTO frenaria el
                         # progreso del stage en vez de ser un premio)
                         partida["combo"] += 1
-                        partida["n_perfecto"] = partida.get("n_perfecto", 0) + len(grupo["cols"])
-                        partida["meta_hits"] = partida.get("meta_hits", 0) + len(grupo["cols"])
+                        partida["n_perfecto"] = partida.get("n_perfecto", 0) + len(_cols_pend_a)
+                        partida["meta_hits"] = partida.get("meta_hits", 0) + len(_cols_pend_a)
                         if partida["combo"] > partida["max_combo"]:
                             partida["max_combo"] = partida["combo"]
                         if (partida.get("perk_regen") and partida["combo"] > 0
@@ -10191,7 +10215,7 @@ while corriendo:
                                            1 + partida["combo"] // partida.get("combo_div", 5))
                         _pu_doble_a = 2.0 if ahora < partida.get("efectos_activos", {}).get("doble", 0) else 1.0
                         bonus_hold = partida.get("hold_bonus", 5) if grupo.get("hold", 0) > 0 else 0
-                        total_a = int((pts_a * len(grupo["cols"]) + bonus_hold) * combo_mult_a
+                        total_a = int((pts_a * len(_cols_pend_a) + bonus_hold) * combo_mult_a
                                       * partida.get("mult_mods", 1.0) * _pu_doble_a)
                         partida["puntos"] += total_a
                         # sonido de las notas (afinado con la melodia)
@@ -10201,8 +10225,8 @@ while corriendo:
                                 _cha = _sa.play()
                                 if _cha:
                                     _cha.set_volume(config["volumen"])
-                        # efectos visuales por columna
-                        for _ca in grupo["cols"]:
+                        # efectos visuales por columna (solo las pendientes)
+                        for _ca in _cols_pend_a:
                             cxa = _ca * ancho_col_a + ancho_col_a // 2
                             crear_explosion(cxa, zy_p, 40, color=(255, 255, 100))
                             crear_flash(_ca, 0.5)
@@ -10220,6 +10244,11 @@ while corriendo:
                 if nota_perdida:
                     # BOMBA no tocada: se esquivo, NO cuenta como miss (deseado)
                     if n.get("es_bomba"):
+                        continue
+                    # stage YA GANADO: las notas restantes se van sin castigo
+                    # (antes seguian contando MISS -2 vida y podian matar al
+                    # jugador DESPUES de cumplir la meta)
+                    if partida.get("terminada"):
                         continue
                     es_hold_activo = any(c in partida["holds_activos"] for c in n["cols"])
                     if not es_hold_activo:
