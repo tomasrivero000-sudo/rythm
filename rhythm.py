@@ -9542,13 +9542,23 @@ while corriendo:
                                         if partida.get("perk_resurreccion"):
                                             partida["perk_resurreccion"] = False
                                             partida["vida"] = 5
+                                            # sacarlo TAMBIEN de las listas visibles: el
+                                            # HUD mostraba "RES" despues de consumido y
+                                            # el jugador creia que seguia teniendolo
                                             if run_actual is not None:
                                                 run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
                                                                        if pk.get("id") != "resurreccion"]
+                                            partida["perks"] = [pk for pk in partida.get("perks", [])
+                                                                if pk.get("id") != "resurreccion"]
                                             crear_texto_flotante(ANCHO // 2, ALTO // 2, "RESURRECCION!", (255, 220, 100), True)
+                                            crear_texto_flotante(ANCHO // 2, ALTO // 2 + 40, "+5 VIDA (SE CONSUMIO)", (255, 220, 100))
                                             crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
                                             crear_shake(10)
+                                            sfx_power_up("vida")
+                                            print("[muerte] RESURRECCION consumida (bomba) -> vida=5")
                                         else:
+                                            print(f"[muerte] game over por bomba | resurreccion={partida.get('perk_resurreccion', False)} "
+                                                  f"perks={[pk.get('id') for pk in partida.get('perks', [])]}")
                                             partida["game_over"] = True
                                             partida["game_over_t"] = pygame.time.get_ticks()
                                             _explotar_notas_muerte(partida)
@@ -10162,17 +10172,26 @@ while corriendo:
                         if not dev_mode and partida["vida"] <= 0:
                             if partida.get("perk_resurreccion"):
                                 # RESURRECCION: revive UNA vez con 5 de vida.
-                                # se consume tambien del run para no re-aplicarse
-                                # en stages siguientes.
+                                # se consume tambien del run (para no re-aplicarse
+                                # en stages siguientes) y de la lista visible del
+                                # HUD (mostraba "RES" despues de consumido y el
+                                # jugador creia que seguia teniendolo).
                                 partida["perk_resurreccion"] = False
                                 partida["vida"] = 5
                                 if run_actual is not None:
                                     run_actual["perks"] = [pk for pk in run_actual.get("perks", [])
                                                            if pk.get("id") != "resurreccion"]
+                                partida["perks"] = [pk for pk in partida.get("perks", [])
+                                                    if pk.get("id") != "resurreccion"]
                                 crear_texto_flotante(ANCHO // 2, ALTO // 2, "RESURRECCION!", (255, 220, 100), True)
+                                crear_texto_flotante(ANCHO // 2, ALTO // 2 + 40, "+5 VIDA (SE CONSUMIO)", (255, 220, 100))
                                 crear_explosion(ANCHO // 2, zy_p, 120, color=(255, 220, 100))
                                 crear_shake(10)
+                                sfx_power_up("vida")
+                                print("[muerte] RESURRECCION consumida (miss) -> vida=5")
                             else:
+                                print(f"[muerte] game over por miss | resurreccion={partida.get('perk_resurreccion', False)} "
+                                      f"perks={[pk.get('id') for pk in partida.get('perks', [])]}")
                                 partida["game_over"] = True
                                 partida["game_over_t"] = pygame.time.get_ticks()
                                 _explotar_notas_muerte(partida)
