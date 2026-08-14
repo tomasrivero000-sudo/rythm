@@ -8004,16 +8004,28 @@ def cambiar_audio_device(idx):
 # A-S-D-F-G-H-J-K. La pantalla de rebind se accede desde CONFIG.
 BINDINGS_FILE = os.path.join(BASE_DIR, "bindings.json")
 
+# teclas que el gameplay consume ANTES de mirar COLUMNAS (pausa, seed):
+# bindearlas a una columna la dejaria muerta en pleno juego.
+TECLAS_RESERVADAS = {pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE} | set(DIGITOS_TECLA)
+
 def cargar_bindings():
-    """Carga el mapeo tecla->columna desde bindings.json."""
+    """Carga el mapeo tecla->columna desde bindings.json y valida el esquema:
+    keycodes int, exactamente las 8 columnas 0-7 cubiertas y sin teclas
+    reservadas. Un mapeo invalido (columna sin tecla) dejaba COLUMNAS/LABELS
+    con <8 entradas -> IndexError en gameplay con seeds de 8 columnas."""
     try:
         with open(BINDINGS_FILE, "r") as f:
             data = json.load(f)
-            # data es {str(keycode): col_index, ...}
-            return {int(k): v for k, v in data.items()}
+        # data es {str(keycode): col_index, ...}
+        bindings = {int(k): v for k, v in data.items()}
+        if (sorted(bindings.values()) == list(range(8))
+                and not any(k in TECLAS_RESERVADAS for k in bindings)):
+            return bindings
+        print("bindings.json invalido: usando teclas default A-K")
     except:
-        # default: A=0, S=1, D=2, F=3, G=4, H=5, J=6, K=7
-        return dict(COLUMNAS)
+        pass
+    # default: A=0, S=1, D=2, F=3, G=4, H=5, J=6, K=7
+    return dict(COLUMNAS)
 
 def guardar_bindings(bindings):
     """Guarda el mapeo tecla->columna."""
@@ -8043,6 +8055,7 @@ aplicar_bindings()
 rebind_col = 0       # columna que estamos asignando (0-7)
 rebind_esperando = False  # True = esperando que el usuario aprete una tecla
 rebind_bindings = {}  # bindings temporales mientras se configura
+rebind_msg = ""      # aviso (tecla reservada / columnas sin tecla)
 
 def dibujar_rebind():
     """Pantalla de reasignacion de teclas."""
@@ -8110,6 +8123,10 @@ def dibujar_rebind():
     if rebind_col >= 8:
         listo = fuente.render("LISTO!", True, (140, 230, 100))
         pantalla.blit(listo, (cx - listo.get_width() // 2, inst_y + 30))
+
+    if rebind_msg:
+        aviso = fuente_chica.render(rebind_msg, True, (255, 120, 100))
+        pantalla.blit(aviso, (cx - aviso.get_width() // 2, inst_y + 60))
 
 # --- TECLADO MUSICAL POR LINE-IN (deteccion de pitch) ---
 if BUILD_PC:
@@ -9102,6 +9119,7 @@ while corriendo:
                         sfx_confirm()
                         rebind_col = 0
                         rebind_esperando = False
+                        rebind_msg = ""
                         rebind_bindings = dict(cargar_bindings())
                         ESTADO = "rebind"
                     elif op_cfg == "linein":
@@ -9156,6 +9174,11 @@ while corriendo:
                     # (ignorar ESC y teclas de navegacion en este modo)
                     if evento.key == pygame.K_ESCAPE:
                         rebind_esperando = False
+                    elif evento.key in TECLAS_RESERVADAS:
+                        # ENTER/SPACE/digitos: el gameplay las consume (pausa,
+                        # seed) antes de mirar COLUMNAS -> columna muerta
+                        rebind_msg = f"{nombre_tecla(evento.key)} ES RESERVADA, ELEGI OTRA"
+                        sfx_select()
                     else:
                         # si la tecla ya estaba asignada a otra col, desasignarla
                         rebind_bindings = {k: v for k, v in rebind_bindings.items()
@@ -9164,20 +9187,32 @@ while corriendo:
                         if evento.key in rebind_bindings:
                             del rebind_bindings[evento.key]
                         rebind_bindings[evento.key] = rebind_col
+                        rebind_msg = ""
                         sfx_confirm()
                         rebind_esperando = False
                         rebind_col += 1
                 else:
                     if evento.key == pygame.K_ESCAPE:
                         # cancelar sin guardar
+                        rebind_msg = ""
                         ESTADO = "config"
                     elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                         if rebind_col >= 8:
-                            # guardar y salir
-                            guardar_bindings(rebind_bindings)
-                            aplicar_bindings()
-                            sfx_confirm()
-                            ESTADO = "config"
+                            # guardar solo si las 8 columnas tienen tecla:
+                            # robar una tecla de otra columna puede dejar
+                            # columnas vacias -> IndexError en gameplay
+                            faltan = [c for c in range(8)
+                                      if c not in rebind_bindings.values()]
+                            if faltan:
+                                rebind_msg = "FALTA TECLA EN COL " + ", ".join(
+                                    str(c + 1) for c in faltan)
+                                sfx_select()
+                            else:
+                                rebind_msg = ""
+                                guardar_bindings(rebind_bindings)
+                                aplicar_bindings()
+                                sfx_confirm()
+                                ESTADO = "config"
                         else:
                             # empezar a esperar tecla para esta columna
                             rebind_esperando = True
