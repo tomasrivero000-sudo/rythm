@@ -6568,16 +6568,17 @@ def dibujar_menu():
     t_anim = pygame.time.get_ticks() / 1000.0
     cx = ANCHO // 2
 
-    # colores por opcion del menu
-    MENU_COLORES = [
-        (0, 220, 255),    # JUGAR: cyan
-        (255, 180, 60),   # INSTRUMENTO: dorado
-        (255, 140, 80),   # CARRERA: naranja
-        (140, 230, 100),  # TUTORIAL: verde
-        (180, 120, 255),  # LEADERBOARD: violeta
-        (255, 100, 140),  # CONFIG: rosa
-    ]
-    col_sel = MENU_COLORES[menu_opcion]
+    # colores por NOMBRE de opcion (dict, no lista posicional: en BUILD_PC
+    # se quita INSTRUMENTO de MENU_OPCIONES y una lista quedaria corrida)
+    MENU_COLORES = {
+        "JUGAR":       (0, 220, 255),    # cyan
+        "INSTRUMENTO": (255, 180, 60),   # dorado
+        "CARRERA":     (255, 140, 80),   # naranja
+        "TUTORIAL":    (140, 230, 100),  # verde
+        "LEADERBOARD": (180, 120, 255),  # violeta
+        "CONFIG":      (255, 100, 140),  # rosa
+    }
+    col_sel = MENU_COLORES[MENU_OPCIONES[menu_opcion]]
 
     # visualizador de barras tipo ecualizador (con tinte del color seleccionado)
     tms = t_anim * 3
@@ -6618,7 +6619,7 @@ def dibujar_menu():
     gap = 55
     for i, opcion in enumerate(MENU_OPCIONES):
         sel = (i == menu_opcion)
-        mc = MENU_COLORES[i]
+        mc = MENU_COLORES[opcion]
         if sel:
             # fondo con tinte del color de la opcion
             ow = 280
@@ -6643,7 +6644,7 @@ def dibujar_menu():
     nivel_max = c_data.get("nivel_max", 1)
     if nivel_max > 1:
         dif_nom = DIFICULTADES.get(nivel_max, {}).get("nombre", "?")
-        prog = fuente_chica.render(f"CARRERA: {dif_nom}", True, MENU_COLORES[1])
+        prog = fuente_chica.render(f"CARRERA: {dif_nom}", True, MENU_COLORES["CARRERA"])
         pantalla.blit(prog, (cx - prog.get_width() // 2, y0 + len(MENU_OPCIONES) * gap + 20))
 
     # controles
@@ -6867,7 +6868,13 @@ def dibujar_selector_seed(seed_actual, cargando):
     esc = fuente_chica.render("ESC = VOLVER AL MENU", True, GRIS)
     pantalla.blit(esc, (cx - esc.get_width() // 2, ALTO - 40))
 
-config_opcion = 0  # 0=brillo 1=volumen 2=vol_menu 3=resolucion 4=audio 5=latencia 6=teclas 7=linein
+config_opcion = 0  # indice dentro de CONFIG_OPCIONES
+# fuente UNICA de las opciones de CONFIG, en orden. dibujar_config y el
+# handler derivan cantidad e identidad de aca: agregar o quitar una opcion
+# (p. ej. linein fuera de BUILD_PC) no puede desalinear indices ni conteos.
+CONFIG_OPCIONES = ["brillo", "volumen", "vol_menu", "res", "audio", "latencia", "teclas"]
+if not BUILD_PC:
+    CONFIG_OPCIONES.append("linein")
 pausa_opcion = 0   # 0=continuar, 1=reiniciar, 2=salir
 mods_opcion = 0    # opcion seleccionada en pantalla de modificadores
 carrera_cursor = 0 # nivel seleccionado en la pantalla de carrera (0-indexed)
@@ -7858,17 +7865,17 @@ def dibujar_config():
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 60))
     pygame.draw.line(pantalla, BLANCO, (60, 120), (ANCHO - 60, 120), 2)
 
-    opciones = [
-        ("BRILLO", config["brillo"], "barra"),
-        ("VOLUMEN", config["volumen"], "barra"),
-        ("VOL. MENU", config["vol_menu"], "barra"),
-        ("RESOLUCION", config["res_idx"], "res"),
-        ("AUDIO", config["audio_idx"], "audio"),
-        ("LATENCIA", config.get("judge_offset", 0), "latencia"),
-        ("TECLAS", 0, "teclas"),
-    ]
-    if not BUILD_PC:
-        opciones.append(("TECLADO MUSICAL", 0, "linein"))
+    filas = {
+        "brillo":   ("BRILLO", config["brillo"], "barra"),
+        "volumen":  ("VOLUMEN", config["volumen"], "barra"),
+        "vol_menu": ("VOL. MENU", config["vol_menu"], "barra"),
+        "res":      ("RESOLUCION", config["res_idx"], "res"),
+        "audio":    ("AUDIO", config["audio_idx"], "audio"),
+        "latencia": ("LATENCIA", config.get("judge_offset", 0), "latencia"),
+        "teclas":   ("TECLAS", 0, "teclas"),
+        "linein":   ("TECLADO MUSICAL", 0, "linein"),
+    }
+    opciones = [filas[k] for k in CONFIG_OPCIONES]
     y0 = 145
     for i, (nombre, valor, tipo) in enumerate(opciones):
         y = y0 + i * 44
@@ -9042,13 +9049,14 @@ while corriendo:
                     guardar_config()
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
-                    config_opcion = (config_opcion - 1) % (7 if BUILD_PC else 8)
+                    config_opcion = (config_opcion - 1) % len(CONFIG_OPCIONES)
                     sfx_select()
                 elif evento.key == pygame.K_DOWN:
-                    config_opcion = (config_opcion + 1) % (7 if BUILD_PC else 8)
+                    config_opcion = (config_opcion + 1) % len(CONFIG_OPCIONES)
                     sfx_select()
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if config_opcion == 5:
+                    op_cfg = CONFIG_OPCIONES[config_opcion]
+                    if op_cfg == "latencia":
                         # medir latencia global (teclado/gamepad)
                         sfx_confirm()
                         latencia_origen = "config"
@@ -9057,14 +9065,14 @@ while corriendo:
                         latencia_flash_activo = False
                         latencia_esperando = False
                         ESTADO = "medir_latencia"
-                    elif config_opcion == 6:
+                    elif op_cfg == "teclas":
                         # abrir pantalla de rebind de teclas
                         sfx_confirm()
                         rebind_col = 0
                         rebind_esperando = False
                         rebind_bindings = dict(cargar_bindings())
                         ESTADO = "rebind"
-                    elif config_opcion == 7:
+                    elif op_cfg == "linein":
                         # abrir setup de teclado musical (seleccion de dispositivo)
                         sfx_confirm()
                         if LINEIN_DISPONIBLE:
@@ -9075,36 +9083,38 @@ while corriendo:
                             # sounddevice no instalado: mostrar pantalla con instrucciones
                             ESTADO = "linein_setup"
                 elif evento.key == pygame.K_LEFT:
-                    if config_opcion == 0:
+                    op_cfg = CONFIG_OPCIONES[config_opcion]
+                    if op_cfg == "brillo":
                         config["brillo"] = max(0.3, round(config["brillo"] - 0.1, 1))
-                    elif config_opcion == 1:
+                    elif op_cfg == "volumen":
                         config["volumen"] = max(0.0, round(config["volumen"] - 0.1, 1))
-                    elif config_opcion == 2:
+                    elif op_cfg == "vol_menu":
                         config["vol_menu"] = max(0.0, round(config["vol_menu"] - 0.1, 1))
-                    elif config_opcion == 3:
+                    elif op_cfg == "res":
                         config["res_idx"] = max(0, config["res_idx"] - 1)
                         aplicar_resolucion()
-                    elif config_opcion == 4:
+                    elif op_cfg == "audio":
                         nuevo = max(0, config["audio_idx"] - 1)
                         if nuevo != config["audio_idx"]:
                             cambiar_audio_device(nuevo)
-                    elif config_opcion == 5:
+                    elif op_cfg == "latencia":
                         config["judge_offset"] = max(0, config.get("judge_offset", 0) - 10)
                 elif evento.key == pygame.K_RIGHT:
-                    if config_opcion == 0:
+                    op_cfg = CONFIG_OPCIONES[config_opcion]
+                    if op_cfg == "brillo":
                         config["brillo"] = min(1.0, round(config["brillo"] + 0.1, 1))
-                    elif config_opcion == 1:
+                    elif op_cfg == "volumen":
                         config["volumen"] = min(1.0, round(config["volumen"] + 0.1, 1))
-                    elif config_opcion == 2:
+                    elif op_cfg == "vol_menu":
                         config["vol_menu"] = min(1.0, round(config["vol_menu"] + 0.1, 1))
-                    elif config_opcion == 3:
+                    elif op_cfg == "res":
                         config["res_idx"] = min(len(RESOLUCIONES) - 1, config["res_idx"] + 1)
                         aplicar_resolucion()
-                    elif config_opcion == 4:
+                    elif op_cfg == "audio":
                         nuevo = min(len(AUDIO_DEVICES) - 1, config["audio_idx"] + 1)
                         if nuevo != config["audio_idx"]:
                             cambiar_audio_device(nuevo)
-                    elif config_opcion == 5:
+                    elif op_cfg == "latencia":
                         config["judge_offset"] = min(300, config.get("judge_offset", 0) + 10)
 
         elif ESTADO == "rebind":
