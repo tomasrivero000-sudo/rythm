@@ -43,6 +43,13 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# BUILD PC (testers): rhythm_pc.py setea RHYTHM_BUILD=pc antes de importar
+# este modulo. Desactiva todo el hardware de la instalacion (modo
+# instrumento / teclado musical por line-in); el juego queda completo y
+# jugable con teclado de PC y gamepad. rhythm.py sigue siendo la UNICA
+# fuente: la build de testers no es un fork, es este flag.
+BUILD_PC = os.environ.get("RHYTHM_BUILD", "").lower() == "pc"
+
 # --- crash handler: guarda cualquier error no manejado a un archivo ---
 def _crash_handler(exc_type, exc_value, exc_tb):
     try:
@@ -6530,6 +6537,8 @@ def dibujar_tutorial(pagina):
 
 menu_opcion = 0   # opcion seleccionada del menu principal
 MENU_OPCIONES = ["JUGAR", "INSTRUMENTO", "CARRERA", "TUTORIAL", "LEADERBOARD", "CONFIG"]
+if BUILD_PC:
+    MENU_OPCIONES.remove("INSTRUMENTO")
 
 def dibujar_menu():
     """Menu principal navegable con flechas y ENTER."""
@@ -7835,8 +7844,9 @@ def dibujar_config():
         ("AUDIO", config["audio_idx"], "audio"),
         ("LATENCIA", config.get("judge_offset", 0), "latencia"),
         ("TECLAS", 0, "teclas"),
-        ("TECLADO MUSICAL", 0, "linein"),
     ]
+    if not BUILD_PC:
+        opciones.append(("TECLADO MUSICAL", 0, "linein"))
     y0 = 145
     for i, (nombre, valor, tipo) in enumerate(opciones):
         y = y0 + i * 44
@@ -8040,13 +8050,18 @@ def dibujar_rebind():
         pantalla.blit(listo, (cx - listo.get_width() // 2, inst_y + 30))
 
 # --- TECLADO MUSICAL POR LINE-IN (deteccion de pitch) ---
-try:
-    import sounddevice as sd
-    LINEIN_DISPONIBLE = True
-    print("sounddevice disponible: teclado musical por line-in habilitado")
-except ImportError:
+if BUILD_PC:
+    # build de testers: sin hardware de instalacion, ni intentar importar
     LINEIN_DISPONIBLE = False
-    print("sounddevice no disponible: solo teclado (pip install sounddevice)")
+    print("BUILD PC (testers): teclado musical por line-in deshabilitado")
+else:
+    try:
+        import sounddevice as sd
+        LINEIN_DISPONIBLE = True
+        print("sounddevice disponible: teclado musical por line-in habilitado")
+    except ImportError:
+        LINEIN_DISPONIBLE = False
+        print("sounddevice no disponible: solo teclado (pip install sounddevice)")
 
 LINEIN_FILE = os.path.join(BASE_DIR, "linein_notas.json")
 LINEIN_SR = 22050
@@ -9005,10 +9020,10 @@ while corriendo:
                     guardar_config()
                     ESTADO = "menu"
                 elif evento.key == pygame.K_UP:
-                    config_opcion = (config_opcion - 1) % 8
+                    config_opcion = (config_opcion - 1) % (7 if BUILD_PC else 8)
                     sfx_select()
                 elif evento.key == pygame.K_DOWN:
-                    config_opcion = (config_opcion + 1) % 8
+                    config_opcion = (config_opcion + 1) % (7 if BUILD_PC else 8)
                     sfx_select()
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if config_opcion == 5:
