@@ -5991,59 +5991,73 @@ def dibujar_juego(partida, ahora):
         _ne_y += random.randint(-1, 1)
     pantalla.blit(_ne_txt, (_ne_x, _ne_y))
 
-    # CENTRO: puntos + combo
-    pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
-    pantalla.blit(pts, (ANCHO // 2 - pts.get_width() // 2, 10))
-    if partida["combo"] >= 5:
-        combo_txt = fuente.render(f"{partida['combo']}x", True, col_nota)
-        pantalla.blit(combo_txt, (ANCHO // 2 - combo_txt.get_width() // 2, 36))
-
-    # DERECHA: barra de vida + barra de meta
-    vida_w = 160
-    vida_x = ANCHO - vida_w - 10
-    vida_y = 14
+    # CENTRO: la VIDA es lo mas legible del HUD (barra ancha + numeros).
+    # Debajo, la barra de meta del stage (progreso hacia ganar).
+    vida_w = 260
+    vida_x = ANCHO // 2 - vida_w // 2
+    vida_y = 12
+    vida_h = 14
     vida_pct = partida["vida"] / partida["vida_max"]
-    pygame.draw.rect(pantalla, GRIS, (vida_x, vida_y, vida_w, 8))
+    pygame.draw.rect(pantalla, GRIS, (vida_x, vida_y, vida_w, vida_h))
     if vida_pct > 0:
-        color_vida = BLANCO if vida_pct > 0.3 else GRIS_MED
-        pygame.draw.rect(pantalla, color_vida, (vida_x, vida_y, int(vida_w * vida_pct), 8))
-    pygame.draw.rect(pantalla, BLANCO, (vida_x, vida_y, vida_w, 8), 1)
-    vida_lbl = fuente_chica.render("HP", True, GRIS)
-    pantalla.blit(vida_lbl, (vida_x - vida_lbl.get_width() - 4, vida_y - 2))
+        # bajo 30%: rojo + parpadeo (la info critica tiene que gritar)
+        if vida_pct > 0.3:
+            color_vida = BLANCO
+        elif (pygame.time.get_ticks() // 250) % 2 == 0:
+            color_vida = (255, 90, 90)
+        else:
+            color_vida = (180, 60, 60)
+        pygame.draw.rect(pantalla, color_vida, (vida_x, vida_y, int(vida_w * vida_pct), vida_h))
+    pygame.draw.rect(pantalla, BLANCO, (vida_x, vida_y, vida_w, vida_h), 1)
+    vida_lbl = fuente_chica.render(f"HP {partida['vida']}/{partida['vida_max']}", True,
+                                   BLANCO if vida_pct > 0.3 else (255, 90, 90))
+    pantalla.blit(vida_lbl, (vida_x - vida_lbl.get_width() - 8, vida_y))
 
     meta = partida.get("meta_notas", 0)
     if meta > 0:
         _hits_m = partida.get("meta_hits", 0)
         meta_pct = min(1.0, _hits_m / max(1, meta))
-        meta_y = 28
-        pygame.draw.rect(pantalla, GRIS, (vida_x, meta_y, vida_w, 8))
+        meta_y = vida_y + vida_h + 4
+        pygame.draw.rect(pantalla, GRIS, (vida_x, meta_y, vida_w, 6))
         if meta_pct > 0:
-            pygame.draw.rect(pantalla, col_nota, (vida_x, meta_y, int(vida_w * meta_pct), 8))
-        pygame.draw.rect(pantalla, BLANCO, (vida_x, meta_y, vida_w, 8), 1)
+            pygame.draw.rect(pantalla, col_nota, (vida_x, meta_y, int(vida_w * meta_pct), 6))
+        pygame.draw.rect(pantalla, BLANCO, (vida_x, meta_y, vida_w, 6), 1)
         meta_txt = fuente_chica.render(f"{_hits_m}/{meta}", True, GRIS_MED)
-        pantalla.blit(meta_txt, (vida_x - meta_txt.get_width() - 4, meta_y - 2))
+        pantalla.blit(meta_txt, (vida_x + vida_w + 8, meta_y - 3))
 
-    # instrumento actual: icono identitario + nombre (discreto, derecha)
+    # DERECHA: puntos en la esquina + combo debajo + instrumento
+    pts = fuente.render(str(partida["puntos"]).zfill(6), True, BLANCO)
+    pantalla.blit(pts, (ANCHO - pts.get_width() - 10, 10))
+    if partida["combo"] >= 5:
+        combo_txt = fuente.render(f"{partida['combo']}x", True, col_nota)
+        pantalla.blit(combo_txt, (ANCHO - combo_txt.get_width() - 10, 36))
     inst_nombre = partida["cancion"].get("instrumento", "")
     if inst_nombre:
         inst_txt = fuente_chica.render(inst_nombre, True, GRIS_MED)
-        inst_y = 44
+        inst_y = 62
         pantalla.blit(inst_txt, (ANCHO - inst_txt.get_width() - 10, inst_y))
         forma_inst = forma_de_instrumento(inst_nombre)
         dibujar_icono_inst(pantalla, forma_inst,
                            ANCHO - inst_txt.get_width() - 26, inst_y + 7, 8, col_nota)
 
-    # IZQUIERDA: stage + escudo + efectos temporales
+    # IZQUIERDA (apilado, sin superponerse): enemigo (arriba, y=8) ->
+    # stage -> perks -> escudo -> efectos temporales
     si = partida.get("stage_info")
     if si:
         st_txt = fuente_chica.render(f"STAGE {si['n']}/{NUM_STAGES}", True, col_nota)
-        pantalla.blit(st_txt, (10, 12))
+        pantalla.blit(st_txt, (10, 26))
+    # perks activos abreviados (antes dibujar_perks_hud existia pero nunca
+    # se llamaba: el jugador no tenia forma de ver sus perks en la partida)
+    _perks_hud = partida.get("perks", [])
+    if _perks_hud:
+        _ptxt = fuente_chica.render(" ".join(p["nombre"][:3] for p in _perks_hud), True, GRIS)
+        pantalla.blit(_ptxt, (10, 44))
     cargas = partida.get("escudo_cargas", 0)
     if cargas > 0:
         esc_c = fuente_chica.render(f"ESCUDO x{cargas}", True, (100, 200, 255))
-        pantalla.blit(esc_c, (10, 30))
+        pantalla.blit(esc_c, (10, 62))
     efectos = partida.get("efectos_activos", {})
-    ey = 50
+    ey = 80
     for eid, t_fin in list(efectos.items()):
         restante = max(0, t_fin - ahora)
         if restante <= 0:
@@ -7073,40 +7087,6 @@ def dibujar_perk_select():
     if elapsed >= anim_lista:
         inst = fuente_chica.render("1 / 2 / 3  O  FLECHAS + ENTER", True, GRIS)
         pantalla.blit(inst, (ANCHO // 2 - inst.get_width() // 2, ALTO - 40))
-
-def dibujar_perks_hud(partida):
-    """Dibuja los perks activos y efectos temporales en el HUD del juego."""
-    # perks permanentes: linea debajo del stage (izquierda, Y=58)
-    perks = partida.get("perks", [])
-    px = 10
-    py = 58
-    for p in perks:
-        txt = fuente_chica.render(p["nombre"][:3], True, GRIS)
-        pantalla.blit(txt, (px, py))
-        px += txt.get_width() + 6
-    # escudo: mostrar cargas (izquierda, debajo de perks)
-    cargas = partida.get("escudo_cargas", 0)
-    if cargas > 0:
-        esc_txt = fuente_chica.render(f"ESCUDO x{cargas}", True, (100, 200, 255))
-        pantalla.blit(esc_txt, (10, py + 16))
-    # efectos temporales activos: borde izquierdo a media altura
-    efectos = partida.get("efectos_activos", {})
-    ahora = int(partida.get("t_musical", pygame.time.get_ticks() - partida["inicio"]))
-    ey = 90
-    for eid, t_fin in list(efectos.items()):
-        restante = max(0, t_fin - ahora)
-        if restante <= 0:
-            continue
-        pu_def = next((pu for pu in POWER_UPS if pu["id"] == eid), None)
-        if not pu_def:
-            continue
-        color = pu_def["color"]
-        if restante < 2000 and (pygame.time.get_ticks() // 200) % 2 == 0:
-            color = GRIS
-        seg = f"{restante / 1000:.1f}s"
-        etxt = fuente_chica.render(f"{pu_def['nombre']} {seg}", True, color)
-        pantalla.blit(etxt, (10, ey))
-        ey += 18
 
 def dibujar_run_overview():
     """Pantalla entre stages: mapa de camino horizontal (estilo roguelike)
