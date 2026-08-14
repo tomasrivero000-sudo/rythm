@@ -2842,6 +2842,8 @@ def cargar_carrera():
     return {"nivel_max": 1, "ranks": {}, "intentos": {}}
 
 def guardar_carrera(data):
+    global _cache_carrera
+    _cache_carrera = data
     try:
         guardar_json_atomico(CARRERA_FILE, data)
     except Exception as e:
@@ -2850,7 +2852,7 @@ def guardar_carrera(data):
 def carrera_completar_nivel(nivel, rank):
     """Registra que se completo un nivel de la carrera. Desbloquea el
     siguiente y guarda el mejor rank."""
-    c = cargar_carrera()
+    c = carrera_cache()
     nk = str(nivel)
     # guardar mejor rank (S > A > B > C > D)
     orden = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "?": 0}
@@ -2864,7 +2866,7 @@ def carrera_completar_nivel(nivel, rank):
     return c
 
 def carrera_registrar_intento(nivel):
-    c = cargar_carrera()
+    c = carrera_cache()
     nk = str(nivel)
     c.setdefault("intentos", {})[nk] = c.get("intentos", {}).get(nk, 0) + 1
     guardar_carrera(c)
@@ -2881,6 +2883,8 @@ def cargar_progreso():
     return set()
 
 def guardar_progreso(completados):
+    global _cache_progreso
+    _cache_progreso = set(completados)
     try:
         guardar_json_atomico(PROGRESO_FILE, sorted(completados))
     except Exception as e:
@@ -2913,7 +2917,7 @@ def clave_run(genero, nivel):
     return f"{genero}|{nivel}"
 
 def marcar_completado(genero, nivel):
-    comp = cargar_progreso()
+    comp = progreso_cache()
     comp.add(clave_run(genero, nivel))
     guardar_progreso(comp)
     return comp
@@ -2943,19 +2947,21 @@ def cargar_leaderboard():
     return valido
 
 def guardar_leaderboard(lb):
+    global _cache_leaderboard
+    _cache_leaderboard = list(lb)
     try:
         guardar_json_atomico(LEADERBOARD_FILE, lb)
     except Exception as e:
         print(f"Error guardando leaderboard: {e}")
 
 def es_highscore(puntos):
-    lb = cargar_leaderboard()
+    lb = leaderboard_cache()
     if len(lb) < TOP_SCORES:
         return True
     return puntos > lb[-1]["puntos"]
 
 def agregar_score(nombre, puntos, seed, dificultad, max_combo):
-    lb = cargar_leaderboard()
+    lb = list(leaderboard_cache())
     lb.append({
         "nombre": nombre,
         "puntos": puntos,
@@ -2968,13 +2974,40 @@ def agregar_score(nombre, puntos, seed, dificultad, max_combo):
     guardar_leaderboard(lb)
     return lb
 
+# --- cache en memoria de carrera/progreso/leaderboard ---
+# las pantallas se dibujan a 60 fps y antes releian su JSON de disco en
+# CADA frame; en la Raspberry de la instalacion eso es I/O constante.
+# Los unicos escritores (guardar_carrera/guardar_progreso/
+# guardar_leaderboard) refrescan el cache al grabar; los draws leen de aca.
+_cache_carrera = None
+_cache_progreso = None
+_cache_leaderboard = None
+
+def carrera_cache():
+    global _cache_carrera
+    if _cache_carrera is None:
+        _cache_carrera = cargar_carrera()
+    return _cache_carrera
+
+def progreso_cache():
+    global _cache_progreso
+    if _cache_progreso is None:
+        _cache_progreso = cargar_progreso()
+    return _cache_progreso
+
+def leaderboard_cache():
+    global _cache_leaderboard
+    if _cache_leaderboard is None:
+        _cache_leaderboard = cargar_leaderboard()
+    return _cache_leaderboard
+
 def dibujar_leaderboard():
     pantalla.fill(NEGRO)
     titulo = fuente_grande.render("LEADERBOARD", True, BLANCO)
     pantalla.blit(titulo, (ANCHO // 2 - titulo.get_width() // 2, 30))
     pygame.draw.line(pantalla, BLANCO, (60, 90), (ANCHO - 60, 90), 2)
 
-    lb = cargar_leaderboard()
+    lb = leaderboard_cache()
     if not lb:
         vacio = fuente_chica.render("NO HAY SCORES TODAVIA", True, GRIS_MED)
         pantalla.blit(vacio, (ANCHO // 2 - vacio.get_width() // 2, 200))
@@ -6674,7 +6707,7 @@ def dibujar_menu():
         pantalla.blit(txt, (cx - txt.get_width() // 2, y0 + i * gap + 2))
 
     # progreso de carrera
-    c_data = cargar_carrera()
+    c_data = carrera_cache()
     nivel_max = c_data.get("nivel_max", 1)
     if nivel_max > 1:
         dif_nom = DIFICULTADES.get(nivel_max, {}).get("nombre", "?")
@@ -6803,8 +6836,11 @@ DIGITOS_TECLA = {
     pygame.K_KP8: 8, pygame.K_KP9: 9,
 }
 
+_sel_seed_info = None  # (seed_int, genero, nivel) cacheado del selector
+
 def dibujar_selector_seed(seed_actual, cargando):
     """Pantalla de selector de seed: mantene espacio para cargar."""
+    global _sel_seed_info
     pantalla.fill(NEGRO)
     cx = ANCHO // 2
     t_anim = pygame.time.get_ticks() / 1000.0
@@ -6883,9 +6919,13 @@ def dibujar_selector_seed(seed_actual, cargando):
         # la dificultad calculada con una tabla vieja divergente y aparecia
         # una dificultad distinta a la real; ahora solo aporta lo que el
         # titulo grande no dice: si este run ya fue completado.
-        gen_seed = genero_de_seed(int(seed_actual))
-        niv_seed = num_dificultad(int(seed_actual))
-        comp = cargar_progreso()
+        # recalcular genero/nivel SOLO cuando cambia la seed entera (antes
+        # se rehacia por frame, con lectura de progreso.json incluida)
+        s_int = int(seed_actual)
+        if _sel_seed_info is None or _sel_seed_info[0] != s_int:
+            _sel_seed_info = (s_int, genero_de_seed(s_int), num_dificultad(s_int))
+        _, gen_seed, niv_seed = _sel_seed_info
+        comp = progreso_cache()
         if clave_run(gen_seed, niv_seed) in comp:
             col_gs = COLOR_GENERO.get(gen_seed, col_ac)
             run_txt = fuente_chica.render("[RUN COMPLETADO]", True, col_gs)
@@ -6931,7 +6971,7 @@ def dibujar_carrera():
     pantalla.blit(sub, (cx - sub.get_width() // 2, 80))
     pygame.draw.line(pantalla, GRIS, (60, 100), (ANCHO - 60, 100), 1)
 
-    c = cargar_carrera()
+    c = carrera_cache()
     nivel_max = c.get("nivel_max", 1)
     ranks = c.get("ranks", {})
     intentos = c.get("intentos", {})
@@ -8824,7 +8864,7 @@ while corriendo:
                         cargando_seed = False
                         ESTADO = "selector_seed_inst"
                     elif op == "CARRERA":
-                        c = cargar_carrera()
+                        c = carrera_cache()
                         carrera_cursor = max(0, c.get("nivel_max", 1) - 1)
                         ESTADO = "carrera"
                     elif op == "TUTORIAL":
@@ -8931,7 +8971,7 @@ while corriendo:
                     sfx_select()
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
                     nivel_sel = carrera_cursor + 1
-                    c_data = cargar_carrera()
+                    c_data = carrera_cache()
                     if nivel_sel <= c_data.get("nivel_max", 1):
                         sfx_confirm()
                         # seed aleatoria para este nivel (misma tabla que todo el juego)
