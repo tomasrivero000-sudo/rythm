@@ -6595,7 +6595,7 @@ def dibujar_selector_seed_inst(seed_actual, cargando):
     pygame.draw.line(pantalla, GRIS, (60, 170), (ANCHO - 60, 170), 1)
 
     # selector de seed (misma mecanica)
-    ins = fuente_chica.render("MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
+    ins = fuente_chica.render("ESCRIBI EL NUMERO  ·  O MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
     pantalla.blit(ins, (cx - ins.get_width() // 2, 185))
     barra_w = 400
     barra_x = cx - barra_w // 2
@@ -6630,6 +6630,16 @@ def dibujar_selector_seed_inst(seed_actual, cargando):
 
 # flag global para saber si la partida es modo instrumento
 modo_instrumento = False
+
+# teclas de digitos (fila superior + teclado numerico) para escribir la seed
+# a mano en los selectores. Dict porque los keycodes KP no son contiguos.
+DIGITOS_TECLA = {
+    pygame.K_0: 0, pygame.K_1: 1, pygame.K_2: 2, pygame.K_3: 3, pygame.K_4: 4,
+    pygame.K_5: 5, pygame.K_6: 6, pygame.K_7: 7, pygame.K_8: 8, pygame.K_9: 9,
+    pygame.K_KP0: 0, pygame.K_KP1: 1, pygame.K_KP2: 2, pygame.K_KP3: 3,
+    pygame.K_KP4: 4, pygame.K_KP5: 5, pygame.K_KP6: 6, pygame.K_KP7: 7,
+    pygame.K_KP8: 8, pygame.K_KP9: 9,
+}
 
 def dibujar_selector_seed(seed_actual, cargando):
     """Pantalla de selector de seed: mantene espacio para cargar."""
@@ -6671,7 +6681,7 @@ def dibujar_selector_seed(seed_actual, cargando):
     pantalla.blit(titulo, (cx - titulo.get_width() // 2, 40))
     pygame.draw.line(pantalla, col_ac, (60, 75), (ANCHO - 60, 75), 1)
 
-    ins = fuente_chica.render("MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
+    ins = fuente_chica.render("ESCRIBI EL NUMERO  ·  O MANTENE ESPACIO PARA CARGAR", True, GRIS_MED)
     pantalla.blit(ins, (cx - ins.get_width() // 2, 100))
 
     # barra de progreso con color de dificultad
@@ -8673,6 +8683,13 @@ while corriendo:
 
         elif ESTADO == "selector_seed":
             if evento.type == pygame.KEYDOWN:
+                # escribir la seed a mano: numeros para agregar digitos,
+                # BACKSPACE para borrar (ademas del clasico mantener ESPACIO)
+                if evento.key in DIGITOS_TECLA:
+                    seed_acumulada = float(min(SEED_MAX,
+                                               int(seed_acumulada) * 10 + DIGITOS_TECLA[evento.key]))
+                elif evento.key == pygame.K_BACKSPACE:
+                    seed_acumulada = float(int(seed_acumulada) // 10)
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = True
                 if evento.key == pygame.K_ESCAPE:
@@ -8698,6 +8715,11 @@ while corriendo:
 
         elif ESTADO == "selector_seed_inst":
             if evento.type == pygame.KEYDOWN:
+                if evento.key in DIGITOS_TECLA:
+                    seed_acumulada = float(min(SEED_MAX,
+                                               int(seed_acumulada) * 10 + DIGITOS_TECLA[evento.key]))
+                elif evento.key == pygame.K_BACKSPACE:
+                    seed_acumulada = float(int(seed_acumulada) // 10)
                 if evento.key == pygame.K_SPACE:
                     cargando_seed = True
                 if evento.key == pygame.K_ESCAPE:
