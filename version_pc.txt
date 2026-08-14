@@ -1,0 +1,29 @@
+# Metadatos de version del exe de testers. Un exe con identidad
+# (nombre, descripcion, version) dispara menos heuristicas de antivirus
+# que uno anonimo. Referenciado desde rhythm_pc.spec.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 9, 0, 0),
+    prodvers=(0, 9, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040a04b0',
+        [StringStruct('CompanyName', 'Tomas Rivero'),
+         StringStruct('FileDescription', 'RHYTHM - juego ritmico procedural (build testers PC)'),
+         StringStruct('FileVersion', '0.9.0.0'),
+         StringStruct('InternalName', 'rhythm_testers'),
+         StringStruct('OriginalFilename', 'rhythm_testers.exe'),
+         StringStruct('ProductName', 'RHYTHM'),
+         StringStruct('ProductVersion', '0.9.0.0')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1034, 1200])])
+  ]
+)

@@ -1,7 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Spec de la BUILD PC PARA TESTERS (dist/rhythm_testers.exe).
-# Entra por rhythm_pc.py (flag RHYTHM_BUILD=pc) y excluye sounddevice:
-# esta build no tiene modo instrumento ni line-in.
+# Spec de la BUILD PC PARA TESTERS.
+# Entra por rhythm_pc.py (flag RHYTHM_BUILD=pc) y excluye sounddevice.
+#
+# Decisiones anti-falso-positivo de antivirus (el exe daba "troyano"):
+#   - onedir en vez de onefile: el auto-extraible de onefile se comporta
+#     como un dropper y los AV lo flaggean por heuristica. Se distribuye
+#     la carpeta dist/rhythm_testers comprimida en zip.
+#   - upx=False: la compresion UPX es el trigger #1 de falsos positivos.
+#   - version='version_pc.txt': metadatos de identidad (nombre, autor,
+#     descripcion) — un exe anonimo es mas sospechoso que uno identificado.
 
 a = Analysis(
     ['rhythm_pc.py'],
@@ -21,16 +28,13 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='rhythm_testers',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -38,4 +42,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['rhythm.ico'],
+    version='version_pc.txt',
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='rhythm_testers',
 )
